@@ -1,0 +1,14 @@
+name: _diag-sca
+on: { workflow_dispatch: {} }
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+  pull-requests: write
+jobs:
+  diag-sca:
+    uses: attested-delivery/.github/.github/workflows/reusable-sca-osv.yml@f7bee203c7a98bf6da29d4eda7c399978d7601ac
+    with:
+      fail-on-severity: high
+      scan-args: |-
+        --lockfile=Cargo.lock
