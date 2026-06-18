@@ -1,7 +1,7 @@
 # `rust_template`
 
 <!-- Badges -->
-[![GitHub Template](https://img.shields.io/badge/template-attested-delivery%2Frust--template-blue?logo=github)](https://github.com/attested-delivery/rust-template)
+[![GitHub Template](https://img.shields.io/badge/template-attested--delivery%2Frust--template-blue?logo=github)](https://github.com/attested-delivery/rust-template)
 [![CI](https://github.com/attested-delivery/rust-template/actions/workflows/pipeline.yml/badge.svg)](https://github.com/attested-delivery/rust-template/actions/workflows/pipeline.yml)
 [![Crates.io](https://img.shields.io/crates/v/rust_template.svg?logo=rust&logoColor=white)](https://crates.io/crates/rust_template)
 [![Documentation](https://docs.rs/rust_template/badge.svg)](https://docs.rs/rust_template)
