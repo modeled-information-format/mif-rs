@@ -1,237 +1,95 @@
 ---
-name: Pipeline
+name: quality-gates
+
+# Merge-time quality gates: a thin caller of the attested-delivery/.github central
+# reusable workflows. Each gate normalizes on SARIF and lands in the
+# code-scanning hub; the "Code scanning results" required check is the merge
+# gate. Pins resolve to the central repo's default-branch HEAD at wiring time;
+# Dependabot (github-actions ecosystem) keeps them fresh.
+#
+# Deploy-time attestation — the "seam" that signs each gate's verdict bound to
+# a release subject — lives in release.yml / pipeline.yml (publish-gated).
 
 "on":
   push:
-    branches: [main, master]
-    tags:
-      - "v*.*.*"
+    branches: [main]
   pull_request:
-    branches: [main, master]
+    branches: [main]
+  schedule:
+    # Weekly Monday 06:00 UTC — preserves the cadence of the standalone CodeQL
+    # workflow this caller supersedes.
+    - cron: "0 6 * * 1"
   workflow_dispatch:
-    inputs:
-      stage:
-        description: "Pipeline stage to run"
-        type: choice
-        options:
-          - all
-          - ci
-          - docker
-        default: ci
 
 concurrency:
-  group: >-
-    ${{ github.workflow }}-${{
-    github.ref_type == 'tag'
-    && github.sha || github.ref }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
-# Least privilege at the top: read-only. Every job that needs a write scope
-# (packages for the docker push, id-token/attestations for signing,
-# security-events for SARIF) declares it at the job level below.
 permissions:
   contents: read
-  actions: read
 
 jobs:
-  # -----------------------------------------------------------
-  # Gate — resolve template state from Cargo.toml `publish`.
-  # `publish = false` (template) reports `publish == []`, which
-  # disables the container build/sign/verify chain. Deleting that
-  # line in a downstream project arms it. Same switch that gates
-  # crates.io publishing, GitHub Releases, and Homebrew.
-  # -----------------------------------------------------------
-  gate:
-    name: Resolve Publish Gate
-    runs-on: ubuntu-latest
-    outputs:
-      publishable: ${{ steps.gate.outputs.publishable }}
-    steps:
-      - name: Checkout repository
-        # v6.0.2
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-
-      - name: Install Rust toolchain
-        # master
-        uses: >-
-          dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
-        with:
-          toolchain: stable
-
-      - name: Resolve publish gate from Cargo.toml
-        id: gate
-        run: |
-          set -euo pipefail
-          META=$(cargo metadata --no-deps --locked --format-version 1)
-          # `publish = false` => `.publish == []` => template state.
-          PUBLISHABLE=$(jq -r \
-            'if .packages[0].publish == [] then "false" else "true" end' \
-            <<< "$META")
-          echo "publishable=${PUBLISHABLE}" >> "$GITHUB_OUTPUT"
-          echo "Resolved publishable: ${PUBLISHABLE}"
-
-  # -----------------------------------------------------------
-  # CI Stage — runs on every push, PR, and tag
-  # -----------------------------------------------------------
-  ci:
-    name: CI Checks
-    # stage 'docker' includes ci so the docker -> sign -> verify
-    # chain is exercisable via dispatch (docker needs ci)
-    if: >-
-      github.event_name != 'workflow_dispatch'
-      || inputs.stage == 'all'
-      || inputs.stage == 'ci'
-      || inputs.stage == 'docker'
-    uses: ./.github/workflows/ci-checks.yml
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-  coverage:
-    name: Code Coverage
-    if: >-
-      github.event_name != 'workflow_dispatch'
-      || inputs.stage == 'all'
-      || inputs.stage == 'ci'
-    uses: ./.github/workflows/ci-coverage.yml
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-  test-matrix:
-    name: Test Matrix
-    if: >-
-      github.event_name == 'pull_request'
-      || (github.event_name == 'workflow_dispatch'
-      && (inputs.stage == 'all'
-      || inputs.stage == 'ci'))
-    uses: ./.github/workflows/ci-test-matrix.yml
-
-  # Required check context: "pin-check / pin-check" — asserts every
-  # `uses:` reference is pinned to a full 40-char commit SHA.
-  pin-check:
-    if: >-
-      github.event_name != 'workflow_dispatch'
-      || inputs.stage == 'all'
-      || inputs.stage == 'ci'
+  # SAST — CodeQL (Rust, build-mode none). Supersedes codeql-analysis.yml.
+  # packages: read — the reusable's analyze job declares it (CodeQL package
+  # resolution); a caller must grant >= the reusable's permissions or the call
+  # fails at startup.
+  sast:
     permissions:
+      security-events: write
       contents: read
-    # attested-delivery/.github main (2026-06-11)
-    uses: >-
-      attested-delivery/.github/.github/workflows/pin-check.yml@740cb8efb57af0187f88e9b4f939355b871a5895
-
-  # -----------------------------------------------------------
-  # Docker — after CI; PR = build-only, push on main/tags
-  # -----------------------------------------------------------
-  docker:
-    name: Docker
-    needs: [ci, gate]
-    # packages:write only here — the reusable pushes the image to GHCR.
-    permissions:
-      contents: read
-      packages: write
-    # Container build is gated on template state: skipped while
-    # `publish = false` (template), armed once that line is deleted.
-    if: >-
-      needs.gate.outputs.publishable == 'true'
-      && (github.event_name != 'workflow_dispatch'
-      || inputs.stage == 'all'
-      || inputs.stage == 'docker')
-    uses: ./.github/workflows/release-docker.yml
-    with:
-      push: >-
-        ${{ github.event_name != 'pull_request' }}
-
-  # -----------------------------------------------------------
-  # Image attestation — centralized signer (SLSA Build L3
-  # isolation boundary), then a fail-closed verify gate
-  # -----------------------------------------------------------
-  docker-sign:
-    name: Sign and Attest Image
-    needs: [docker]
-    if: >-
-      github.event_name != 'pull_request'
-      && (github.event_name != 'workflow_dispatch'
-      || inputs.stage == 'all'
-      || inputs.stage == 'docker')
-    permissions:
-      id-token: write
-      attestations: write
-      packages: write
-      contents: read
-    # attested-delivery/.github main (2026-06-11)
-    uses: >-
-      attested-delivery/.github/.github/workflows/sign-and-attest.yml@740cb8efb57af0187f88e9b4f939355b871a5895
-    with:
-      image-name: ghcr.io/${{ github.repository }}
-      image-digest: ${{ needs.docker.outputs.image-digest }}
-
-  docker-verify:
-    name: Verify Image Attestations
-    needs: [docker, docker-sign]
-    if: >-
-      github.event_name != 'pull_request'
-      && (github.event_name != 'workflow_dispatch'
-      || inputs.stage == 'all'
-      || inputs.stage == 'docker')
-    permissions:
-      id-token: write
-      attestations: read
+      actions: read
       packages: read
-      contents: read
-    # attested-delivery/.github main (2026-06-11)
+    # attested-delivery/.github main @ 77a87549 (resolved 2026-06-16)
     uses: >-
-      attested-delivery/.github/.github/workflows/verify-attestation.yml@e8f0dbde068cc0701e443e7b8d57ae9917de7da3
+      attested-delivery/.github/.github/workflows/reusable-sast-codeql.yml@f7bee203c7a98bf6da29d4eda7c399978d7601ac
     with:
-      image-ref: >-
-        ghcr.io/${{ github.repository }}@${{
-        needs.docker.outputs.image-digest }}
-      attestation-repo: ${{ github.repository }}
+      languages: rust
+      build-mode: none
 
-  # -----------------------------------------------------------
-  # Container vulnerability gate attestation (gh-attested) —
-  # Trivy image scan signed and bound to the image digest, with
-  # the same publish + non-PR gating as the docker chain above.
-  # Dormant in template state (docker is gated on `publishable`).
-  # -----------------------------------------------------------
-  gate-image:
-    name: Gate — Trivy (image)
-    needs: [docker]
-    if: >-
-      github.event_name != 'pull_request'
-      && (github.event_name != 'workflow_dispatch'
-      || inputs.stage == 'all'
-      || inputs.stage == 'docker')
+  # SCA — OSV-Scanner (independent second opinion vs RustSec/cargo-audit) plus
+  # dependency review (PR merge gate). Complements the cargo Dependabot setup.
+  sca:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+      pull-requests: write
+    # attested-delivery/.github main @ 77a87549 (resolved 2026-06-16)
+    uses: >-
+      attested-delivery/.github/.github/workflows/reusable-sca-osv.yml@f7bee203c7a98bf6da29d4eda7c399978d7601ac
+    with:
+      fail-on-severity: high
+      # Scope OSV to the Rust crate lockfile; the docs site under site/ has its
+      # own npm deps covered by Dependabot, not this crate's SCA gate.
+      scan-args: |-
+        --lockfile=Cargo.lock
+
+  # Supply-chain posture — OpenSSF Scorecard. Requires the default branch, so
+  # it does not run on pull_request.
+  posture:
+    if: github.event_name == 'push' || github.event_name == 'schedule'
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+      actions: read
+    # attested-delivery/.github main @ 77a87549 (resolved 2026-06-16)
+    uses: >-
+      attested-delivery/.github/.github/workflows/reusable-scorecard.yml@f7bee203c7a98bf6da29d4eda7c399978d7601ac
+
+  # IaC + license — Trivy filesystem scan (Dockerfile, manifests, licenses).
+  # No image-ref: the container is gated by `publish = false` (template state).
+  # packages: read — the reusable's (skipped) image job declares it; the caller
+  # must still grant >= all the reusable's job permissions or the call fails at
+  # startup, even for conditional jobs.
+  trivy:
     permissions:
       contents: read
       security-events: write
       actions: read
       packages: read
-    # attested-delivery/.github main @ 77a87549 (merged 2026-06-16)
+    # attested-delivery/.github main @ 77a87549 (resolved 2026-06-16)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-trivy.yml@77a87549a65c6c978a0e87efe0168ed3517f7ca4
+      attested-delivery/.github/.github/workflows/reusable-trivy.yml@f7bee203c7a98bf6da29d4eda7c399978d7601ac
     with:
-      image-ref: >-
-        ghcr.io/${{ github.repository }}@${{
-        needs.docker.outputs.image-digest }}
-      scan-iac: false
-
-  attest-container-scan:
-    name: Attest — Container scan
-    needs: [docker, gate-image]
-    if: >-
-      github.event_name != 'pull_request'
-      && (github.event_name != 'workflow_dispatch'
-      || inputs.stage == 'all'
-      || inputs.stage == 'docker')
-    permissions:
-      id-token: write
-      attestations: write
-      contents: read
-    # attested-delivery/.github main @ 77a87549 (merged 2026-06-16)
-    uses: >-
-      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@740cb8efb57af0187f88e9b4f939355b871a5895
-    with:
-      subject-name: ghcr.io/${{ github.repository }}
-      subject-digest: ${{ needs.docker.outputs.image-digest }}
-      predicate-type: https://attested-delivery.github.io/attestations/container-scan/v1
-      predicate-artifact: ${{ needs.gate-image.outputs.image-sarif-artifact }}
-      predicate-filename: ${{ needs.gate-image.outputs.image-sarif-filename }}
+      scan-iac: true

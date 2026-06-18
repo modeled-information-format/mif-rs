@@ -41,7 +41,7 @@ jobs:
       packages: read
     # attested-delivery/.github main @ 77a87549 (resolved 2026-06-16)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-sast-codeql.yml@740cb8efb57af0187f88e9b4f939355b871a5895
+      attested-delivery/.github/.github/workflows/reusable-sast-codeql.yml@f7bee203c7a98bf6da29d4eda7c399978d7601ac
     with:
       languages: rust
       build-mode: none
@@ -56,7 +56,7 @@ jobs:
       pull-requests: write
     # attested-delivery/.github main @ 77a87549 (resolved 2026-06-16)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-sca-osv.yml@77a87549a65c6c978a0e87efe0168ed3517f7ca4
+      attested-delivery/.github/.github/workflows/reusable-sca-osv.yml@f7bee203c7a98bf6da29d4eda7c399978d7601ac
     with:
       fail-on-severity: high
       # Scope OSV to the Rust crate lockfile; the docs site under site/ has its
@@ -75,7 +75,7 @@ jobs:
       actions: read
     # attested-delivery/.github main @ 77a87549 (resolved 2026-06-16)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-scorecard.yml@77a87549a65c6c978a0e87efe0168ed3517f7ca4
+      attested-delivery/.github/.github/workflows/reusable-scorecard.yml@f7bee203c7a98bf6da29d4eda7c399978d7601ac
 
   # IaC + license — Trivy filesystem scan (Dockerfile, manifests, licenses).
   # No image-ref: the container is gated by `publish = false` (template state).
@@ -90,6 +90,6 @@ jobs:
       packages: read
     # attested-delivery/.github main @ 77a87549 (resolved 2026-06-16)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-trivy.yml@77a87549a65c6c978a0e87efe0168ed3517f7ca4
+      attested-delivery/.github/.github/workflows/reusable-trivy.yml@f7bee203c7a98bf6da29d4eda7c399978d7601ac
     with:
       scan-iac: true

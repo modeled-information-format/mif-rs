@@ -1,503 +1,95 @@
 ---
-name: Release
+name: quality-gates
 
-# Attested delivery: build platform binaries, attach SLSA build provenance
-# to each, generate + attest a CycloneDX SBOM, attest the SCA + IaC/license
-# quality-gate verdicts over a published source snapshot, then fail-closed
-# verify every attestation BEFORE the GitHub Release is published. A tag
-# publishes nothing unattested. (SAST and supply-chain posture are enforced
-# at merge time in quality-gates.yml; they are not re-run here.)
+# Merge-time quality gates: a thin caller of the attested-delivery/.github central
+# reusable workflows. Each gate normalizes on SARIF and lands in the
+# code-scanning hub; the "Code scanning results" required check is the merge
+# gate. Pins resolve to the central repo's default-branch HEAD at wiring time;
+# Dependabot (github-actions ecosystem) keeps them fresh.
 #
-# Project specificity is resolved at runtime from Cargo.toml (crate name,
-# binary name, version) and the GitHub context (owner/repo) — there is
-# nothing to rename in this file when the template is instantiated.
-#
-# Dry-run: `workflow_dispatch` from any branch exercises the full
-# build -> attest -> verify chain; the publish job is tag-gated and skipped.
+# Deploy-time attestation — the "seam" that signs each gate's verdict bound to
+# a release subject — lives in release.yml / pipeline.yml (publish-gated).
 
 "on":
   push:
-    tags:
-      - "v*.*.*"
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Monday 06:00 UTC — preserves the cadence of the standalone CodeQL
+    # workflow this caller supersedes.
+    - cron: "0 6 * * 1"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  meta:
-    name: Resolve Project Metadata
-    runs-on: ubuntu-latest
-    outputs:
-      bin: ${{ steps.meta.outputs.bin }}
-      version: ${{ steps.meta.outputs.version }}
-      publishable: ${{ steps.meta.outputs.publishable }}
-    steps:
-      - name: Checkout repository
-        # v6.0.3
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-
-      - name: Install Rust toolchain
-        # master
-        uses: >-
-          dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
-        with:
-          toolchain: stable
-
-      - name: Resolve binary name and version from Cargo.toml
-        id: meta
-        run: |
-          set -euo pipefail
-          META=$(cargo metadata --no-deps --locked --format-version 1)
-          BIN=$(jq -r \
-            '[.packages[0].targets[] | select(.kind | index("bin"))][0].name' \
-            <<< "$META")
-          if [ -z "$BIN" ] || [ "$BIN" = "null" ]; then
-            echo "::error::no [[bin]] target found in Cargo.toml"
-            exit 1
-          fi
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/v}"
-          else
-            # Dry-run (workflow_dispatch): Cargo.toml version, marked -dev
-            VERSION="$(jq -r '.packages[0].version' <<< "$META")-dev"
-          fi
-          echo "bin=${BIN}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          # `publish = false` in Cargo.toml (template state) disables
-          # artifact publication; the build->attest->verify chain still
-          # runs as CI validation.
-          PUBLISHABLE=$(jq -r \
-            'if .packages[0].publish == [] then "false" else "true" end' \
-            <<< "$META")
-          echo "publishable=${PUBLISHABLE}" >> "$GITHUB_OUTPUT"
-          echo "Resolved: ${BIN} ${VERSION} (publishable: ${PUBLISHABLE})"
-
-  build:
-    name: Build (${{ matrix.platform }})
-    needs: [meta]
-    runs-on: ${{ matrix.os }}
+  # SAST — CodeQL (Rust, build-mode none). Supersedes codeql-analysis.yml.
+  # packages: read — the reusable's analyze job declares it (CodeQL package
+  # resolution); a caller must grant >= the reusable's permissions or the call
+  # fails at startup.
+  sast:
     permissions:
+      security-events: write
       contents: read
-      id-token: write
-      attestations: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            platform: linux-amd64
-            ext: ""
-          - os: ubuntu-24.04-arm
-            platform: linux-arm64
-            ext: ""
-          - os: macos-latest
-            platform: macos-arm64
-            ext: ""
-          - os: macos-latest
-            platform: macos-amd64
-            target: x86_64-apple-darwin
-            ext: ""
-          - os: windows-latest
-            platform: windows-amd64
-            ext: ".exe"
-    steps:
-      - name: Checkout repository
-        # v6.0.3
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      actions: read
+      packages: read
+    # attested-delivery/.github main @ 77a87549 (resolved 2026-06-16)
+    uses: >-
+      attested-delivery/.github/.github/workflows/reusable-sast-codeql.yml@f7bee203c7a98bf6da29d4eda7c399978d7601ac
+    with:
+      languages: rust
+      build-mode: none
 
-      - name: Install Rust toolchain
-        # master
-        uses: >-
-          dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
-        with:
-          toolchain: stable
-          targets: ${{ matrix.target || '' }}
-
-      - name: Build release binary
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target || '' }}
-        run: |
-          if [ -n "$TARGET" ]; then
-            cargo build --release --locked --target "$TARGET"
-          else
-            cargo build --release --locked
-          fi
-
-      - name: Stage named artifact
-        shell: bash
-        env:
-          BIN: ${{ needs.meta.outputs.bin }}
-          VERSION: ${{ needs.meta.outputs.version }}
-          PLATFORM: ${{ matrix.platform }}
-          TARGET: ${{ matrix.target || '' }}
-          EXT: ${{ matrix.ext }}
-        run: |
-          mkdir -p dist
-          SRC="target/release/${BIN}${EXT}"
-          if [ -n "$TARGET" ]; then
-            SRC="target/${TARGET}/release/${BIN}${EXT}"
-          fi
-          cp "$SRC" "dist/${BIN}-${VERSION}-${PLATFORM}${EXT}"
-
-      - name: Attest build provenance
-        # v4.1.0
-        uses: >-
-          actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32
-        with:
-          subject-path: dist/*
-
-      - name: Upload artifact
-        # v7.0.1
-        uses: >-
-          actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: >-
-            ${{ needs.meta.outputs.bin }}-${{
-            needs.meta.outputs.version }}-${{ matrix.platform }}
-          path: dist/*
-          if-no-files-found: error
-
-  # Source snapshot: a reproducible, PUBLISHED tarball that serves as the
-  # verifiable subject for the quality-gate attestations below. Because the
-  # exact bytes are published as a release asset, `gh attestation verify` can
-  # run against it from any workstation.
-  source:
-    name: Source Snapshot
-    needs: [meta]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-    outputs:
-      subject-name: ${{ steps.pack.outputs.name }}
-      subject-digest: ${{ steps.pack.outputs.digest }}
-    steps:
-      - name: Checkout repository
-        # v6.0.3
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-      - name: Pack source snapshot
-        id: pack
-        env:
-          BIN: ${{ needs.meta.outputs.bin }}
-          VERSION: ${{ needs.meta.outputs.version }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          NAME="${BIN}-${VERSION}-source.tar.gz"
-          git archive --format=tar.gz --prefix="${BIN}-${VERSION}/" \
-            -o "dist/${NAME}" "${GITHUB_SHA}"
-          DIGEST=$(sha256sum "dist/${NAME}" | cut -d' ' -f1)
-          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
-          echo "digest=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
-      - name: Attest build provenance
-        # v4.1.0
-        uses: >-
-          actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32
-        with:
-          subject-path: dist/${{ steps.pack.outputs.name }}
-      - name: Upload source artifact
-        # v7.0.1
-        uses: >-
-          actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: >-
-            ${{ needs.meta.outputs.bin }}-${{
-            needs.meta.outputs.version }}-source
-          path: dist/${{ steps.pack.outputs.name }}
-          if-no-files-found: error
-
-  test:
-    # Tags are not guaranteed to point at CI-green commits; the release
-    # publishes nothing untested.
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        # v6.0.3
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-
-      - name: Install Rust toolchain
-        # master
-        uses: >-
-          dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
-        with:
-          toolchain: stable
-
-      - name: Run tests
-        run: cargo test --all-features --locked
-
-  audit:
-    name: Cargo Audit
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        # v6.0.3
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-
-      - name: Install cargo-audit
-        # v2.67.25
-        uses: >-
-          taiki-e/install-action@15449e3094499af05d8d964a1c884208e4b8b595
-        with:
-          tool: cargo-audit
-
-      - name: Audit dependencies for known vulnerabilities
-        run: cargo audit
-
-  sbom:
-    name: SBOM (generate + attest)
-    needs: [meta, build]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-    steps:
-      - name: Checkout repository
-        # v6.0.3
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-
-      - name: Download all binaries
-        # v8.0.1
-        uses: >-
-          actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          # Binaries only: {bin}-{version}-{os}-{arch} (two dashes after the
-          # version). Excludes the -sbom / -source artifacts and the gate
-          # SARIFs so the SBOM is generated over exactly the platform binaries.
-          pattern: >-
-            ${{ needs.meta.outputs.bin }}-${{
-            needs.meta.outputs.version }}-*-*
-          path: dist
-          merge-multiple: true
-
-      - name: Generate CycloneDX SBOM
-        # v0.24.0
-        uses: >-
-          anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
-        with:
-          path: .
-          format: cyclonedx-json
-          output-file: >-
-            ${{ needs.meta.outputs.bin }}-${{
-            needs.meta.outputs.version }}-sbom.cdx.json
-          upload-artifact: false
-          upload-release-assets: false
-
-      - name: Attest SBOM (binds every binary to the SBOM)
-        # v4.1.0
-        uses: >-
-          actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e
-        with:
-          subject-path: dist/*
-          sbom-path: >-
-            ${{ needs.meta.outputs.bin }}-${{
-            needs.meta.outputs.version }}-sbom.cdx.json
-
-      - name: Upload SBOM artifact
-        # v7.0.1
-        uses: >-
-          actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: >-
-            ${{ needs.meta.outputs.bin }}-${{
-            needs.meta.outputs.version }}-sbom
-          path: >-
-            ${{ needs.meta.outputs.bin }}-${{
-            needs.meta.outputs.version }}-sbom.cdx.json
-          if-no-files-found: error
-
-  # ---------------------------------------------------------------------------
-  # Quality-gate attestation seam — SCA (OSV) and IaC/license (Trivy) verdicts
-  # signed over the published source snapshot, then fail-closed verified in the
-  # `verify` job before release. These gates are fast and directly characterize
-  # the shipped source/dependencies; SAST (CodeQL) and posture (Scorecard) are
-  # repo/source-level and enforced at merge in quality-gates.yml, so they are
-  # NOT re-run here.
-  # ---------------------------------------------------------------------------
-  gate-sca:
-    name: Gate — SCA (OSV)
-    needs: [meta]
+  # SCA — OSV-Scanner (independent second opinion vs RustSec/cargo-audit) plus
+  # dependency review (PR merge gate). Complements the cargo Dependabot setup.
+  sca:
     permissions:
       actions: read
       contents: read
       security-events: write
-      pull-requests: write   # reusable's (skipped) dependency-review job declares it
-    # attested-delivery/.github main @ 77a87549 (merged 2026-06-16)
+      pull-requests: write
+    # attested-delivery/.github main @ 77a87549 (resolved 2026-06-16)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-sca-osv.yml@94e7410b9fad3498a1e507807900edbd2269ef81
+      attested-delivery/.github/.github/workflows/reusable-sca-osv.yml@f7bee203c7a98bf6da29d4eda7c399978d7601ac
     with:
       fail-on-severity: high
+      # Scope OSV to the Rust crate lockfile; the docs site under site/ has its
+      # own npm deps covered by Dependabot, not this crate's SCA gate.
       scan-args: |-
         --lockfile=Cargo.lock
 
-  gate-trivy:
-    name: Gate — Trivy (IaC/license)
-    needs: [meta]
+  # Supply-chain posture — OpenSSF Scorecard. Requires the default branch, so
+  # it does not run on pull_request.
+  posture:
+    if: github.event_name == 'push' || github.event_name == 'schedule'
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+      actions: read
+    # attested-delivery/.github main @ 77a87549 (resolved 2026-06-16)
+    uses: >-
+      attested-delivery/.github/.github/workflows/reusable-scorecard.yml@f7bee203c7a98bf6da29d4eda7c399978d7601ac
+
+  # IaC + license — Trivy filesystem scan (Dockerfile, manifests, licenses).
+  # No image-ref: the container is gated by `publish = false` (template state).
+  # packages: read — the reusable's (skipped) image job declares it; the caller
+  # must still grant >= all the reusable's job permissions or the call fails at
+  # startup, even for conditional jobs.
+  trivy:
     permissions:
       contents: read
       security-events: write
       actions: read
-      packages: read   # reusable's (skipped) image job declares it
-    # attested-delivery/.github main @ 77a87549 (merged 2026-06-16)
+      packages: read
+    # attested-delivery/.github main @ 77a87549 (resolved 2026-06-16)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-trivy.yml@94e7410b9fad3498a1e507807900edbd2269ef81
+      attested-delivery/.github/.github/workflows/reusable-trivy.yml@f7bee203c7a98bf6da29d4eda7c399978d7601ac
     with:
       scan-iac: true
-
-  attest-sca:
-    name: Attest — SCA
-    needs: [meta, source, gate-sca]
-    permissions:
-      id-token: write
-      attestations: write
-      contents: read
-    # attested-delivery/.github main @ 77a87549 (merged 2026-06-16)
-    uses: >-
-      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@94e7410b9fad3498a1e507807900edbd2269ef81
-    with:
-      subject-name: ${{ needs.source.outputs.subject-name }}
-      subject-digest: ${{ needs.source.outputs.subject-digest }}
-      predicate-type: https://attested-delivery.github.io/attestations/sca/v1
-      predicate-artifact: ${{ needs.gate-sca.outputs.sarif-artifact }}
-      predicate-filename: ${{ needs.gate-sca.outputs.sarif-filename }}
-
-  attest-iac-license:
-    name: Attest — IaC/license
-    needs: [meta, source, gate-trivy]
-    permissions:
-      id-token: write
-      attestations: write
-      contents: read
-    # attested-delivery/.github main @ 77a87549 (merged 2026-06-16)
-    uses: >-
-      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@94e7410b9fad3498a1e507807900edbd2269ef81
-    with:
-      subject-name: ${{ needs.source.outputs.subject-name }}
-      subject-digest: ${{ needs.source.outputs.subject-digest }}
-      predicate-type: https://attested-delivery.github.io/attestations/iac-license/v1
-      predicate-artifact: ${{ needs.gate-trivy.outputs.sarif-artifact }}
-      predicate-filename: ${{ needs.gate-trivy.outputs.sarif-filename }}
-
-  verify:
-    name: Verify Attestations
-    needs: [meta, build, sbom, source, attest-sca, attest-iac-license]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      attestations: read
-    steps:
-      - name: Download all artifacts
-        # v8.0.1
-        uses: >-
-          actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          # Release artifacts only ({bin}-{version}-*): the 5 platform
-          # binaries, the SBOM, and the source snapshot. Excludes the gate
-          # SARIF artifacts, which carry no {bin}-{version} prefix.
-          pattern: >-
-            ${{ needs.meta.outputs.bin }}-${{
-            needs.meta.outputs.version }}-*
-          path: dist
-          merge-multiple: true
-
-      - name: Fail-closed attestation verification
-        env:
-          GH_TOKEN: ${{ github.token }}
-          OWNER: ${{ github.repository_owner }}
-          SEAM: attested-delivery/.github/.github/workflows/reusable-attest-scan.yml
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          files=(dist/*)
-          # 5 platform binaries + SBOM document + source snapshot tarball.
-          # A partial set must never reach the release.
-          if [ "${#files[@]}" -ne 7 ]; then
-            echo "::error::expected 7 artifacts, found ${#files[@]}"
-            exit 1
-          fi
-          for f in "${files[@]}"; do
-            case "$f" in
-              *-sbom.cdx.json)
-                # The SBOM document itself is not an attestation subject.
-                continue ;;
-              *-source.tar.gz)
-                # Source snapshot: provenance + the seam-signed gate verdicts.
-                echo "Verifying provenance: ${f}"
-                gh attestation verify "$f" --repo "$GITHUB_REPOSITORY"
-                for pt in sca iac-license; do
-                  echo "Verifying gate (${pt}): ${f}"
-                  gh attestation verify "$f" --owner "$OWNER" \
-                    --signer-workflow "$SEAM" \
-                    --predicate-type \
-                    "https://attested-delivery.github.io/attestations/${pt}/v1"
-                done
-                continue ;;
-              *)
-                # Platform binary: provenance + SBOM attestation.
-                echo "Verifying provenance: ${f}"
-                gh attestation verify "$f" --repo "$GITHUB_REPOSITORY"
-                echo "Verifying SBOM attestation: ${f}"
-                gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" \
-                  --predicate-type https://cyclonedx.org/bom ;;
-            esac
-          done
-
-  release:
-    name: Create Release
-    # A GitHub Release is a tag primitive — it does NOT depend on external
-    # publication. Any pushed tag that passes the fail-closed `verify` gate
-    # gets an attested GitHub Release. `publishable` (Cargo.toml `publish`)
-    # gates only the EXTERNAL channels: crates.io (publish.yml), the container
-    # image (pipeline.yml), and Homebrew (package-homebrew.yml).
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: [meta, verify, audit, test]
-    runs-on: ubuntu-latest
-    environment: copilot
-    permissions:
-      contents: write
-    steps:
-      - name: Download all artifacts
-        # v8.0.1
-        uses: >-
-          actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          # Release artifacts only ({bin}-{version}-*): binaries, SBOM, and the
-          # source snapshot — excludes the gate SARIF artifacts.
-          pattern: >-
-            ${{ needs.meta.outputs.bin }}-${{
-            needs.meta.outputs.version }}-*
-          path: dist
-          merge-multiple: true
-
-      - name: Generate checksums
-        env:
-          BIN: ${{ needs.meta.outputs.bin }}
-          VERSION: ${{ needs.meta.outputs.version }}
-        run: |
-          cd dist
-          sha256sum -- * > "${BIN}-${VERSION}-checksums.txt"
-
-      - name: Create GitHub Release
-        # v3.0.0
-        uses: >-
-          softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: Release ${{ needs.meta.outputs.version }}
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-          files: dist/*
-        env:
-          # A PAT (when configured) lets the release event propagate to
-          # downstream workflows; the workflow_run trigger on the
-          # Homebrew workflow is the reliable fallback either way.
-          GITHUB_TOKEN: >-
-            ${{ secrets.HOMEBREW_TAP_TOKEN || secrets.GITHUB_TOKEN }}
