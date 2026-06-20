@@ -34,8 +34,10 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install criterion
-        run: cargo install cargo-criterion || true
+      - name: Install cargo-criterion
+        # Pinned + fail-closed: crates.io verifies the .crate checksum against
+        # the registry index, and a failed install now aborts (no `|| true`).
+        run: cargo install --locked --version 1.1.0 cargo-criterion
 
       - name: Download baseline benchmarks
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5

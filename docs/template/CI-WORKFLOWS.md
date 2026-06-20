@@ -274,6 +274,31 @@ secrets using Gitleaks.
 
 **Secrets:** `GITLEAKS_LICENSE` (optional).
 
+### Verified fetches — trusted tool acquisition
+
+**Recommended practice for every workflow** (adopters: apply this everywhere a
+job pulls in an external package, binary, or tool — each is a supply-chain entry
+point). Order of preference:
+
+1. **Prefer the runner's pre-installed tools.** `ubuntu-latest` already ships
+   `gh`, `jq`, `git`, `curl`, `tar`, `node`, `go`, `python`, `docker`, etc. — use
+   them directly, add no install step.
+2. **Else a SHA-pinned action** (`pin-check` enforces full 40-char SHAs).
+3. **Else download → verify → fail closed**, strongest mechanism first and never
+   below a checksum: `gh attestation verify` › `cosign verify`/`cosign verify-blob`
+   (or `gpg`/`minisign`) › `sha256sum -c` of a **pinned digest**. Run under
+   `set -euo pipefail`, verify before executing, pin the version; leave a
+   `# TODO` on any checksum-only fallback to upgrade later.
+4. **Never** `curl … | sh`/`| bash`/`| tar` — that runs unverified bytes.
+5. **Package installs** use lockfile/registry integrity, pinned and fail-closed:
+   `cargo install --locked --version X`, `npm ci`, `pnpm install --frozen-lockfile`,
+   `corepack`, `go install pkg@version` — never unpinned or `… || true`.
+
+The canonical, org-wide treatment — full ladder, preinstalled-tool list, and
+the threat model behind it — is the **Verify Every External Fetch** concept on
+the docs site:
+<https://attested-delivery.github.io/docs/concepts/11-verify-every-external-fetch/>.
+
 ---
 
 ## Testing & Quality
