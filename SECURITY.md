@@ -114,6 +114,28 @@ gh attestation verify rust_template-<X.Y.Z>-linux-amd64 \
 shasum -a 256 -c rust_template-<X.Y.Z>-checksums.txt
 ```
 
+A passing `gh attestation verify` is the contract: it confirms the artifact's
+exact bytes are covered by a valid, keyless, digest-bound attestation from this
+repo's release workflow. A single digest may legitimately carry **more than one**
+attestation. Release builds are byte-reproducible, so any run that built the
+same bytes yields the identical digest and therefore an additional valid
+attestation. For releases tagged before dry-runs were made non-attesting, an
+earlier `workflow_dispatch` dry-run from a feature branch did exactly this — its
+subject is named for that branch's `Cargo.toml` version plus `-dev` (which is
+**independent of the release tag**: e.g. v0.1.0's reproducible binaries also
+carry a `0.4.0-dev` subject from a pre-release dry-run). That is evidence of
+reproducibility, not a discrepancy — and tooling that inspects only the first
+returned attestation may surface the `-dev` subject. To pin the release-specific
+one, filter by the tag ref:
+
+```bash
+gh attestation verify rust_template-<X.Y.Z>-linux-amd64 \
+  --repo attested-delivery/rust-template --format json \
+| jq -r '.[] | select(.verificationResult.signature.certificate.buildSignerURI
+        | endswith("release.yml@refs/tags/v<X.Y.Z>"))
+        | .verificationResult.statement.subject[0].name'
+```
+
 ### Gate-verdict attestations (seam-signed)
 
 The SAST (CodeQL), SCA (OSV), and IaC/license (Trivy) verdicts are signed over
@@ -143,6 +165,13 @@ gh attestation verify "oci://ghcr.io/attested-delivery/rust-template@${DIGEST}" 
 A passing verification proves the gate **ran and recorded a verdict** bound to
 the subject digest; read the predicate body for the verdict itself (signed ≠
 passed).
+
+> **Coverage by release.** The SAST (`sast/v1`) and OpenVEX verdicts were added
+> to the release pipeline after the initial release. Releases tagged before that
+> (notably **v0.1.0**) carry only the `sca` and `iac-license` source-snapshot
+> verdicts; `gh attestation verify … --predicate-type …/sast/v1` (and the VEX
+> verify) returns HTTP 404 for them — the attestation was never minted, not
+> dropped. Verify only the predicates a given release actually produced.
 
 ### Published crate
 

@@ -12,8 +12,12 @@ name: Release
 # binary name, version) and the GitHub context (owner/repo) — there is
 # nothing to rename in this file when the template is instantiated.
 #
-# Dry-run: `workflow_dispatch` from any branch exercises the full
-# build -> attest -> verify chain; the publish job is tag-gated and skipped.
+# Dry-run: `workflow_dispatch` from any branch rehearses the build, test,
+# SBOM-generation, and source-pack steps only. Persistent attestations and the
+# fail-closed verify are tag-gated (`refs/tags/*`), so a dry-run publishes
+# NOTHING — no signed provenance/SBOM/gate attestations enter the public store.
+# This keeps the build byte-reproducible without a dry-run's `-dev` artifacts
+# minting attestations that collide (same digest) with a later tagged release.
 
 "on":
   push:
@@ -145,6 +149,8 @@ jobs:
           cp "$SRC" "dist/${BIN}-${VERSION}-${PLATFORM}${EXT}"
 
       - name: Attest build provenance
+        # Tag-only: dry-runs publish no persistent attestations (see header).
+        if: startsWith(github.ref, 'refs/tags/')
         # v4.1.0
         uses: >-
           actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32
@@ -196,6 +202,8 @@ jobs:
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
           echo "digest=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
       - name: Attest build provenance
+        # Tag-only: dry-runs publish no persistent attestations (see header).
+        if: startsWith(github.ref, 'refs/tags/')
         # v4.1.0
         uses: >-
           actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32
@@ -291,6 +299,8 @@ jobs:
           upload-release-assets: false
 
       - name: Attest SBOM (binds every binary to the SBOM)
+        # Tag-only: dry-runs publish no persistent attestations (see header).
+        if: startsWith(github.ref, 'refs/tags/')
         # v4.1.0
         uses: >-
           actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e
@@ -372,6 +382,8 @@ jobs:
 
   attest-sca:
     name: Attest — SCA
+    # Tag-only: dry-runs publish no persistent attestations (see header).
+    if: startsWith(github.ref, 'refs/tags/')
     needs: [meta, source, gate-sca]
     permissions:
       id-token: write
@@ -389,6 +401,8 @@ jobs:
 
   attest-iac-license:
     name: Attest — IaC/license
+    # Tag-only: dry-runs publish no persistent attestations (see header).
+    if: startsWith(github.ref, 'refs/tags/')
     needs: [meta, source, gate-trivy]
     permissions:
       id-token: write
@@ -406,6 +420,8 @@ jobs:
 
   attest-sast:
     name: Attest — SAST
+    # Tag-only: dry-runs publish no persistent attestations (see header).
+    if: startsWith(github.ref, 'refs/tags/')
     needs: [meta, source, gate-sast]
     permissions:
       id-token: write
@@ -427,6 +443,8 @@ jobs:
   # high/critical" rather than "zero findings".
   vex:
     name: Gate — VEX (OpenVEX)
+    # Tag-only: dry-runs publish no persistent attestations (see header).
+    if: startsWith(github.ref, 'refs/tags/')
     needs: [meta, source]
     permissions:
       id-token: write
@@ -442,6 +460,8 @@ jobs:
 
   verify:
     name: Verify Attestations
+    # Tag-only: there is nothing to verify on a dry-run (no attestations minted).
+    if: startsWith(github.ref, 'refs/tags/')
     needs: [meta, build, sbom, source, attest-sca, attest-iac-license, attest-sast, vex]
     runs-on: ubuntu-latest
     permissions:
