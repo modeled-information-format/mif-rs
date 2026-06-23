@@ -343,9 +343,9 @@ jobs:
       contents: read
       actions: read
       packages: read   # reusable's analyze job declares it (CodeQL pkg resolution)
-    # attested-delivery/.github main @ 77a87549 (merged 2026-06-16)
+    # attested-delivery/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-sast-codeql.yml@aba1860be6b6ebd5c0c0a0f07160946fb0349965
+      attested-delivery/.github/.github/workflows/reusable-sast-codeql.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       languages: rust
       build-mode: none
@@ -358,9 +358,9 @@ jobs:
       contents: read
       security-events: write
       pull-requests: write   # reusable's (skipped) dependency-review job declares it
-    # attested-delivery/.github main @ 77a87549 (merged 2026-06-16)
+    # attested-delivery/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-sca-osv.yml@aba1860be6b6ebd5c0c0a0f07160946fb0349965
+      attested-delivery/.github/.github/workflows/reusable-sca-osv.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       fail-on-severity: high
       scan-args: |-
@@ -374,9 +374,9 @@ jobs:
       security-events: write
       actions: read
       packages: read   # reusable's (skipped) image job declares it
-    # attested-delivery/.github main @ 77a87549 (merged 2026-06-16)
+    # attested-delivery/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-trivy.yml@aba1860be6b6ebd5c0c0a0f07160946fb0349965
+      attested-delivery/.github/.github/workflows/reusable-trivy.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       scan-iac: true
 
@@ -389,9 +389,9 @@ jobs:
       id-token: write
       attestations: write
       contents: read
-    # attested-delivery/.github main @ 77a87549 (merged 2026-06-16)
+    # attested-delivery/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@aba1860be6b6ebd5c0c0a0f07160946fb0349965
+      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       subject-name: ${{ needs.source.outputs.subject-name }}
       subject-digest: ${{ needs.source.outputs.subject-digest }}
@@ -408,9 +408,9 @@ jobs:
       id-token: write
       attestations: write
       contents: read
-    # attested-delivery/.github main @ 77a87549 (merged 2026-06-16)
+    # attested-delivery/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@aba1860be6b6ebd5c0c0a0f07160946fb0349965
+      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       subject-name: ${{ needs.source.outputs.subject-name }}
       subject-digest: ${{ needs.source.outputs.subject-digest }}
@@ -427,9 +427,9 @@ jobs:
       id-token: write
       attestations: write
       contents: read
-    # attested-delivery/.github main @ 77a87549 (merged 2026-06-16)
+    # attested-delivery/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@aba1860be6b6ebd5c0c0a0f07160946fb0349965
+      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       subject-name: ${{ needs.source.outputs.subject-name }}
       subject-digest: ${{ needs.source.outputs.subject-digest }}
@@ -450,9 +450,9 @@ jobs:
       id-token: write
       attestations: write
       contents: read
-    # attested-delivery/.github main @ 698148e (post-#4, 2026-06-19)
+    # attested-delivery/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-vex.yml@698148e12da113cfeeef8742c31ae93657959e67
+      attested-delivery/.github/.github/workflows/reusable-vex.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       subject-name: ${{ needs.source.outputs.subject-name }}
       subject-digest: ${{ needs.source.outputs.subject-digest }}

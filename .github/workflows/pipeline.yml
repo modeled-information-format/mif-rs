@@ -114,9 +114,9 @@ jobs:
       || inputs.stage == 'ci'
     permissions:
       contents: read
-    # attested-delivery/.github main (2026-06-11)
+    # attested-delivery/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/pin-check.yml@aba1860be6b6ebd5c0c0a0f07160946fb0349965
+      attested-delivery/.github/.github/workflows/pin-check.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
 
   # -----------------------------------------------------------
   # Docker — after CI; PR = build-only, push on main/tags
@@ -157,9 +157,9 @@ jobs:
       attestations: write
       packages: write
       contents: read
-    # attested-delivery/.github main (2026-06-11)
+    # attested-delivery/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/sign-and-attest.yml@aba1860be6b6ebd5c0c0a0f07160946fb0349965
+      attested-delivery/.github/.github/workflows/sign-and-attest.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       image-name: ghcr.io/${{ github.repository }}
       image-digest: ${{ needs.docker.outputs.image-digest }}
@@ -177,9 +177,9 @@ jobs:
       attestations: read
       packages: read
       contents: read
-    # attested-delivery/.github main (2026-06-11)
+    # attested-delivery/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/verify-attestation.yml@aba1860be6b6ebd5c0c0a0f07160946fb0349965
+      attested-delivery/.github/.github/workflows/verify-attestation.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       image-ref: >-
         ghcr.io/${{ github.repository }}@${{
@@ -205,9 +205,9 @@ jobs:
       security-events: write
       actions: read
       packages: read
-    # attested-delivery/.github main @ 77a87549 (merged 2026-06-16)
+    # attested-delivery/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-trivy.yml@aba1860be6b6ebd5c0c0a0f07160946fb0349965
+      attested-delivery/.github/.github/workflows/reusable-trivy.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       image-ref: >-
         ghcr.io/${{ github.repository }}@${{
@@ -226,9 +226,9 @@ jobs:
       id-token: write
       attestations: write
       contents: read
-    # attested-delivery/.github main @ 77a87549 (merged 2026-06-16)
+    # attested-delivery/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@aba1860be6b6ebd5c0c0a0f07160946fb0349965
+      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       subject-name: ghcr.io/${{ github.repository }}
       subject-digest: ${{ needs.docker.outputs.image-digest }}

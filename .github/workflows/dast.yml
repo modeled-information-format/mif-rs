@@ -96,9 +96,9 @@ jobs:
     needs: [meta]
     permissions:
       contents: read
-    # attested-delivery/.github main @ 698148e (PR #4, merged 2026-06-19)
+    # attested-delivery/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-zap.yml@698148e12da113cfeeef8742c31ae93657959e67
+      attested-delivery/.github/.github/workflows/reusable-zap.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       target: ${{ inputs.target }}
       fail-action: false
@@ -110,9 +110,9 @@ jobs:
       id-token: write
       attestations: write
       contents: read
-    # attested-delivery/.github main @ 698148e (PR #4, merged 2026-06-19)
+    # attested-delivery/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@698148e12da113cfeeef8742c31ae93657959e67
+      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       subject-name: ${{ needs.subject.outputs.subject-name }}
       subject-digest: ${{ needs.subject.outputs.subject-digest }}
