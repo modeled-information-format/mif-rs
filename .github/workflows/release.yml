@@ -41,7 +41,7 @@ jobs:
       publishable: ${{ steps.meta.outputs.publishable }}
     steps:
       - name: Checkout repository
-        # v6.0.3
+        # v7.0.0
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Install Rust toolchain
@@ -110,7 +110,7 @@ jobs:
             ext: ".exe"
     steps:
       - name: Checkout repository
-        # v6.0.3
+        # v7.0.0
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Install Rust toolchain
@@ -185,7 +185,7 @@ jobs:
       subject-digest: ${{ steps.pack.outputs.digest }}
     steps:
       - name: Checkout repository
-        # v6.0.3
+        # v7.0.0
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - name: Pack source snapshot
         id: pack
@@ -227,7 +227,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        # v6.0.3
+        # v7.0.0
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Install Rust toolchain
@@ -245,7 +245,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        # v6.0.3
+        # v7.0.0
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Install cargo-audit
@@ -268,7 +268,7 @@ jobs:
       attestations: write
     steps:
       - name: Checkout repository
-        # v6.0.3
+        # v7.0.0
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Download all binaries
