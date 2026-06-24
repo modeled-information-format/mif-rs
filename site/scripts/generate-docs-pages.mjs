@@ -93,6 +93,9 @@ export function generateDocsPages(outputBase) {
 
         // Strip HTML comments which are invalid in MDX
         let body = stripped.replace(/<!--[\s\S]*?-->/g, "");
+        // Convert CommonMark bare autolinks (<https://...>) to MDX-safe links.
+        // Markdown permits bare <url>; MDX/JSX parses `<` as a tag and rejects it.
+        body = body.replace(/<((?:https?|mailto):[^>\s]+)>/g, "[$1]($1)");
         // Rewrite markdown links to Starlight URLs
         body = rewriteLinks(body, linkMap);
         const h1Match = body.match(/^#\s+.+\n+/);
