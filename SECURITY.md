@@ -122,8 +122,8 @@ same bytes yields the identical digest and therefore an additional valid
 attestation. For releases tagged before dry-runs were made non-attesting, an
 earlier `workflow_dispatch` dry-run from a feature branch did exactly this — its
 subject is named for that branch's `Cargo.toml` version plus `-dev` (which is
-**independent of the release tag**: e.g. v0.1.0's reproducible binaries also
-carry a `0.4.0-dev` subject from a pre-release dry-run). That is evidence of
+**independent of the release tag**: a tag's reproducible binaries may also
+carry a `<version>-dev` subject from a pre-release dry-run). That is evidence of
 reproducibility, not a discrepancy — and tooling that inspects only the first
 returned attestation may surface the `-dev` subject. To pin the release-specific
 one, filter by the tag ref:
