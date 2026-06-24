@@ -14,12 +14,14 @@ name: Release
 #
 # Dry-run: `workflow_dispatch` from any branch rehearses the non-publishing
 # pipeline — build, test, audit, SBOM generation, source-pack, and the
-# quality-gate scans (`gate-sast`/`gate-sca`/`gate-trivy`). Only the signing,
-# attestation, `verify`, and release-publish jobs are tag-gated (`refs/tags/*`),
-# so a dry-run publishes NOTHING — no signed provenance/SBOM/gate attestations
-# enter the public store. This keeps the build byte-reproducible without a
-# dry-run's `-dev` artifacts minting attestations that collide (same digest)
-# with a later tagged release.
+# quality-gate scans (`gate-sast`/`gate-sca`/`gate-trivy`). The signing,
+# attestation, `verify`, and release-publish jobs (`attest-*`/`vex`/`verify`/
+# `release`) are tag-gated (`refs/tags/*`), so a dry-run mints no signed
+# attestation and cuts no GitHub Release — nothing persistent or publicly
+# verifiable enters the attestation store. (It still produces ephemeral,
+# run-scoped Actions artifacts and code-scanning SARIF, as any CI run does.)
+# This keeps the build byte-reproducible without a dry-run's `-dev` artifacts
+# minting attestations that collide (same digest) with a later tagged release.
 
 "on":
   push:
