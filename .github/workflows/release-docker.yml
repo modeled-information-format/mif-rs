@@ -8,6 +8,15 @@ name: Docker
         description: "Push image to registry"
         type: boolean
         default: false
+      platforms:
+        description: >-
+          Comma-separated buildx platform list. Defaults to amd64 only —
+          arm64 goes through QEMU emulation, which is slow even with
+          cargo-chef's dependency-layer caching; the caller opts into
+          arm64 explicitly for actual releases (tag pushes), not every
+          push to main.
+        type: string
+        default: linux/amd64
     outputs:
       bins:
         description: JSON array of the [[bin]] targets an image was built for
@@ -26,6 +35,10 @@ name: Docker
         description: "Push image to registry"
         type: boolean
         default: false
+      platforms:
+        description: "Comma-separated buildx platform list"
+        type: string
+        default: linux/amd64
 
 env:
   REGISTRY: ghcr.io
@@ -120,14 +133,13 @@ jobs:
           docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ inputs.platforms }}
           push: ${{ inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.bin }}
           cache-to: type=gha,mode=max,scope=${{ matrix.bin }}
           build-args: |
-            RUST_VERSION=1.92
             BIN=${{ matrix.bin }}
 
       # A matrix job's `outputs` only exposes its LAST completed cell's

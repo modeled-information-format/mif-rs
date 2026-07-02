@@ -301,14 +301,26 @@ on a PR it builds without pushing (`push: ${{ github.event_name !=
 | `failed to solve: Dockerfile: not found` | Missing `Dockerfile` | Confirm it still exists at the repo root |
 | `COPY failed: file not found` | Wrong path in `Dockerfile` | Check paths match the `crates/<name>/` layout |
 | `denied: denied` on push | Missing registry permissions | Confirm the job has `packages: write` (only granted when `push: true`) |
-| Build arg mismatch | `RUST_VERSION` build-arg wrong | `release-docker.yml` passes `RUST_VERSION=1.92` — check it matches the workspace MSRV |
+| `unknown: BIN` / build fails immediately | Missing `--build-arg BIN=<name>` | The `Dockerfile` requires `BIN` (`mif-cli` or `mif-mcp`) to select which workspace binary to build — no default |
+
+The `Dockerfile` uses `cargo-chef` for dependency-layer caching (a `chef`/
+`planner`/`builder` multi-stage split): the dependency-only layer is cached
+independently of application source changes, so a source-only change
+rebuilds in seconds rather than recompiling the whole dependency tree.
+`release-docker.yml` builds `linux/amd64` only by default — `linux/arm64`
+(QEMU-emulated, much slower even with caching) is added only for tag pushes
+(`pipeline.yml`'s `docker` job sets `platforms` conditionally on
+`github.ref_type == 'tag'`).
 
 Test locally:
 
 ```bash
-docker build -t mif-rs:test .
-docker run --rm mif-rs:test --version
-docker buildx build --platform linux/amd64,linux/arm64 -t mif-rs:test .
+docker build --build-arg BIN=mif-cli -t mif-cli:test .
+docker run --rm mif-cli:test --version
+
+# Both platforms, matching what CI builds only for an actual tag push:
+docker buildx build --platform linux/amd64,linux/arm64 \
+  --build-arg BIN=mif-cli -t mif-cli:test .
 ```
 
 ## Release workflow failures

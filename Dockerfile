@@ -1,33 +1,37 @@
-# Build stage
 # Base images are pinned by digest (OpenSSF Scorecard: Pinned-Dependencies).
 # The :tag is kept alongside the digest for human readability; Dependabot's
 # docker ecosystem keeps the digest fresh. Refresh with:
 #   docker buildx imagetools inspect <image> --format '{{.Manifest.Digest}}'
-FROM rust:1.96-slim@sha256:31ee7fc65186be7e0e0ccb3f2ca305f14e4739e7642a1ae65753aa5d7b874523 AS builder
+FROM rust:1.96-slim@sha256:31ee7fc65186be7e0e0ccb3f2ca305f14e4739e7642a1ae65753aa5d7b874523 AS chef
+RUN cargo install cargo-chef --locked --version 0.1.77
+WORKDIR /app
 
+# cargo-chef's whole point: derive a dependency-only "recipe" from the
+# workspace's Cargo.toml/Cargo.lock files, so the actual dependency
+# compilation (the expensive part, and the part that almost never changes)
+# lands in its own Docker layer that only invalidates when a manifest
+# changes — not on every source edit. This is the fix for the previous
+# single-COPY-then-build design, which recompiled the entire dependency
+# tree from scratch on every push regardless of what actually changed.
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
 # Which workspace binary to build into this image: mif-cli or mif-mcp.
 # Passed by the CI matrix in release-docker.yml — never guess it here.
 ARG BIN
-
-WORKDIR /app
-
-# Install build dependencies
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    pkg-config \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy the whole workspace. A per-crate dependency-precaching layer (as the
-# single-package template used) needs a valid dummy source file for every
-# member and was judged not worth the risk of a subtle multi-crate breakage
-# for this bootstrap — one copy, one build, simpler and easier to get right.
+COPY --from=planner /app/recipe.json recipe.json
+# Builds only the dependency graph, cached independently of application
+# source changes.
+RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-
-# Build the selected binary in release mode.
 RUN cargo build --release --locked -p "${BIN}" --bin "${BIN}"
 
-# Runtime stage - use distroless for minimal attack surface.
+# Runtime stage - use distroless/cc for minimal attack surface while keeping
+# glibc + CA certificates (unlike distroless/static or scratch, which have
+# neither — needed for any future HTTPS/TLS use, not just today's offline
+# validation logic).
 # Pinned by digest (no :latest) to satisfy Scorecard Pinned-Dependencies and
 # Trivy DS-0001; Dependabot's docker ecosystem keeps the digest fresh.
 FROM gcr.io/distroless/cc-debian12@sha256:d703b626ba455c4e6c6fbe5f36e6f427c85d51445598d564652a2f334179f96e

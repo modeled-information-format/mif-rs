@@ -154,6 +154,11 @@ jobs:
     with:
       push: >-
         ${{ github.event_name != 'pull_request' }}
+      # arm64 goes through slow QEMU emulation — only worth paying for on an
+      # actual release (tag push), not every push to main. release-docker.yml
+      # defaults to amd64-only otherwise.
+      platforms: >-
+        ${{ github.ref_type == 'tag' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
 
   # -----------------------------------------------------------
   # Image attestation — centralized signer (SLSA Build L3
