@@ -10,7 +10,6 @@ homepage.workspace = true
 readme = "README.md"
 keywords = ["mif", "json-schema", "validation"]
 categories = ["data-structures", "encoding"]
-publish = false
 
 [lints]
 workspace = true

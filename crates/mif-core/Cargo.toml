@@ -10,7 +10,6 @@ homepage.workspace = true
 readme = "README.md"
 keywords = ["mif", "memory", "ontology"]
 categories = ["data-structures", "encoding"]
-publish = false
 
 [lints]
 workspace = true

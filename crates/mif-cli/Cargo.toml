@@ -10,7 +10,6 @@ homepage.workspace = true
 readme = "README.md"
 keywords = ["mif", "cli"]
 categories = ["command-line-utilities"]
-publish = false
 
 [[bin]]
 name = "mif-cli"
