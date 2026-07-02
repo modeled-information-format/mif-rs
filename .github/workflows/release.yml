@@ -81,9 +81,11 @@ jobs:
             # per-crate and must never be read positionally).
             VERSION="$(jq -r '.packages[0].version' <<< "$META")-dev"
           fi
-          echo "bins=${BINS}" >> "$GITHUB_OUTPUT"
-          echo "bin-count=${BIN_COUNT}" >> "$GITHUB_OUTPUT"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          {
+            echo "bins=${BINS}"
+            echo "bin-count=${BIN_COUNT}"
+            echo "version=${VERSION}"
+          } >> "$GITHUB_OUTPUT"
           # Any workspace member with publish != false arms external
           # publication (crates.io / container / Homebrew); the
           # build->attest->verify chain still runs as CI validation either way.

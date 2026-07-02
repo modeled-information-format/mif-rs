@@ -212,7 +212,7 @@ jobs:
             def install
               # A workspace checkout has no root package to install from —
               # point cargo at this bin's own crate directory directly
-              # (verified: `cargo install --path .` at a virtual workspace
+              # (verified: "cargo install --path ." at a virtual workspace
               # root fails with "found a virtual manifest").
               system "cargo", "install", *std_cargo_args(path: "crates/${BIN}")
             end
