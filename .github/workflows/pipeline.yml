@@ -35,17 +35,22 @@ permissions:
 
 jobs:
   # -----------------------------------------------------------
-  # Gate — resolve template state from Cargo.toml `publish`.
-  # `publish = false` (template) reports `publish == []`, which
-  # disables the container build/sign/verify chain. Deleting that
-  # line in a downstream project arms it. Same switch that gates
-  # crates.io publishing, GitHub Releases, and Homebrew.
+  # Gate — resolve two independent booleans from cargo metadata, workspace-
+  # wide (never .packages[0] — this is a 5-member workspace):
+  #   - crates-publishable: does ANY member have publish != false? Gates
+  #     nothing about binaries; a library can be publish=true long before
+  #     any bin target exists.
+  #   - has-bin-target: does ANY member have a [[bin]] target? Gates the
+  #     docker chain. mif-cli and mif-mcp are real from day one, so this is
+  #     true immediately, but stays dynamic rather than hardcoded so a
+  #     future third binary crate needs zero workflow changes.
   # -----------------------------------------------------------
   gate:
-    name: Resolve Publish Gate
+    name: Resolve Publish/Build Gates
     runs-on: ubuntu-latest
     outputs:
-      publishable: ${{ steps.gate.outputs.publishable }}
+      crates-publishable: ${{ steps.gate.outputs.crates-publishable }}
+      has-bin-target: ${{ steps.gate.outputs.has-bin-target }}
     steps:
       - name: Checkout repository
         # v7.0.0
@@ -58,17 +63,20 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Resolve publish gate from Cargo.toml
+      - name: Resolve gates from cargo metadata
         id: gate
         run: |
           set -euo pipefail
           META=$(cargo metadata --no-deps --locked --format-version 1)
-          # `publish = false` => `.publish == []` => template state.
           PUBLISHABLE=$(jq -r \
-            'if .packages[0].publish == [] then "false" else "true" end' \
+            '[.packages[] | select(.publish != [])] | length > 0' \
             <<< "$META")
-          echo "publishable=${PUBLISHABLE}" >> "$GITHUB_OUTPUT"
-          echo "Resolved publishable: ${PUBLISHABLE}"
+          HAS_BIN=$(jq -r \
+            '[.packages[].targets[] | select(.kind | index("bin"))] | length > 0' \
+            <<< "$META")
+          echo "crates-publishable=${PUBLISHABLE}" >> "$GITHUB_OUTPUT"
+          echo "has-bin-target=${HAS_BIN}" >> "$GITHUB_OUTPUT"
+          echo "Resolved crates-publishable: ${PUBLISHABLE}, has-bin-target: ${HAS_BIN}"
 
   # -----------------------------------------------------------
   # CI Stage — runs on every push, PR, and tag
@@ -96,15 +104,6 @@ jobs:
     secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-  test-matrix:
-    name: Test Matrix
-    if: >-
-      github.event_name == 'pull_request'
-      || (github.event_name == 'workflow_dispatch'
-      && (inputs.stage == 'all'
-      || inputs.stage == 'ci'))
-    uses: ./.github/workflows/ci-test-matrix.yml
-
   # Required check context: "pin-check / pin-check" — asserts every
   # `uses:` reference is pinned to a full 40-char commit SHA.
   pin-check:
@@ -114,9 +113,23 @@ jobs:
       || inputs.stage == 'ci'
     permissions:
       contents: read
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      attested-delivery/.github/.github/workflows/pin-check.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/pin-check.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
+
+  # Required check context: "validate-workflows / actionlint" — lints every
+  # workflow file for syntax/semantic errors (separate concern from pin-check's
+  # SHA-pinning enforcement).
+  validate-workflows:
+    if: >-
+      github.event_name != 'workflow_dispatch'
+      || inputs.stage == 'all'
+      || inputs.stage == 'ci'
+    permissions:
+      contents: read
+    # modeled-information-format/.github main @ e50b004c (2026-07-01)
+    uses: >-
+      modeled-information-format/.github/.github/workflows/reusable-actionlint.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
 
   # -----------------------------------------------------------
   # Docker — after CI; PR = build-only, push on main/tags
@@ -128,10 +141,12 @@ jobs:
     permissions:
       contents: read
       packages: write
-    # Container build is gated on template state: skipped while
-    # `publish = false` (template), armed once that line is deleted.
+    # Container build is gated on whether the workspace has any [[bin]]
+    # target — true from day one here (mif-cli, mif-mcp), but resolved
+    # dynamically rather than hardcoded so a future binary crate needs no
+    # workflow changes to join the docker chain.
     if: >-
-      needs.gate.outputs.publishable == 'true'
+      needs.gate.outputs.has-bin-target == 'true'
       && (github.event_name != 'workflow_dispatch'
       || inputs.stage == 'all'
       || inputs.stage == 'docker')
@@ -142,55 +157,77 @@ jobs:
 
   # -----------------------------------------------------------
   # Image attestation — centralized signer (SLSA Build L3
-  # isolation boundary), then a fail-closed verify gate
+  # isolation boundary), then a fail-closed verify gate. Matrixed over
+  # every [[bin]] target's image (mif-cli, mif-mcp): `docker`'s own
+  # `bins`/`image-digests` outputs are NOT themselves matrix-collapsed
+  # (docker is a single non-matrixed job here; the matrixing — and its
+  # digest-collision handling — lives inside release-docker.yml), so each
+  # cell safely looks up its own bin's digest.
   # -----------------------------------------------------------
   docker-sign:
-    name: Sign and Attest Image
+    name: Sign and Attest Image (${{ matrix.bin }})
     needs: [docker]
     if: >-
       github.event_name != 'pull_request'
       && (github.event_name != 'workflow_dispatch'
       || inputs.stage == 'all'
       || inputs.stage == 'docker')
+    strategy:
+      fail-fast: false
+      matrix:
+        bin: ${{ fromJson(needs.docker.outputs.bins) }}
     permissions:
       id-token: write
       attestations: write
       packages: write
       contents: read
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      attested-delivery/.github/.github/workflows/sign-and-attest.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/sign-and-attest.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
     with:
-      image-name: ghcr.io/${{ github.repository }}
-      image-digest: ${{ needs.docker.outputs.image-digest }}
+      image-name: ghcr.io/${{ github.repository }}/${{ matrix.bin }}
+      image-digest: >-
+        ${{ fromJson(needs.docker.outputs.image-digests)[matrix.bin] }}
 
   docker-verify:
-    name: Verify Image Attestations
+    name: Verify Image Attestations (${{ matrix.bin }})
     needs: [docker, docker-sign]
     if: >-
       github.event_name != 'pull_request'
       && (github.event_name != 'workflow_dispatch'
       || inputs.stage == 'all'
       || inputs.stage == 'docker')
+    strategy:
+      fail-fast: false
+      matrix:
+        bin: ${{ fromJson(needs.docker.outputs.bins) }}
     permissions:
       id-token: write
       attestations: read
       packages: read
       contents: read
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      attested-delivery/.github/.github/workflows/verify-attestation.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/verify-attestation.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
     with:
       image-ref: >-
-        ghcr.io/${{ github.repository }}@${{
-        needs.docker.outputs.image-digest }}
+        ghcr.io/${{ github.repository }}/${{ matrix.bin }}@${{
+        fromJson(needs.docker.outputs.image-digests)[matrix.bin] }}
       attestation-repo: ${{ github.repository }}
 
   # -----------------------------------------------------------
-  # Container vulnerability gate attestation (gh-attested) —
-  # Trivy image scan signed and bound to the image digest, with
-  # the same publish + non-PR gating as the docker chain above.
-  # Dormant in template state (docker is gated on `publishable`).
+  # Container vulnerability gate attestation (gh-attested) — Trivy image
+  # scan signed and bound to the image digest.
+  #
+  # Deliberately NOT matrixed over bins, unlike docker-sign/docker-verify
+  # above: reusable-trivy.yml's sarif-artifact/sarif-filename outputs are
+  # fixed constants ("container-scan-sarif" / "trivy-image.sarif"), not
+  # per-call-unique — a second matrix cell calling it in the same run would
+  # collide on that artifact name (upload-artifact rejects a duplicate name
+  # within one run). Both images share the same base (distroless/cc-debian12)
+  # and dependency tree (the Dockerfile COPYs and builds from the same
+  # workspace checkout), so a Trivy scan of one is representative of the
+  # other for base-image/dependency CVEs — scan the first resolved bin.
   # -----------------------------------------------------------
   gate-image:
     name: Gate — Trivy (image)
@@ -205,13 +242,14 @@ jobs:
       security-events: write
       actions: read
       packages: read
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-trivy.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/reusable-trivy.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
     with:
       image-ref: >-
-        ghcr.io/${{ github.repository }}@${{
-        needs.docker.outputs.image-digest }}
+        ghcr.io/${{ github.repository }}/${{
+        fromJson(needs.docker.outputs.bins)[0] }}@${{
+        fromJson(needs.docker.outputs.image-digests)[fromJson(needs.docker.outputs.bins)[0]] }}
       scan-iac: false
 
   attest-container-scan:
@@ -226,12 +264,15 @@ jobs:
       id-token: write
       attestations: write
       contents: read
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
     with:
-      subject-name: ghcr.io/${{ github.repository }}
-      subject-digest: ${{ needs.docker.outputs.image-digest }}
-      predicate-type: https://attested-delivery.github.io/attestations/container-scan/v1
+      subject-name: >-
+        ghcr.io/${{ github.repository }}/${{
+        fromJson(needs.docker.outputs.bins)[0] }}
+      subject-digest: >-
+        ${{ fromJson(needs.docker.outputs.image-digests)[fromJson(needs.docker.outputs.bins)[0]] }}
+      predicate-type: https://modeled-information-format.github.io/attestations/container-scan/v1
       predicate-artifact: ${{ needs.gate-image.outputs.image-sarif-artifact }}
       predicate-filename: ${{ needs.gate-image.outputs.image-sarif-filename }}

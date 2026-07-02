@@ -1,319 +1,223 @@
 ---
-diataxis_type: explanation
+id: explanation-attested-delivery-end-to-end
+type: semantic
+created: '2026-07-02T00:00:00Z'
+modified: '2026-07-02T00:00:00Z'
+namespace: explanation/security
+title: Attested Delivery, End to End
+tags:
+  - explanation
+  - security
+  - attested-delivery
+  - supply-chain
+  - ci-cd
+temporal:
+  '@type': TemporalMetadata
+  validFrom: '2026-07-02T00:00:00Z'
+  recordedAt: '2026-07-02T00:00:00Z'
+  ttl: P1Y
+provenance:
+  '@type': Provenance
+  sourceType: user_explicit
+  trustLevel: high_confidence
+  wasAttributedTo:
+    '@id': urn:mif:team:mif-rs-maintainers
+    '@type': prov:Agent
+citations:
+  - '@type': Citation
+    citationType: specification
+    citationRole: source
+    title: SLSA — Supply-chain Levels for Software Artifacts, v1.0
+    url: https://slsa.dev/spec/v1.0/
+    accessed: '2026-07-02'
+relationships:
+  - type: relates-to
+    target: SIGNED-RELEASES.md
+  - type: relates-to
+    target: ../runbooks/RELEASING.md
+ontology:
+  '@type': OntologyReference
+  id: mif-docs
+  version: 1.0.0
+  uri: https://mif-spec.dev/ontologies/mif-docs
+entity:
+  name: Attested Delivery, End to End
+  entity_type: explanation
 ---
 
 # Attested Delivery, End to End
 
-How a change in this repository travels from a pull request to a signed,
-independently verifiable release — and exactly which gate signs what.
-
-> **Diátaxis mode: Explanation**, with one embedded **How-to** section
-> ("How to Adopt This in Your Own Project", numbered steps + a verification
-> command). Reference lookups (per-workflow triggers, verify commands) are
-> *not* duplicated here — they live in
-> [`CI-WORKFLOWS.md`](../template/CI-WORKFLOWS.md) and
-> [`SIGNED-RELEASES.md`](./SIGNED-RELEASES.md). This document explains how the
-> pieces compose.
-
-This repository is a **Mode-A consumer** of the central reusable-workflow
-repository `attested-delivery/.github`: it does not re-implement signing, scanning, or
-verification — it *calls* central reusables pinned to a full commit SHA, and
-each gate's verdict normalizes on SARIF.
-
----
-
-## The Two Seams
-
-Attested delivery has two distinct points where evidence is produced and bound
-to a subject. Keeping them separate is the key to understanding the whole
-system.
-
-| Seam | When | Subject | Evidence form | Where it lands |
-|---|---|---|---|---|
-| **Merge-time gates** | every push / PR to `main` | the source tree / commit | SARIF | the repo's **code-scanning hub** (Security tab); the *Code scanning results* required check is the merge gate |
-| **Deploy-time attestation** | tag push (release) / main push (container) | a *published* artifact bound by digest | signed in-toto attestation (Sigstore keyless) | GitHub artifact attestations, verifiable with `gh attestation verify` |
-
-The same four central reusables power the merge-time seam. A **subset** of them
-re-runs at deploy time, where the SARIF they emit is no longer just uploaded —
-it becomes a **signed predicate** bound to a release subject.
-
----
-
-## Stage 1 — Merge-Time Quality Gates (`quality-gates.yml`)
-
-`quality-gates.yml` is a thin caller of four `attested-delivery/.github` central
-reusables. It runs on push and PR to `main`, on a weekly Monday 06:00 UTC
-schedule, and on manual dispatch. Top-level permissions are `contents: read`;
-each job widens scope only as its reusable requires.
-
-| Job | Reusable (pinned SHA) | Emits | SARIF → code-scanning category |
-|---|---|---|---|
-| `sast` | `reusable-sast-codeql.yml@740cb8efb57af0187f88e9b4f939355b871a5895` | CodeQL (Rust, `build-mode: none`) | `/language:rust` |
-| `sca` | `reusable-sca-osv.yml@77a87549a65c6c978a0e87efe0168ed3517f7ca4` | OSV-Scanner (`--lockfile=Cargo.lock`, `fail-on-severity: high`) + dependency-review (PR gate) | OSV SARIF; artifact `OSV Scanner SARIF file` |
-| `posture` | `reusable-scorecard.yml@77a87549a65c6c978a0e87efe0168ed3517f7ca4` | OpenSSF Scorecard (push/schedule only — needs the default branch) | `scorecard` |
-| `trivy` | `reusable-trivy.yml@77a87549a65c6c978a0e87efe0168ed3517f7ca4` | Trivy filesystem scan (`scan-iac: true`: Dockerfile, manifests, licenses) | `trivy-iac-license` |
-
-**Why a caller must over-grant permissions.** A reusable workflow's job
-permissions are a *floor*: a caller must grant **≥** every permission any of
-the reusable's jobs declares, or GitHub fails the call at startup — even for
-jobs that are conditionally skipped. That is why `sast` and `trivy` grant
-`packages: read` (the CodeQL analyze job and the Trivy *image* job declare it)
-even though no package is read in template state, and why `sca` grants
-`pull-requests: write` (its dependency-review job declares it).
-
-**What each reusable outputs (the attestation seam).** Every gate reusable
-publishes its SARIF as a named artifact *and* exposes `sarif-artifact` /
-`sarif-filename` outputs. At merge time those outputs are unused (the SARIF is
-uploaded to code scanning via `github/codeql-action/upload-sarif`). At release
-time they become the input to the signing seam — see Stage 3.
-
----
-
-## Stage 2 — The `publish = false` Template Gate
-
-This template ships **publishing-disabled**. `Cargo.toml` carries:
-
-```toml
-publish = false
-```
-
-Every release-side workflow resolves this at runtime via
-`cargo metadata --no-deps --locked --format-version 1`, mapping
-`.packages[0].publish == []` to `publishable = "false"`. That boolean gates the
-three **external** channels. Deleting the `publish = false` line arms them at
-once.
-
-A **GitHub Release is deliberately *not* gated by this switch** — it is a tag
-primitive, not an external publish. A pushed tag always produces an attested
-GitHub Release (binaries + SBOM + source snapshot), in both template and armed
-state, provided the fail-closed `verify` job passes.
-
-**What `publish = false` disables (external channels only):**
-
-| Channel | Mechanism in template state |
-|---|---|
-| **Container build → sign → verify** | `pipeline.yml`'s `gate` job resolves `publishable=false`; the `docker` job's `if:` requires `publishable == 'true'`, so `docker`, `docker-sign`, `docker-verify`, `gate-image`, and `attest-container-scan` are all **skipped** — the template builds no image. |
-| **crates.io publish** | `publish.yml`'s `guard` job sets `publishable=false`; the `publish` job's `if:` gates the whole job off. (cargo itself also refuses `cargo publish` while `publish = false`.) |
-| **Homebrew tap update** | `package-homebrew.yml` reads `publishable` from `Cargo.toml` *at the released tag*; every formula-push step is gated on `publishable == 'true'`. |
-
-**What `publish = false` does NOT gate:**
-
-| Always runs on a tag | Mechanism |
-|---|---|
-| **GitHub Release** | `release.yml`'s `release` job is gated on `startsWith(github.ref, 'refs/tags/')` alone. It runs the full build → attest → SBOM → **fail-closed verify** chain and then creates the GitHub Release with the attested binaries, SBOM, and source snapshot — regardless of `publishable`. |
-
-The deploy-time *evidence chain always executes* — binaries build, provenance
-and SBOM are attested, verification runs fail-closed, and the GitHub Release is
-created. What `publish = false` withholds is *external distribution* (crates.io,
-container registry, Homebrew), so the template can ship attested GitHub Releases
-without claiming a crates.io name or pushing an image.
-
----
-
-## Stage 3 — Build → Sign → Verify
-
-There are two independent deploy-time chains: **release binaries** (`release.yml`)
-and the **container image** (`pipeline.yml`). Both are fail-closed.
-
-### 3a. Release binaries, SBOM, and the gate-verdict seam (`release.yml`)
-
-Triggered by a `v*.*.*` tag (a `workflow_dispatch` from any branch is a
-dry-run: version suffixed `-dev`, release job skipped). Flow:
-
-1. **`meta`** — resolve `bin`, `version`, `publishable` from `cargo metadata`.
-2. **`build`** (5-platform matrix: `linux-amd64`, `linux-arm64`, `macos-arm64`,
-   `macos-amd64` via cross-target, `windows-amd64`) — each binary is staged as
-   `{bin}-{version}-{platform}` and gets **SLSA build provenance** attached at
-   build time via `actions/attest-build-provenance`
-   (`@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32`, v4.1.0).
-3. **`source`** — `git archive` produces a *published* source snapshot
-   `{bin}-{version}-source.tar.gz` and attests its provenance. Because the exact
-   bytes ship as a release asset, the gate attestations below can be verified
-   from any workstation against a real, downloadable subject.
-4. **`sbom`** — a CycloneDX SBOM (`anchore/sbom-action`) is generated over the
-   binaries and bound to **every** binary via `actions/attest-sbom`
-   (`@c604332985a26aa8cf1bdc465b92731239ec6b9e`, v4.1.0).
-5. **The gate-verdict seam** — this is the bridge from Stage 1. Two of the four
-   merge-time reusables **re-run** here over the shipped source:
-   - `gate-sca` → `reusable-sca-osv.yml@77a87549a65c6c978a0e87efe0168ed3517f7ca4`
-   - `gate-trivy` → `reusable-trivy.yml@77a87549a65c6c978a0e87efe0168ed3517f7ca4`
-
-   Their SARIF outputs are then fed to the central signing reusable
-   `reusable-attest-scan.yml@740cb8efb57af0187f88e9b4f939355b871a5895`, which
-   signs each verdict as an in-toto attestation **bound to the source snapshot
-   digest**:
-
-   | Attest job | predicate-type | predicate from |
-   |---|---|---|
-   | `attest-sca` | `https://attested-delivery.github.io/attestations/sca/v1` | `gate-sca.outputs.sarif-{artifact,filename}` |
-   | `attest-iac-license` | `https://attested-delivery.github.io/attestations/iac-license/v1` | `gate-trivy.outputs.sarif-{artifact,filename}` |
-
-   SAST (CodeQL) and posture (Scorecard) are **not** re-run here — they are
-   repo/source-level and already enforced at merge in `quality-gates.yml`.
-
-6. **`verify`** (fail-closed, **before** the release exists) — downloads the
-   `{bin}-{version}-*` artifacts, asserts **exactly 7** are present (5 binaries
-   + SBOM document + source tarball; a partial set must never ship), then for
-   each:
-   - platform binary → verify provenance + SBOM (`--predicate-type https://cyclonedx.org/bom`);
-   - source tarball → verify provenance + both gate verdicts, asserting the
-     signer with `--signer-workflow attested-delivery/.github/.github/workflows/reusable-attest-scan.yml`
-     and the predicate-type URIs above.
-7. **`release`** (tag-gated — `publishable` is **not** required) — attaches
-   binaries, the SBOM, the source snapshot, and `{bin}-{version}-checksums.txt`
-   with auto-generated notes. A pushed tag always produces this GitHub Release.
-   `test` and `audit` (cargo-audit) are `needs` of this job because *a tag is
-   untrusted input* — it is not guaranteed to point at a CI-green commit.
-
-A tag therefore publishes **nothing unattested and nothing unverified**.
-
-### 3b. Container image (`pipeline.yml`, dormant in template state)
-
-Gated on `publishable == 'true'` (skipped while `publish = false`). On a
-non-PR push/tag:
-
-1. **`docker`** → `release-docker.yml` builds `linux/amd64,linux/arm64` and
-   pushes to `ghcr.io/{owner}/{repo}`, outputting the manifest `image-digest`.
-2. **`docker-sign`** → central `sign-and-attest.yml@740cb8efb57af0187f88e9b4f939355b871a5895`.
-   Under **SLSA Build L3** the signing identity is the *central* workflow, not
-   this repo — the isolation boundary is what makes the provenance
-   non-falsifiable. It attaches a Cosign signature, SLSA provenance, an SBOM,
-   and a Grype vuln report as OCI referrers.
-3. **`docker-verify`** → central `verify-attestation.yml@e8f0dbde068cc0701e443e7b8d57ae9917de7da3`,
-   a **fail-closed** gate. It verifies against `attestation-repo` (this repo,
-   where the build ran) while the Fulcio certificate identity defaults to the
-   central signer — so verification asserts *both* where the build ran and who
-   signed.
-4. **`gate-image` → `attest-container-scan`** — a parallel container-vuln seam:
-   `reusable-trivy.yml` scans the image by digest (artifact
-   `container-scan-sarif`) and `reusable-attest-scan.yml` signs the verdict
-   under predicate-type `https://attested-delivery.github.io/attestations/container-scan/v1`,
-   bound to the image digest.
-
-> Container *verification* commands (including the mandatory `--signer-workflow`
-> for centrally-signed images) live in
-> [`SIGNED-RELEASES.md` § Container Image Attestations](./SIGNED-RELEASES.md#container-image-attestations).
-> They are not repeated here.
-
----
-
-## Stage 4 — crates.io Trusted Publishing (`publish.yml`)
-
-Triggered by a `v*.*.*` tag (dispatch = dry-run). Gated on `publishable`.
-
-1. A **pre-publish gauntlet** runs `cargo fmt --check`, `clippy -D warnings`,
-   `test`, `doc`, `cargo deny check`, `cargo package`, and `cargo publish
-   --dry-run`. It also asserts the **tag version matches `Cargo.toml`** — a
-   mismatch fails *before* the irreversible publish.
-2. **Trusted Publishing (OIDC)** — `rust-lang/crates-io-auth-action`
-   (`@c6f97d42243bad5fab37ca0427f495c86d5b1a18`, v1.0.4) mints a short-lived
-   token from the workflow's OIDC identity. **There is no long-lived registry
-   token secret.** This requires the `publish` job to run in the `copilot`
-   environment with `id-token: write`.
-3. **Registry `.crate` attestation** — after publish, the workflow downloads
-   the `.crate` *the registry actually serves* from `static.crates.io`,
-   byte-compares its SHA-256 against the locally packaged archive (cargo
-   packaging is deterministic for a commit; a mismatch fails loudly), then
-   attaches SLSA provenance to the **registry bytes** via
-   `actions/attest-build-provenance`. The attestation covers what users
-   download, not a local rebuild.
-
----
-
-## Stage 5 — Homebrew Propagation (`package-homebrew.yml`)
-
-The release in Stage 3 is authored by `github-actions[bot]`, and **bot-authored
-release events do not trigger other workflows**. So Homebrew is driven by a
-`workflow_run` trigger on **Release** completion (with a `release: published`
-trigger and manual dispatch as alternates).
-
-The job only proceeds for a *successful tag run*
-(`workflow_run.conclusion == 'success'` and `head_branch` starts with `v`),
-resolves `bin`/`description`/`license`/`publishable` from `Cargo.toml`
-**at the released tag**, computes the source tarball SHA-256 (failing loudly on
-any download error), and generates a source formula
-(`class {CamelCase} < Formula`, `cargo install`-based, with a `--version`
-smoke test). It pushes to `{owner}/{HOMEBREW_TAP_REPO|homebrew-tap}` using
-`HOMEBREW_TAP_TOKEN` (a PAT scoped to the tap repo — this workflow only ever
-*reads* the source repo). The push is idempotent: a re-fire for the same
-version that produces no diff is a no-op.
-
----
-
-## How to Adopt This in Your Own Project
-
-> **Diátaxis mode: How-to.** Numbered, task-oriented, with a verification
-> command at the end.
-
-1. **Arm the external channels.** Delete this one line from `Cargo.toml`:
-
-   ```toml
-   publish = false
-   ```
-
-   This single deletion arms the container chain, crates.io publish, and
-   Homebrew — all three resolve it from `cargo metadata`. (GitHub Releases
-   already happen on every tag; this line never gated them.)
-
-2. **Set crate identity.** Edit `Cargo.toml` `name`, `version`, `description`,
-   `license`, `repository`, and the `[[bin]]` name. Every release workflow is
-   var-driven from this metadata plus the GitHub context — **no workflow file
-   is renamed.**
-
-3. **Configure crates.io Trusted Publishing (one-time, per crate).** On
-   crates.io → your crate → **Settings → Trusted Publishing → Add**:
-   - Repository: `{owner}/{repo}`
-   - Workflow filename: `publish.yml`
-   - Environment: `copilot`
-
-   No registry token is stored anywhere; the OIDC exchange replaces it.
-
-4. **Set Homebrew secrets/variables (only if shipping a tap).**
-   - Secret `HOMEBREW_TAP_TOKEN` — a PAT with write access to your tap repo
-     (also used by `release.yml` so the release event can propagate;
-     `workflow_run` is the fallback either way).
-   - Variable `HOMEBREW_TAP_REPO` — *optional*; defaults to `homebrew-tap`
-     under your owner.
-
-   Set both at **Settings → Secrets and variables → Actions**.
-
-5. **(Optional) Other secrets.** `CODECOV_TOKEN` (coverage upload),
-   `GITLEAKS_LICENSE` (secrets scan). Neither is required for attested
-   delivery. See the
-   [Required Secrets Summary](../template/CI-WORKFLOWS.md#required-secrets-summary).
-
-   > **Note:** no `DEPLOY_DOCS` variable exists in any attested-delivery
-   > workflow in this repository; documentation deployment is configured
-   > separately in `docs-deploy.yml` and is out of scope for delivery.
-
-6. **Keep the SHA-pinning convention.** Every `uses:` in this repository —
-   third-party actions *and* the `attested-delivery/.github` central reusables — is
-   pinned to a **full 40-character commit SHA**, never a tag or branch. The
-   `pin-check` required check (central
-   `pin-check.yml@740cb8efb57af0187f88e9b4f939355b871a5895`) fails the build
-   if any reference is not SHA-pinned. Let Dependabot (github-actions
-   ecosystem) bump these pins; do not hand-edit them to a moving ref.
-
-7. **Verify.** Cut a dry-run before a real tag — dispatch **Release** and
-   **Publish to crates.io** from any branch; both exercise the full
-   build → attest → verify chain and tag-gate only the publish step:
-
-   ```bash
-   gh workflow run release.yml
-   gh workflow run publish.yml
-   gh run watch "$(gh run list --workflow=release.yml --limit=1 --json databaseId -q '.[0].databaseId')"
-   ```
-
-   A green dry-run with the `Verify Attestations` job passing confirms the
-   pipeline is wired correctly before you publish anything irreversible.
-
----
-
-## See Also
-
-- [`SIGNED-RELEASES.md`](./SIGNED-RELEASES.md) — verification commands, SLSA
-  levels, keyless Sigstore, "who signs what", troubleshooting.
-- [`CI-WORKFLOWS.md`](../template/CI-WORKFLOWS.md) — per-workflow reference:
-  triggers, inputs, secrets, the full pipeline dependency chain.
-- `SECURITY.md` § Verifying Release Artifacts — canonical copy-paste verify
-  commands.
+`mif-rs` is a **Mode-A consumer** of the central reusable-workflow repository
+`modeled-information-format/.github`: it does not re-implement scanning, signing, or
+verification logic — it calls central reusables pinned to a full commit SHA, and
+each gate's verdict normalizes on SARIF. This document explains *why* the pipeline
+is shaped the way it is: why evidence gets produced at two separate points rather
+than one, why a `publish = false` switch exists per crate, and why a tag publishes
+nothing that hasn't already been verified. For the verification commands
+themselves, see [`SIGNED-RELEASES.md`](./SIGNED-RELEASES.md) and `SECURITY.md` §
+Verifying Release Artifacts; for the operational sequence of cutting a release,
+see [`RELEASING.md`](../runbooks/RELEASING.md).
+
+## Why two seams, not one
+
+Attested delivery has two distinct points where evidence is produced and bound to
+a subject, and keeping them conceptually separate is the key to understanding the
+whole system.
+
+The first is **merge-time**: every push or pull request to `main` runs SAST
+(CodeQL), SCA (OSV-Scanner), supply-chain posture (OpenSSF Scorecard), and an
+IaC/license scan (Trivy) over the source tree. Each emits SARIF, uploaded to the
+repository's code-scanning hub, and the *Code scanning results* required check is
+what actually gates the merge. This is a **repository-level** signal — it says
+"this commit, as a body of source, passed these scans" — and it is cheap to run
+often.
+
+The second is **deploy-time**: on a tag push (release binaries, crates.io) or a
+push to `main` once external publishing is armed (the container image), a subset
+of those same scanners re-runs, but this time their SARIF output is not merely
+uploaded — it is signed as an in-toto attestation, keyless via Sigstore, and bound
+by digest to a specific published artifact. This is an **artifact-level** claim:
+"this exact byte sequence, identified by this digest, carries this verdict."
+
+The reason these can't collapse into a single pass is that they answer different
+questions for different audiences. A merge-time SARIF upload tells a reviewer
+"don't merge this." A deploy-time attestation tells a consumer, potentially
+downloading the binary months later on an unrelated machine, "this specific
+artifact was scanned, and here is cryptographic proof of what the scan found." The
+first is ephemeral CI state; the second has to outlive the CI run and be
+independently checkable with `gh attestation verify`. Four central reusables power
+the merge-time seam (`reusable-sast-codeql.yml`, `reusable-sca-osv.yml`,
+`reusable-scorecard.yml`, `reusable-trivy.yml`, each called from
+`quality-gates.yml`), and three of them re-run at deploy time in `release.yml` —
+SAST, SCA, and IaC/license — because the artifact a consumer actually downloads
+(a published source snapshot) needs its own bound verdict, not a promise that some
+earlier, unrelated commit was once scanned clean. Supply-chain posture (Scorecard)
+stays merge-time only, because it characterizes the *repository* as an ongoing
+concern, not a single artifact.
+
+## Why a `publish = false` switch, and why it lives per crate
+
+Each of the five workspace members — `mif-core`, `mif-schema`, `mif-ontology`,
+`mif-cli`, `mif-mcp` — carries `publish = false` in its own `crates/<name>/Cargo.toml`.
+This is a deliberate holdover from the template this repository was forked from
+(`attested-delivery/rust-template`), and it exists to decouple *build and attest*
+from *publish externally*. The distinction matters because a GitHub Release is a
+tag primitive, not an external publish: a pushed `v*.*.*` tag always produces an
+attested GitHub Release — binaries, SBOM, and a source snapshot, each carrying
+signed provenance — provided the fail-closed `verify` job passes, *regardless* of
+whether any crate is publishable. What `publish = false` withholds is specifically
+the **external distribution channels**: crates.io (`publish.yml`), the container
+registry (`pipeline.yml`'s `docker` chain), and the Homebrew tap
+(`package-homebrew.yml`). All three resolve `publishable` from `cargo metadata` at
+runtime, so arming a channel is a one-line deletion in the relevant crate's
+manifest rather than a workflow edit.
+
+The rationale for keeping the evidence chain unconditional while gating
+distribution is that attestation and distribution are separable concerns.
+Verifiable provenance is worth generating on every tagged build — it costs a few
+CI minutes and produces something auditable even for a crate nobody has decided to
+ship publicly yet. Distribution, by contrast, is often irreversible (crates.io
+cannot be unpublished; a container tag pushed to a public registry is effectively
+permanent) and should require a conscious decision, not an accidental side effect
+of tagging.
+
+## Why quality-gate verdicts get re-signed at release time
+
+The four merge-time reusables produce SARIF that is useful the moment it's
+generated but stops being *provable* once the CI run that produced it ages out.
+`release.yml` re-runs SAST, SCA, and IaC/license over a **published source
+snapshot** — a `git archive` tarball attached to the release as a real,
+downloadable asset — specifically so the resulting SARIF has something durable to
+bind to. Each gate's output is then handed to the central
+`reusable-attest-scan.yml`, which signs it as an in-toto attestation keyed to the
+snapshot's digest, under a predicate type scoped to that gate (`.../sca/v1`,
+`.../iac-license/v1`, `.../sast/v1`). A fourth signal, an OpenVEX vulnerability
+disposition (`reusable-vex.yml`), is attested the same way, self-signed under its
+own identity, so that the release gate can enforce "no undispositioned
+high/critical finding" rather than the much blunter "zero findings" — a
+distinction that matters because a real-world dependency graph almost always
+carries *some* advisory that has already been triaged as not applicable.
+
+The `verify` job that follows is deliberately positioned **before** the GitHub
+Release exists, and it is fail-closed: it downloads every artifact, insists on
+finding exactly the expected set (a partial set must never ship), and then
+verifies provenance, SBOM, and every gate-verdict attestation against the source
+snapshot before the `release` job is even allowed to run. This ordering is the
+whole point — a release that fails verification is never created, rather than
+being created and later revoked. `test` and `audit` (cargo-audit) sit as
+dependencies of the `release` job for the same reason: a tag is *untrusted input*.
+Nothing guarantees it points at a commit that ever passed CI, so the release
+workflow re-derives that guarantee itself instead of trusting the tag.
+
+## Why the container chain is a separate deploy path
+
+`pipeline.yml`'s container jobs (`docker`, `docker-sign`, `docker-verify`,
+`gate-image`, `attest-container-scan`) follow the same shape — build, sign,
+verify, fail-closed — but with one structural difference: the signing identity is
+the **central** `sign-and-attest.yml` workflow, not this repository's own. Under
+SLSA Build L3, that separation is what makes the provenance non-falsifiable — if
+this repository's own workflow could sign its own build claims, a compromised
+workflow file could forge them. Routing signing through an isolated, centrally
+owned workflow means the attestation asserts two independent things at once:
+*where* the build ran (this repo, via `--repo`) and *who* signed it (the central
+workflow, via `--signer-workflow`) — and a verifier has to check both, because
+`--repo` alone is insufficient to catch a spoofed signer. The container path is
+currently dormant: it only runs once a crate's `publish = false` is lifted, per
+the switch described above.
+
+## Why crates.io publishing uses OIDC, not a stored token
+
+`publish.yml` authenticates to crates.io via `rust-lang/crates-io-auth-action`,
+which exchanges the workflow's own OIDC identity for a short-lived registry
+token — there is no long-lived `CARGO_REGISTRY_TOKEN` secret to leak, rotate, or
+scope down. The workflow then does something that only makes sense once you take
+seriously the idea that *what the registry actually serves* is the thing worth
+attesting: after publishing, it downloads the `.crate` archive back from
+`static.crates.io`, byte-compares it against the package it built locally (cargo
+packaging is deterministic for a given commit, so any mismatch is a real problem,
+not noise), and only then attaches SLSA provenance — to the downloaded bytes, not
+to a local rebuild. A local build asserting its own correctness proves less than
+independently re-fetching what a third party is now distributing and attesting
+that.
+
+## Why Homebrew propagation is decoupled from the release event
+
+The GitHub Release in the flow above is authored by `github-actions[bot]`, and
+bot-authored release events do not trigger other workflows — a quirk of GitHub
+Actions, not a design choice. `package-homebrew.yml` works around this by
+listening for `workflow_run` completion on the Release workflow itself (with the
+native `release: published` event and manual dispatch as fallbacks), and only
+proceeds for a run whose conclusion was success and whose branch name looks like a
+tag. It re-resolves the crate's metadata **at the released tag**, not at whatever
+commit happens to be checked out when the workflow fires, because the formula has
+to describe the artifact that was actually released, not the latest state of
+`main`. The formula push is written to be idempotent — a re-fire for a version
+that produces no diff is a no-op — since `workflow_run` and `release` firing
+together for the same event is expected, not a bug to guard against.
+
+## Where this doesn't yet match the surrounding docs
+
+Two details worth naming honestly, since an explanation that hides its own edges
+isn't doing its job. First, the environment gate on `publish.yml`, `release.yml`,
+and `package-homebrew.yml` is still named `copilot` — inherited verbatim from the
+upstream template — rather than something specific to this repository; renaming
+it to something like `release` and configuring real protection rules on it is
+tracked as follow-on work, not yet done. Second, `release.yml`'s metadata
+resolution step currently reads a single `[[bin]]` target from the first package
+`cargo metadata` returns; extending it to build every binary crate in this
+workspace (`mif-cli` and `mif-mcp`) is a separate, not-yet-landed change. Neither
+gap affects the *shape* of the attestation architecture described above — it
+affects how many binaries flow through it.
+
+## In short
+
+The pipeline splits evidence production into a cheap, repeated merge-time pass and
+a rarer, digest-bound deploy-time pass because those two passes answer different
+questions to different audiences. `publish = false` per crate keeps attestation
+unconditional while making external distribution a deliberate, reversible-until-
+irreversible decision. Re-signing gate verdicts over a published source snapshot,
+verifying fail-closed before the release exists, authenticating to crates.io via
+OIDC instead of a stored secret, and re-attesting the registry-served `.crate`
+rather than a local build are all instances of the same underlying discipline:
+prefer verifying the thing a consumer will actually receive over trusting an
+earlier, indirect claim about it.

@@ -1,0 +1,20 @@
+[package]
+name = "mif-core"
+description = "Shared foundational types for the MIF (Modeled Information Format) ecosystem"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["mif", "memory", "ontology"]
+categories = ["data-structures", "encoding"]
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

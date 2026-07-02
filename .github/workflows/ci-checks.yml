@@ -86,7 +86,7 @@ jobs:
 
       - name: Run clippy
         run: >-
-          cargo clippy --all-targets --all-features
+          cargo clippy --workspace --all-targets --all-features
           -- -D warnings
 
   test:
@@ -123,7 +123,7 @@ jobs:
             ${{ runner.os }}-cargo-test-
 
       - name: Run tests
-        run: cargo test --all-features --verbose
+        run: cargo test --workspace --all-features --verbose
 
   doc:
     name: Documentation
@@ -157,7 +157,7 @@ jobs:
             ${{ runner.os }}-cargo-doc-
 
       - name: Check documentation
-        run: cargo doc --no-deps --all-features
+        run: cargo doc --workspace --no-deps --all-features
 
   deny:
     name: Cargo Deny
@@ -207,7 +207,7 @@ jobs:
             ${{ runner.os }}-cargo-msrv-
 
       - name: Check MSRV
-        run: cargo check --all-features
+        run: cargo check --workspace --all-features
 
   all-checks-pass:
     name: All Checks Pass

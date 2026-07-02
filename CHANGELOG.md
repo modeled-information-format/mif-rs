@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `OutputFormat` + `Error::render()` dual renderer; the binary selects JSON vs pretty via `--format` and stderr `IsTerminal` detection (pretty output is byte-identical to the prior `Error: {e}` line)
   - Per-type problem documentation under `docs/reference/errors/` (dereferenceable type URIs) and a "Dual-Consumer Error Output" explanation doc
 - **fuzz**: Add a minimal cargo-fuzz harness targeting the public `process()` parser
-- **docs**: Add an end-to-end "Attested Delivery" guide — which `attested-delivery/.github` reusables run, the `publish` gate, the build → sign → verify chain, and a downstream adoption runbook
+- **docs**: Add an end-to-end "Attested Delivery" guide — which `modeled-information-format/.github` reusables run, the `publish` gate, the build → sign → verify chain, and a downstream adoption runbook
 - **docs-site**: Add Astro Starlight documentation site at `site/`
   - Browsable, searchable pages deployed to GitHub Pages
   - Auto-generated content from `docs/` markdown, `.github/workflows/*.yml`, and `CLAUDE.md` reference sections
@@ -109,7 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Update rust-template
+- Update mif-rs
 - Add Claude Code agents for development workflow
 
 ### CI/CD

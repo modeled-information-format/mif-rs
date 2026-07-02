@@ -1,203 +1,141 @@
 ---
-diataxis_type: how-to
+id: reference-code-quality-workflow
+type: semantic
+created: '2026-07-02T00:00:00Z'
+modified: '2026-07-02T00:00:00Z'
+namespace: reference/workflows
+title: code-quality.yml — GitHub Actions workflow reference
+tags:
+  - reference
+  - ci
+  - workflow
+  - code-quality
+temporal:
+  '@type': TemporalMetadata
+  validFrom: '2026-07-02T00:00:00Z'
+  recordedAt: '2026-07-02T00:00:00Z'
+  ttl: P1Y
+provenance:
+  '@type': Provenance
+  sourceType: system_generated
+  trustLevel: verified
+  wasDerivedFrom:
+    '@id': https://github.com/modeled-information-format/mif-rs/blob/main/.github/workflows/code-quality.yml
+    '@type': prov:Entity
+citations:
+  - '@type': Citation
+    citationType: tool
+    citationRole: source
+    title: cargo-geiger
+    url: https://github.com/rust-secure-code/cargo-geiger
+  - '@type': Citation
+    citationType: tool
+    citationRole: source
+    title: cargo-bloat
+    url: https://github.com/RazrFalcon/cargo-bloat
+  - '@type': Citation
+    citationType: specification
+    citationRole: methodology
+    title: Diátaxis — Reference
+    url: https://diataxis.fr/reference/
+    accessed: '2026-07-02'
+ontology:
+  '@type': OntologyReference
+  id: mif-docs
+  version: 1.0.0
+  uri: https://mif-spec.dev/ontologies/mif-docs
+entity:
+  name: code-quality.yml
+  entity_type: reference-document
 ---
-# Code Quality Metrics
 
-Automated collection of code quality metrics — unsafe code detection, binary size analysis, and documentation coverage — emitted as a single report artifact.
+# code-quality.yml
 
-## Reference
+The `.github/workflows/code-quality.yml` workflow ("Code Quality Metrics")
+collects unsafe-code, binary-size, and documentation-coverage metrics for the
+workspace and publishes them as a single markdown report artifact.
 
-| Field | Value |
-|---|---|
-| Workflow | `.github/workflows/code-quality.yml` |
-| Tools | `cargo-geiger`, `cargo-bloat`, `rustdoc` |
-| Output | Markdown report artifact |
+## Synopsis
 
-### Metrics collected
+```yaml
+on:
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+```
 
-| Metric | Tool | What it detects |
-|---|---|---|
-| Unsafe code analysis | `cargo-geiger` | Unsafe function calls, blocks, trait impls, and unsafe in dependencies |
-| Binary size analysis | `cargo-bloat` | Size by crate and by function; bloat sources |
-| Documentation coverage | `rustdoc` | Missing doc comments, broken doc links, doc test failures |
+## Triggers
 
-### Report access
+| Event | Condition |
+| --- | --- |
+| `pull_request` | Target branch `main` or `master` |
+| `workflow_dispatch` | Manual, any branch |
 
-The workflow generates a combined report. Access it via **Actions → Code Quality Metrics → Artifacts → code-quality-metrics**.
+## Permissions
 
-Example report:
+| Scope | Level |
+| --- | --- |
+| `contents` | `read` |
+
+## Job
+
+| Job ID | Name | Runs on |
+| --- | --- | --- |
+| `metrics` | Collect Code Quality Metrics | `ubuntu-latest` |
+
+## Steps
+
+| Step | Action | Pin | Command / effect |
+| --- | --- | --- | --- |
+| Checkout repository | `actions/checkout` | `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0` (v7.0.0) | Fetch source |
+| Install Rust toolchain | `dtolnay/rust-toolchain` | `67ef31d5b988238dd797d409d6f9574278e20537` | Install `stable` toolchain |
+| Install analysis tools | `taiki-e/install-action` | `9bcaee1dcae34154180f412e2fa69355a7cda9f6` (v2.67.18) | Install `cargo-geiger`, `cargo-bloat` |
+| Cache cargo registry | `actions/cache` | `55cc8345863c7cc4c66a329aec7e433d2d1c52a9` (v5.0.3) | Cache `~/.cargo/registry`, `~/.cargo/git`, `target`, keyed on `hashFiles('**/Cargo.lock')` |
+| Scan for unsafe code | (inline `run`) | — | `cargo geiger --all-features`, appended under `## Unsafe Code Analysis` |
+| Analyze binary size | (inline `run`) | — | `cargo build --release` then `cargo bloat --release --crates`, appended under `## Binary Size Analysis` |
+| Check documentation coverage | (inline `run`) | — | `cargo doc --no-deps --all-features 2>&1 \| grep -E "Documenting\|warning"`, appended under `## Documentation Coverage` |
+| Upload metrics report | `actions/upload-artifact` | `47309c993abb98030a35d55ef7ff34b7fa1074b5` (v4.6.2) | Upload `metrics-report.md` |
+
+## Metrics collected
+
+| Metric | Tool | Detects |
+| --- | --- | --- |
+| Unsafe code analysis | `cargo-geiger` | Unsafe functions, expressions, trait impls, and unsafe usage transitively through dependencies |
+| Binary size analysis | `cargo-bloat` | Binary size contribution by crate and by function |
+| Documentation coverage | `rustdoc` (via `cargo doc`) | Missing doc comments, broken intra-doc links, doc-test failures |
+
+## Artifacts
+
+| Name | Path | Retention |
+| --- | --- | --- |
+| `code-quality-metrics` | `metrics-report.md` | 30 days |
+
+Access: **Actions → Code Quality Metrics → Artifacts → code-quality-metrics**.
+
+## Report format
 
 ```markdown
 ## Unsafe Code Analysis
 Functions  Expressions  Impls  Traits  Methods  Dependency
-0/10       0/100        0/5    0/2     0/20     rust_template
+0/10       0/100        0/5    0/2     0/20     mif_core
 
 ## Binary Size Analysis
 File   .text   Size    Crate
  71.0%  59.0%   1.2MiB  std
-  8.5%   7.1%   147KiB  rust_template
+  8.5%   7.1%   147KiB  mif_core
 
 ## Documentation Coverage
-Documenting rust_template v0.1.0
+Documenting mif_core v0.1.0
 warning: missing documentation for public function
+  --> crates/mif-core/src/entity.rs:10
 ```
 
-### Interpreting the unsafe code report
+## Examples
 
-```text
-Functions  Expressions  Impls  Traits  Methods  Dependency
-2/10       5/100        0/5    0/2     0/20     ✓ rust_template
-```
-
-- **Functions**: 2 functions contain unsafe code.
-- **Expressions**: 5 unsafe expressions total.
-- **✓** = no unsafe in this crate's API.
-
-### Interpreting the binary size report
-
-```text
-File   .text   Size    Crate
-71.0%  59.0%   1.2MiB  std        ← Standard library
- 8.5%   7.1%   147KiB  rust_template
- 5.2%   4.3%   89KiB   serde
-```
-
-A large dependency contribution (e.g. `serde`) is a candidate for feature-flag trimming.
-
-### Interpreting documentation coverage
-
-```text
-warning: missing documentation for public function `add`
-  --> crates/lib.rs:10
-```
-
-Each warning names the public item that needs a doc comment.
-
-## How-to
-
-### Run the analysis locally
+Run the same three checks locally:
 
 ```bash
-# Install tools
-cargo install cargo-geiger cargo-bloat
-
-# Run unsafe code analysis
 cargo geiger --all-features
-
-# Analyze binary size
-cargo build --release
-cargo bloat --release --crates
-
-# Check documentation
+cargo build --release && cargo bloat --release --crates
 cargo doc --no-deps --all-features
 ```
-
-Verify: each command prints a report section matching the formats above.
-
-### Configure unsafe code policy
-
-Set the unsafe policy in `Cargo.toml`:
-
-```toml
-[lints.rust]
-unsafe_code = "forbid"  # No unsafe allowed
-# or
-unsafe_code = "warn"    # Warn but allow
-```
-
-Verify: `cargo geiger` reports `0/N` for a `forbid` crate.
-
-### Configure binary size optimization
-
-```toml
-[profile.release]
-opt-level = "z"        # Optimize for size
-lto = true            # Link-time optimization
-codegen-units = 1     # Better optimization
-strip = true          # Remove symbols
-panic = "abort"       # Smaller panic handler
-```
-
-Verify: `cargo build --release && cargo bloat --release --crates` and compare the total size.
-
-### Configure documentation requirements
-
-```toml
-[lints.rust]
-missing_docs = "warn"                     # Warn on missing docs
-rustdoc::broken_intra_doc_links = "deny"  # Fail on broken links
-```
-
-Verify: `cargo doc --no-deps` surfaces missing-doc warnings.
-
-### Improve the metrics
-
-**Reduce unsafe code** — replace raw pointer writes with safe abstractions:
-
-```rust
-// Before
-unsafe {
-    *ptr = value;
-}
-
-// After - use safe abstraction
-vec[index] = value;
-```
-
-**Reduce binary size** — find the largest contributors, then enable size optimizations:
-
-```bash
-cargo bloat --release -n 20
-```
-
-**Improve documentation** — add the missing doc comment the report named:
-
-```rust
-/// Adds two numbers together.
-pub fn add(a: i64, b: i64) -> i64 {
-    a + b
-}
-```
-
-```bash
-cargo doc --no-deps                          # Check coverage
-cargo test --doc                             # Run doc tests
-cargo doc --no-deps --document-private-items # Generate private docs
-```
-
-Verify: re-run the relevant tool and confirm the count dropped.
-
-### Troubleshooting
-
-**cargo-geiger errors**:
-
-```bash
-cargo install cargo-geiger --force
-cargo clean
-cargo geiger
-```
-
-**Binary size analysis fails** — ensure a release build exists first:
-
-```bash
-cargo build --release
-cargo bloat --release
-```
-
-**Documentation warnings** — surface them all as errors:
-
-```bash
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
-```
-
-## Why this matters
-
-These three metrics each guard a property the compiler alone won't enforce. `unsafe_code = "forbid"` is the template default, so `cargo-geiger` exists to confirm that guarantee holds transitively — unsafe code bypasses Rust's safety model, and a dependency can reintroduce it silently. Binary size matters for download time and memory footprint, and `cargo-bloat` makes the cost of each dependency visible so feature trimming is an informed decision. Documentation coverage is a usability property: a well-documented public API is the difference between a crate people can adopt and one they have to reverse-engineer.
-
-## Links
-
-- [cargo-geiger](https://github.com/rust-secure-code/cargo-geiger)
-- [cargo-bloat](https://github.com/RazrFalcon/cargo-bloat)
-- [rustdoc Documentation](https://doc.rust-lang.org/rustdoc/)
-- [Unsafe Code Guidelines](https://rust-lang.github.io/unsafe-code-guidelines/)
-- [CI Workflows reference](../template/CI-WORKFLOWS.md)

@@ -1,317 +1,150 @@
 ---
-diataxis_type: how-to
+id: how-to-deploy-mif-rs-release
+type: procedural
+created: '2026-07-02T00:00:00Z'
+modified: '2026-07-02T00:00:00Z'
+namespace: how-to/deployment
+title: How to Deploy a mif-rs Release
+tags:
+  - how-to
+  - deployment
+  - release
+temporal:
+  '@type': TemporalMetadata
+  validFrom: '2026-07-02T00:00:00Z'
+  recordedAt: '2026-07-02T00:00:00Z'
+  ttl: P1Y
+relationships:
+  - type: relates-to
+    target: runbooks/RELEASING.md
+  - type: relates-to
+    target: security/SIGNED-RELEASES.md
+  - type: relates-to
+    target: security/ATTESTED-DELIVERY.md
+ontology:
+  '@type': OntologyReference
+  id: mif-docs
+  version: 1.0.0
+  uri: https://mif-spec.dev/ontologies/mif-docs
+entity:
+  name: Deploy a mif-rs Release
+  entity_type: how-to-guide
 ---
-# Deployment Guide
 
-This document provides comprehensive deployment instructions for the rust-template project.
+# How to Deploy a mif-rs Release
 
-## Overview
-
-The project includes automated deployment workflows for:
-
-- **GitHub Releases** - Multi-platform binaries
-- **Docker** - Container images on GitHub Container Registry
-- **crates.io** - Rust package registry
+Cut a tagged release of `mif-rs` and confirm it landed on every armed
+distribution channel: GitHub Releases (multi-platform binaries), crates.io,
+and — once a crate's `publish = false` is lifted — the container image on
+GHCR. For the full pre-release checklist, monitoring detail, rollback, and
+hotfix procedures, see [`RELEASING.md`](runbooks/RELEASING.md); this guide
+covers the direct path from a version bump to a verified, live release.
 
 ## Prerequisites
 
-### Required Secrets and Setup
+- Push access to `main` and permission to push tags.
+- `gh` CLI, authenticated.
+- crates.io Trusted Publishing configured once, per crate you intend to
+  publish: on crates.io, crate **Settings → Trusted Publishing → Add**,
+  repository `modeled-information-format/mif-rs`, workflow `publish.yml`,
+  environment `release`. Publishing uses OIDC — no `CARGO_REGISTRY_TOKEN`
+  secret exists.
+- If you intend to push a container image: **Settings → Actions → General
+  → Workflow permissions → "Read and write permissions"**, so
+  `pipeline.yml` can push to GHCR.
+- If you intend to update a Homebrew tap: secret `HOMEBREW_TAP_TOKEN` (a
+  PAT with write access to `{owner}/homebrew-tap`) and, optionally, the
+  `HOMEBREW_TAP_REPO` variable to override the tap repo name.
 
-1. **crates.io Trusted Publishing** - publishing uses OIDC, not a token, so no `CARGO_REGISTRY_TOKEN` secret exists
-   - One-time setup on crates.io: crate Settings → Trusted Publishing → add this GitHub repo with workflow `publish.yml` and environment `copilot`
+## Step 1 — Bump the version
 
-2. **HOMEBREW_TAP_TOKEN** (optional secret) - For Homebrew formula updates (`package-homebrew.yml`)
-   - Fine-grained PAT with write access to your `homebrew-tap` repository
-   - Override the tap repo name with the `HOMEBREW_TAP_REPO` repository variable (default: `homebrew-tap`)
-
-3. **GITHUB_TOKEN** - Automatically provided by GitHub Actions (no setup needed)
-
-### GitHub Packages
-
-Enable GitHub Packages for Docker image publishing:
-- Settings → Actions → General → Workflow permissions → "Read and write permissions"
-
-## Creating a Release
-
-### 1. Prepare Release
-
-Update version in `Cargo.toml`:
+Edit the single version field in the workspace root — every crate inherits
+it via `version.workspace = true`:
 
 ```toml
-[package]
+# Cargo.toml
+[workspace.package]
 version = "0.1.1"  # Update this
 ```
 
-Run checks locally:
+## Step 2 — Run the local check suite
 
 ```bash
-cargo fmt -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
+just check
+```
+
+<details>
+<summary>Raw cargo equivalent</summary>
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
 cargo deny check
 ```
 
-### 2. Create and Push Tag
+</details>
+
+## Step 3 — Commit the version bump and tag
 
 ```bash
-# Commit version bump
-git add Cargo.toml
+git add Cargo.toml Cargo.lock
 git commit -m "chore: bump version to 0.1.1"
 git push
 
-# Create annotated tag
 git tag -a v0.1.1 -m "Release v0.1.1"
 git push origin v0.1.1
 ```
 
-### 3. Automated Workflows
+The tag push triggers `release.yml` (binaries + SBOM + attestations + the
+GitHub Release), `publish.yml` (crates.io, for any crate with `publish =
+false` removed), and — on a non-PR push once armed — `pipeline.yml`'s
+container chain. `package-homebrew.yml` follows automatically once
+`release.yml` completes. See
+[`ATTESTED-DELIVERY.md`](security/ATTESTED-DELIVERY.md) for why the pipeline
+is shaped this way, and [`SIGNED-RELEASES.md`](security/SIGNED-RELEASES.md)
+for what each attestation proves.
 
-Pushing the tag automatically triggers:
-
-1. **Release Workflow** (`release.yml`)
-   - Resolves the binary name and version from `cargo metadata`
-   - Builds binaries for all 5 platforms, named `rust_template-<version>-<platform>`
-   - Attaches SLSA build provenance and a CycloneDX SBOM attestation to every binary
-   - Verifies every attestation fail-closed, then creates the GitHub release with auto-generated notes and a checksums file
-
-2. **Publish Workflow** (`publish.yml`)
-   - Runs all pre-publish checks
-   - Publishes to crates.io via Trusted Publishing (OIDC)
-   - Downloads the registry-served `.crate`, byte-compares it to the local package, and attests it
-
-3. **Pipeline Workflow** (`pipeline.yml`, container chain)
-   - Builds multi-platform images and pushes to ghcr.io with version tag and 'latest'
-   - Images are signed and attested by the centralized signer workflow, then verified fail-closed
-
-4. **Homebrew Workflow** (`package-homebrew.yml`)
-   - Runs after the Release workflow completes
-   - Regenerates the source formula in `{owner}/homebrew-tap`
-
-## Deployment Targets
-
-### GitHub Releases
-
-**Access:** https://github.com/attested-delivery/rust-template/releases
-
-**Artifacts** (version embedded in every name):
-- `rust_template-<version>-linux-amd64` - Linux x86_64
-- `rust_template-<version>-linux-arm64` - Linux ARM64
-- `rust_template-<version>-macos-amd64` - macOS x86_64
-- `rust_template-<version>-macos-arm64` - macOS ARM64 (Apple Silicon)
-- `rust_template-<version>-windows-amd64.exe` - Windows x86_64
-- `rust_template-<version>-sbom.cdx.json` - CycloneDX SBOM
-- `rust_template-<version>-checksums.txt` - SHA-256 checksums
-
-**Download and Verify Example:**
+## Step 4 — Watch the run
 
 ```bash
-# Linux
-wget https://github.com/attested-delivery/rust-template/releases/download/v0.1.0/rust_template-0.1.0-linux-amd64
-gh attestation verify rust_template-0.1.0-linux-amd64 --repo attested-delivery/rust-template
-chmod +x rust_template-0.1.0-linux-amd64
-./rust_template-0.1.0-linux-amd64 --version
+gh run watch "$(gh run list --workflow=release.yml --limit=1 --json databaseId -q '.[0].databaseId')"
 ```
 
-Full verification commands (provenance, SBOM, checksums, container images, crate) are in [SECURITY.md](../SECURITY.md#verifying-release-artifacts). For *why* releases are attested and how the attestation chain is structured, see [Signed Releases & SLSA Provenance](security/SIGNED-RELEASES.md).
+A green `Verify Attestations` job is the signal the release will actually be
+created — that job runs fail-closed, before the GitHub Release exists.
 
-### Docker (GitHub Container Registry)
+## Step 5 — Verify each channel
 
-**Registry:** ghcr.io/attested-delivery/rust-template
-
-**Supported Platforms:**
-- linux/amd64
-- linux/arm64
-
-**Pull and Run:**
+**GitHub Release** — download and verify a binary:
 
 ```bash
-# Latest version
-docker pull ghcr.io/attested-delivery/rust-template:latest
-docker run --rm ghcr.io/attested-delivery/rust-template:latest --version
-
-# Specific version
-docker pull ghcr.io/attested-delivery/rust-template:v0.1.0
-docker run --rm ghcr.io/attested-delivery/rust-template:v0.1.0 --version
-
-# With volumes
-docker run --rm -v $(pwd):/data ghcr.io/attested-delivery/rust-template:latest
+gh release download v0.1.1 --repo modeled-information-format/mif-rs \
+  --pattern 'mif_core-0.1.1-linux-amd64'
+gh attestation verify mif_core-0.1.1-linux-amd64 \
+  --repo modeled-information-format/mif-rs
 ```
 
-**Image Details:**
-- Base: distroless/cc-debian12 (minimal attack surface)
-- User: nonroot:nonroot (unprivileged)
-- Healthcheck: Built-in with `--version` command
-- Size: ~10-15 MB (optimized multi-stage build)
-
-### crates.io
-
-**Package:** https://crates.io/crates/rust_template
-
-**Install:**
+**crates.io** (if that crate's `publish = false` is lifted):
 
 ```bash
-# Latest version
-cargo install rust_template
-
-# Specific version
-cargo install rust_template@0.1.0
-
-# From source
-cargo install --git https://github.com/attested-delivery/rust-template
+cargo search mif_core
 ```
 
-**Use in Project:**
-
-```toml
-[dependencies]
-rust_template = "0.1"
-```
-
-## Versioning
-
-This project follows [Semantic Versioning](https://semver.org/):
-
-- **MAJOR** (1.0.0) - Incompatible API changes
-- **MINOR** (0.1.0) - Backwards-compatible functionality
-- **PATCH** (0.0.1) - Backwards-compatible bug fixes
-
-## Changelog
-
-Changelogs are automatically generated from conventional commits:
-
-- `feat:` → Added section
-- `fix:` → Fixed section
-- `docs:` → Documentation section
-- `perf:` → Performance section
-- `refactor:` → Refactored section
-- `test:` → Testing section
-- `chore:` → Miscellaneous section
-
-**Example Commit:**
+**Docker/GHCR** (if armed):
 
 ```bash
-git commit -m "feat(auth): add JWT token validation"
+docker pull ghcr.io/modeled-information-format/mif-rs:v0.1.1
+docker run --rm ghcr.io/modeled-information-format/mif-rs:v0.1.1 --version
 ```
 
-## Rollback
+Full verification commands for every artifact type (provenance, SBOM,
+checksums, container images, the published crate) are in
+`SECURITY.md` § Verifying Release Artifacts.
 
-### GitHub Release
+## Done
 
-Delete the release and tag:
-
-```bash
-# Delete remote tag
-git push --delete origin v0.1.1
-
-# Delete local tag
-git tag -d v0.1.1
-
-# Delete release via GitHub UI or gh CLI
-gh release delete v0.1.1
-```
-
-### Docker
-
-Images are immutable; use previous version tags:
-
-```bash
-docker pull ghcr.io/attested-delivery/rust-template:v0.1.0
-```
-
-### crates.io
-
-**Cannot unpublish** - crates.io doesn't allow unpublishing. Options:
-
-1. Yank the version (prevents new projects from using it):
-   ```bash
-   cargo yank --vers 0.1.1
-   ```
-
-2. Publish a patch version with fixes:
-   ```bash
-   # Update to v0.1.2
-   git tag -a v0.1.2 -m "Release v0.1.2 (fixes v0.1.1)"
-   git push origin v0.1.2
-   ```
-
-## Monitoring
-
-### GitHub Actions
-
-Monitor workflow runs:
-- Actions tab: https://github.com/attested-delivery/rust-template/actions
-
-### Security Audits
-
-Daily automated security scans run at 00:00 UTC:
-- Workflow: `.github/workflows/security-audit.yml`
-- Uses: cargo-audit
-- Notifications: GitHub Actions UI
-
-### Dependencies
-
-Dependabot automatically opens PRs for:
-- Cargo dependencies
-- GitHub Actions versions
-
-## Troubleshooting
-
-### Release Workflow Fails
-
-**Build Error:**
-- Check Cargo.toml version matches tag
-- Verify MSRV compatibility (1.92+)
-- Test locally: `cargo build --release`
-
-**Cross-compilation Error:**
-- Linux ARM64 requires `gcc-aarch64-linux-gnu`
-- macOS ARM64 requires macOS 11+ runner
-
-### Docker Build Fails
-
-**Context Issue:**
-- Verify .dockerignore excludes target/
-- Check Dockerfile paths match `crates/` structure
-
-**Push Permission:**
-- Verify GitHub Actions workflow permissions
-- Check ghcr.io login succeeds
-
-### Publish to crates.io Fails
-
-**Trusted Publishing Issue:**
-- "No Trusted Publishing config found": complete the one-time setup on crates.io (crate Settings → Trusted Publishing → workflow `publish.yml`, environment `copilot`)
-- No registry token is used; do not set `CARGO_REGISTRY_TOKEN`
-
-**Pre-publish Checks:**
-- All tests must pass
-- No clippy warnings
-- cargo-deny checks must pass
-
-## Best Practices
-
-1. **Test Before Tagging**
-   ```bash
-   cargo build --release
-   cargo test --all-features
-   cargo clippy --all-targets --all-features -- -D warnings
-   ```
-
-2. **Use Conventional Commits**
-   - Enables automatic changelog generation
-   - Clearly communicates changes
-
-3. **Version Bump in Separate Commit**
-   ```bash
-   git commit -m "chore: bump version to 0.1.1"
-   git tag -a v0.1.1 -m "Release v0.1.1"
-   ```
-
-4. **Monitor Release Progress**
-   - Watch GitHub Actions for workflow completion
-   - Verify artifacts are uploaded
-   - Test Docker image immediately after push
-
-5. **Document Breaking Changes**
-   - Use `BREAKING CHANGE:` in commit body
-   - Update migration guide in CHANGELOG
+The tag is pushed, the fail-closed verify gate passed, and the release is
+live on every channel you checked in Step 5. For rollback, hotfixes, and the
+full post-release checklist, continue with
+[`RELEASING.md`](runbooks/RELEASING.md).

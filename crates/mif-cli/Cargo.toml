@@ -1,0 +1,29 @@
+[package]
+name = "mif-cli"
+description = "Command-line interface for the MIF (Modeled Information Format) ecosystem"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["mif", "cli"]
+categories = ["command-line-utilities"]
+publish = false
+
+[[bin]]
+name = "mif-cli"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+mif-schema.workspace = true
+mif-ontology.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

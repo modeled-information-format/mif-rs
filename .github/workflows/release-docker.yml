@@ -9,12 +9,17 @@ name: Docker
         type: boolean
         default: false
     outputs:
-      image-digest:
+      bins:
+        description: JSON array of the [[bin]] targets an image was built for
+        value: ${{ jobs.meta.outputs.bins }}
+      image-digests:
         description: >-
-          Manifest digest of the pushed image (sha256:...);
-          empty when push is false
-        value: >-
-          ${{ jobs.build-and-push.outputs.image-digest }}
+          JSON object mapping each bin name to its image's manifest digest
+          (sha256:...); values are empty when push is false. A matrix job's
+          `outputs` only exposes its LAST completed cell's value in GitHub
+          Actions, so per-bin digests are collected via artifact upload/
+          download (collect-digests job) rather than a naive job output.
+        value: ${{ jobs.collect-digests.outputs.digests }}
   workflow_dispatch:
     inputs:
       push:
@@ -24,7 +29,6 @@ name: Docker
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 # Least privilege: read-all at the top; the build-and-push job is granted
 # packages:write only because it pushes the image to GHCR (when push=true).
@@ -32,14 +36,44 @@ permissions:
   contents: read
 
 jobs:
+  # Resolves every [[bin]] target across the workspace so build-and-push can
+  # matrix over it — mif-cli and mif-mcp each get their own image
+  # (ghcr.io/<repo>/<bin>), not .packages[0]'s single binary.
+  meta:
+    name: Resolve Binary Targets
+    runs-on: ubuntu-latest
+    outputs:
+      bins: ${{ steps.meta.outputs.bins }}
+    steps:
+      - name: Checkout repository
+        # v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Install Rust toolchain
+        # master
+        uses: >-
+          dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537
+        with:
+          toolchain: stable
+      - name: Resolve bin targets
+        id: meta
+        run: |
+          set -euo pipefail
+          BINS=$(cargo metadata --no-deps --locked --format-version 1 \
+            | jq -c '[.packages[].targets[] | select(.kind | index("bin")) | .name] | unique')
+          echo "bins=${BINS}" >> "$GITHUB_OUTPUT"
+          echo "Resolved bins: ${BINS}"
+
   build-and-push:
-    name: Build and Push Docker Image
+    name: Build and Push Docker Image (${{ matrix.bin }})
+    needs: [meta]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    outputs:
-      image-digest: ${{ steps.build.outputs.digest }}
+    strategy:
+      fail-fast: false
+      matrix:
+        bin: ${{ fromJson(needs.meta.outputs.bins) }}
     steps:
       - name: Checkout repository
         # v7.0.0
@@ -69,7 +103,7 @@ jobs:
           docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
         with:
           images: >-
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.bin }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -90,7 +124,57 @@ jobs:
           push: ${{ inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.bin }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.bin }}
           build-args: |
             RUST_VERSION=1.92
+            BIN=${{ matrix.bin }}
+
+      # A matrix job's `outputs` only exposes its LAST completed cell's
+      # value in GitHub Actions — write this cell's digest to a file and
+      # upload it so collect-digests can gather every bin's digest
+      # correctly, not just whichever cell happened to finish last.
+      - name: Record digest for collection
+        run: |
+          mkdir -p digest-out
+          echo -n '${{ steps.build.outputs.digest }}' \
+            > "digest-out/${{ matrix.bin }}"
+
+      - name: Upload digest
+        # v7.0.1
+        uses: >-
+          actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: docker-digest-${{ matrix.bin }}
+          path: digest-out/${{ matrix.bin }}
+          if-no-files-found: error
+
+  collect-digests:
+    name: Collect Image Digests
+    needs: [meta, build-and-push]
+    runs-on: ubuntu-latest
+    outputs:
+      digests: ${{ steps.collect.outputs.digests }}
+    steps:
+      - name: Download all digest artifacts
+        # v8.0.1
+        uses: >-
+          actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: docker-digest-*
+          path: digests
+          merge-multiple: true
+
+      - name: Merge into one JSON object
+        id: collect
+        run: |
+          set -euo pipefail
+          JSON="{}"
+          for f in digests/*; do
+            bin=$(basename "$f")
+            digest=$(cat "$f")
+            JSON=$(jq -c --arg bin "$bin" --arg digest "$digest" \
+              '. + {($bin): $digest}' <<< "$JSON")
+          done
+          echo "digests=${JSON}" >> "$GITHUB_OUTPUT"
+          echo "Collected digests: ${JSON}"

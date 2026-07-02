@@ -1,65 +1,41 @@
-[package]
-name = "rust_template"
-version = "0.1.2"
+[workspace]
+resolver = "3"
+members = [
+    "crates/mif-core",
+    "crates/mif-schema",
+    "crates/mif-ontology",
+    "crates/mif-cli",
+    "crates/mif-mcp",
+]
+
+[workspace.package]
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
-description = "A Rust template crate with modern tooling and best practices"
 license = "MIT"
-authors = ["Your Name <you@example.com>"]
-repository = "https://github.com/attested-delivery/rust-template"
-homepage = "https://github.com/attested-delivery/rust-template"
-documentation = "https://docs.rs/rust_template"
-readme = "README.md"
-keywords = ["template", "rust", "example"]
-categories = ["development-tools"]
-# Gates EXTERNAL publication only. This single switch disables crates.io
-# publishing, the container image push, and Homebrew tap updates (the
-# workflows read it via `cargo metadata` at runtime) — and cargo itself
-# refuses `cargo publish` while it is set. It does NOT gate GitHub Releases:
-# a pushed tag always produces an attested GitHub Release (binaries + SBOM +
-# source snapshot), because a release is a tag primitive, not a publish.
-# DELETE this line in a real project to arm the crates.io / container /
-# Homebrew channels.
-publish = false
+repository = "https://github.com/modeled-information-format/mif-rs"
+homepage = "https://mif-spec.dev"
 
-[lib]
-name = "rust_template"
-path = "crates/lib.rs"
-
-[[bin]]
-name = "rust_template"
-path = "crates/main.rs"
-
-[[bench]]
-name = "benchmarks"
-harness = false
-
-[dependencies]
-# Core dependencies
+[workspace.dependencies]
 thiserror = "2.0.18"
-
-# Serialization — powers the RFC 9457 problem+json error envelope (crates/problem.rs)
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+jsonschema = { version = "0.46.9", default-features = false }
+clap = { version = "4.6.1", features = ["derive"] }
+rmcp = "2.1.0"
+tempfile = "3.27.0"
 
-# Async runtime (uncomment if needed)
-# tokio = { version = "1.0", features = ["full"] }
+[workspace.dependencies.mif-core]
+path = "crates/mif-core"
+version = "0.1.0"
 
-# Logging (uncomment if needed)
-# tracing = "0.1"
-# tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+[workspace.dependencies.mif-schema]
+path = "crates/mif-schema"
+version = "0.1.0"
 
-[dev-dependencies]
-# Testing
-proptest = "1.11.0"
-test-case = "3.3.1"
-
-# Benchmarking (criterion; default features off to keep the dep tree lean
-# and supply-chain surface small — see benches/benchmarks.rs)
-criterion = { version = "0.8.2", default-features = false }
-
-# Async testing (uncomment if using tokio)
-# tokio-test = "0.4"
+[workspace.dependencies.mif-ontology]
+path = "crates/mif-ontology"
+version = "0.1.0"
 
 [profile.dev]
 # Faster compile times during development
@@ -79,14 +55,12 @@ inherits = "release"
 debug = true
 strip = false
 
-[lints.rust]
-# Enable additional warnings
+[workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
 rust_2024_compatibility = { level = "warn", priority = -1 }
 
-[lints.clippy]
-# Deny all warnings in CI
+[workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
@@ -102,14 +76,13 @@ dbg_macro = "deny"
 print_stdout = "deny"
 print_stderr = "deny"
 
-# Allow in certain contexts (can be overridden per-module)
+# Allow in certain contexts (can be overridden per-crate)
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
 redundant_pub_crate = "allow"
-
-[features]
-default = []
-# Add feature flags here
-# full = ["feature1", "feature2"]
+# Inherent to a dependency graph pulling in multiple substantial third-party
+# crates (jsonschema, rmcp, tokio); not a code-quality signal about this
+# workspace's own code.
+multiple_crate_versions = "allow"

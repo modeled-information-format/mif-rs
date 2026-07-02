@@ -15,7 +15,7 @@ updates:
       - "dependencies"
       - "rust"
     reviewers:
-      - "attested-delivery"
+      - "modeled-information-format"
     groups:
       dev-dependencies:
         patterns:
@@ -54,7 +54,7 @@ updates:
       - "dependencies"
       - "github-actions"
     reviewers:
-      - "attested-delivery"
+      - "modeled-information-format"
     groups:
       github-actions:
         patterns:
@@ -78,4 +78,4 @@ updates:
       - "dependencies"
       - "docker"
     reviewers:
-      - "attested-delivery"
+      - "modeled-information-format"

@@ -1,101 +1,121 @@
 ---
-diataxis_type: how-to
+id: how-to-troubleshoot-ci-failures
+type: procedural
+created: '2026-07-02T00:00:00Z'
+modified: '2026-07-02T00:00:00Z'
+namespace: how-to/ci
+title: How to Troubleshoot a Failing mif-rs CI Run
+tags:
+  - how-to
+  - ci
+  - troubleshooting
+temporal:
+  '@type': TemporalMetadata
+  validFrom: '2026-07-02T00:00:00Z'
+  recordedAt: '2026-07-02T00:00:00Z'
+  ttl: P1Y
+relationships:
+  - type: relates-to
+    target: docs/runbooks/RELEASING.md
+  - type: relates-to
+    target: docs/runbooks/DEPENDENCY-UPDATES.md
+ontology:
+  '@type': OntologyReference
+  id: mif-docs
+  version: 1.0.0
+  uri: https://mif-spec.dev/ontologies/mif-docs
+entity:
+  name: Troubleshoot a Failing mif-rs CI Run
+  entity_type: how-to-guide
 ---
 
-# CI Troubleshooting
+# How to Troubleshoot a Failing mif-rs CI Run
 
-Common CI failure patterns and fixes for rust-template. Use this runbook when a workflow fails on a pull request or push to `main`.
+Diagnose and fix a failing workflow run on a pull request or push to `main`
+in the `mif-rs` workspace, and reproduce the failure locally before pushing a
+fix.
 
----
+## Prerequisites
 
-## General Debugging
+- `gh` CLI authenticated against `modeled-information-format/mif-rs`.
+- A local clone with the same Rust toolchain CI uses (`stable`, plus `1.92`
+  for MSRV checks: `rustup install 1.92`).
+- `just` installed (the local task runner; run `just` with no arguments to
+  list every recipe).
 
-### Reading Workflow Logs
-
-1. Go to **Actions**: https://github.com/attested-delivery/rust-template/actions
-2. Click the failed workflow run
-3. Click the failed job (red X)
-4. Expand the failed step to see the full log
-5. Click **"Search logs"** (magnifying glass) to search for error messages
-
-### CLI Approach
+## Step 1 — Read the failing run
 
 ```bash
-# List recent failed runs
 gh run list --status failure --limit 10
-
-# View a specific run
 gh run view <run-id>
-
-# View logs for failed steps only
 gh run view <run-id> --log-failed
-
-# Download full logs
-gh run view <run-id> --log > ci-logs.txt
-
-# Re-run failed jobs
-gh run rerun <run-id> --failed
-
-# Re-run the entire workflow
-gh run rerun <run-id>
+gh run view <run-id> --log > ci-logs.txt   # full logs, if you need more context
 ```
 
-### Reproducing Locally
+Or in the browser: **Actions** → the failed run → the failed job (red X) →
+expand the failed step → **"Search logs"** to jump to the error.
 
-Most CI failures can be reproduced locally with the same commands CI uses:
+To retry without changing anything (useful for a suspected flake):
 
 ```bash
-# Run the full CI check suite (matches ci-checks.yml)
-cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features --verbose
-cargo doc --no-deps --all-features
-cargo deny check
+gh run rerun <run-id> --failed
+gh run rerun <run-id>            # re-run the entire workflow
+```
 
-# MSRV check (requires the specific toolchain)
-rustup install 1.92
+## Step 2 — Reproduce locally
+
+`mif-rs` is orchestrated top-level by `pipeline.yml`, which calls
+`ci-checks.yml` (fmt, clippy, test, doc, deny, msrv), `ci-coverage.yml`
+(coverage), and the org's `pin-check` / `validate-workflows` (actionlint)
+reusable workflows. Reproduce the core gate locally in one command:
+
+```bash
+just check    # = fmt-check + lint + test + doc-build + deny (matches CI, minus msrv)
+just msrv     # separate recipe: cargo +1.92 check --all-features
+```
+
+Raw `cargo` equivalents, if you need to run one check in isolation:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features --verbose
+cargo doc --workspace --no-deps --all-features
+cargo deny check
 cargo +1.92 check --all-features
 ```
 
----
+## Clippy failures
 
-## Clippy Failures
-
-**Workflow:** `ci-checks.yml` (clippy job)
+**Workflow:** `pipeline.yml` → `ci-checks.yml` (`clippy` job)
 **Command:** `cargo clippy --all-targets --all-features -- -D warnings`
 
-### Common Patterns
+The workspace runs clippy's `pedantic` + `nursery` + `cargo` lint groups
+(`[workspace.lints]` in the root `Cargo.toml`), so failures are often stricter
+than clippy's defaults. A subset is denied as hard errors regardless of `-D
+warnings`, because they're incompatible with library code in this workspace:
 
 | Lint | Cause | Fix |
 |---|---|---|
-| `clippy::unwrap_used` | Called `.unwrap()` | Use `?`, `.unwrap_or()`, or `if let` |
-| `clippy::expect_used` | Called `.expect()` | Use `?` with proper error types |
-| `clippy::panic` | Used `panic!()` in library code | Return `Result` or `Option` |
-| `clippy::todo` | Left `todo!()` in code | Implement the function or remove it |
-| `clippy::dbg_macro` | Left `dbg!()` in code | Remove it or use proper logging |
-| `clippy::print_stdout` | Used `println!()` | Use a logging crate or remove |
-| `clippy::needless_pass_by_value` | Function takes ownership unnecessarily | Change parameter to `&T` |
-| `clippy::redundant_clone` | Unnecessary `.clone()` | Remove the clone |
-| `clippy::missing_errors_doc` | Public function returns Result without `# Errors` doc | Add `# Errors` section to doc comment |
-| `clippy::missing_panics_doc` | Function can panic without `# Panics` doc | Add doc or remove the panic |
-| `clippy::must_use_candidate` | Return value should have `#[must_use]` | Add the attribute |
+| `clippy::unwrap_used` | Called `.unwrap()` outside `#[cfg(test)]` | Use `?` or an explicit match |
+| `clippy::expect_used` | Called `.expect()` outside `#[cfg(test)]` | Use `?` or an explicit match |
+| `clippy::panic` | Used `panic!()` in library code | Return `Result` instead |
+| `clippy::todo` / `clippy::unimplemented` | Placeholder code | Implement it or remove it |
+| `clippy::dbg_macro` | Left `dbg!()` in code | Remove it |
+| `clippy::print_stdout` / `clippy::print_stderr` | Used `println!`/`eprintln!` in library code | Use logging; `mif-cli`/`mif-mcp` exempt themselves with `#![allow(...)]` at the crate root since a CLI/server needs to print |
+| `clippy::missing_errors_doc` / `missing_panics_doc` | *(allowed workspace-wide — opt-in only)* | N/A |
 
-### How to Fix
+`#[cfg(test)]` code is exempt from `unwrap_used`/`expect_used`/`dbg_macro`/
+`print_stdout` via `clippy.toml`'s `allow-*-in-tests` settings — use plain
+`.unwrap()` in tests, not `.unwrap_or_default()` workarounds.
 
 ```bash
-# Run clippy and see all warnings
-cargo clippy --all-targets --all-features -- -D warnings
-
-# Auto-fix what clippy can fix
-cargo clippy --fix --all-targets --all-features
-
-# Check a specific file
-cargo clippy --all-features -- -D warnings 2>&1 | grep "crates/myfile.rs"
+cargo clippy --workspace --all-targets --all-features -- -D warnings   # see all warnings
+cargo clippy --workspace --fix --all-targets --all-features            # auto-fix what it can
 ```
 
-### When to Allow a Lint
-
-Only suppress lints when there is a genuine reason. Add an inline allow with an explanation:
+Only suppress a lint with a genuine reason, inline, with a comment — never a
+blanket allow in a crate root or `Cargo.toml`:
 
 ```rust
 #[allow(clippy::too_many_arguments)]  // Builder pattern requires all fields
@@ -104,467 +124,255 @@ fn create_widget(a: u32, b: u32, c: u32, d: u32, e: u32, f: u32, g: u32) -> Widg
 }
 ```
 
-Never add blanket allows in `lib.rs` or `Cargo.toml` to silence clippy globally.
+## Format failures
 
----
-
-## Format Failures
-
-**Workflow:** `ci-checks.yml` (fmt job)
+**Workflow:** `pipeline.yml` → `ci-checks.yml` (`fmt` job)
 **Command:** `cargo fmt --all -- --check`
 
-### Fix
+```bash
+cargo fmt --all                 # fix
+cargo fmt --all -- --check      # check without modifying
+```
+
+Configured in `rustfmt.toml` (workspace root): `max_width = 100`, `edition =
+"2024"`, Unix newlines, `reorder_imports`/`reorder_modules` both on. If
+`cargo fmt` produces unexpected results, confirm your local toolchain matches
+CI's `stable` channel — the unstable options at the bottom of `rustfmt.toml`
+are commented out and only apply under `cargo +nightly fmt`.
+
+## MSRV failures
+
+**Workflow:** `pipeline.yml` → `ci-checks.yml` (`msrv` job)
+**Command:** `cargo check --all-features` on toolchain `1.92`
+**MSRV:** Rust 1.92 (`rust-version.workspace = true` in every crate)
 
 ```bash
-# Format all code
-cargo fmt --all
-
-# Check what would change (without modifying)
-cargo fmt --all -- --check
-
-# Format a specific file
-rustfmt crates/lib.rs
-```
-
-### Editor Integration
-
-Set up your editor to format on save:
-
-**VS Code** (`.vscode/settings.json` -- already configured in this repo):
-```json
-{
-  "editor.formatOnSave": true,
-  "[rust]": {
-    "editor.defaultFormatter": "rust-lang.rust-analyzer"
-  }
-}
-```
-
-**Neovim (with rust-analyzer):**
-```lua
-vim.api.nvim_create_autocmd("BufWritePre", {
-  pattern = "*.rs",
-  callback = function() vim.lsp.buf.format() end,
-})
-```
-
-### Configuration
-
-This project uses `rustfmt.toml` (or settings in `Cargo.toml`). Key settings:
-
-- **Line length:** 100 characters
-- **Edition:** 2024
-
-If `cargo fmt` produces unexpected results, check that your local Rust toolchain matches the stable channel used in CI.
-
----
-
-## MSRV Failures
-
-**Workflow:** `ci-checks.yml` (msrv job)
-**Command:** `cargo +1.92 check --all-features`
-**MSRV:** Rust 1.92
-
-### Common Causes
-
-| Cause | Example | Fix |
-|---|---|---|
-| Used a newer language feature | `let-chains` (1.87+) | Check which version stabilized the feature |
-| Dependency bumped its MSRV | `serde` requires newer Rust | Pin the dependency to an older version |
-| Used a newer std API | `std::io::IsTerminal` (1.70+) | Use a polyfill or feature-gate |
-
-### Diagnosing
-
-```bash
-# Install and test with the exact MSRV
 rustup install 1.92
-cargo +1.92 check --all-features
-
-# Check what version stabilized a feature
-# Look at the Rust release notes or use:
-rustup doc --std
+cargo +1.92 check --all-features    # matches `just msrv`
 ```
 
-### Fixing
+| Cause | Fix |
+|---|---|
+| Used a language feature newer than 1.92 | Rewrite with MSRV-compatible syntax, or check which version stabilized it |
+| A dependency bumped its own MSRV | Pin it to the last compatible version in the relevant crate's `Cargo.toml` |
+| Used a std API newer than 1.92 | Use a polyfill or feature-gate it |
 
-1. **If you used a newer feature:** Rewrite to use MSRV-compatible syntax
-2. **If a dependency requires newer Rust:** Pin to the last compatible version in `Cargo.toml`:
-   ```toml
-   [dependencies]
-   some-crate = ">=1.0, <1.5"  # 1.5 requires Rust 1.93+
-   ```
-3. **If MSRV needs to be bumped:** Update `rust-version` in `Cargo.toml`, update the MSRV check in `ci-checks.yml`, and note it in the changelog as a potentially breaking change
+If the MSRV genuinely needs to move: update `rust-version` in
+`[workspace.package]` (`Cargo.toml`), update the `msrv` input default in
+`ci-checks.yml`, and call it out in the changelog as a potentially breaking
+change.
 
----
+## cargo-deny failures
 
-## cargo-deny Failures
-
-**Workflow:** `ci-checks.yml` (deny job)
+**Workflow:** `pipeline.yml` → `ci-checks.yml` (`deny` job)
 **Command:** `cargo deny check`
-**Configuration:** `deny.toml`
-
-### Advisory Failures
-
-```text
-error[vulnerability]: RUSTSEC-2024-XXXX: <crate> - <description>
-```
-
-**Fix:** Update the affected dependency:
-```bash
-cargo update -p <crate-name>
-cargo deny check advisories
-```
-
-**If no fix is available**, add a temporary exception in `deny.toml`:
-```toml
-[advisories]
-ignore = [
-    "RUSTSEC-2024-XXXX",  # No fix available; not exploitable in our usage. Revisit by YYYY-MM-DD.
-]
-```
-
-### License Failures
-
-```text
-error[rejected]: license 'GPL-3.0' is not in the allow list
-```
-
-**Fix options:**
-1. Remove the dependency and find an alternative with a permissive license
-2. If the license is acceptable, add it to the allow list in `deny.toml`:
-   ```toml
-   [licenses]
-   allow = [
-       # ...existing...
-       "NEW-LICENSE-SPDX",
-   ]
-   ```
-
-### Ban Failures
-
-```text
-error[banned]: crate 'openssl' is banned
-```
-
-**Fix:** The crate (or one of its transitive dependencies) pulls in a banned crate. Check the dependency tree:
-```bash
-cargo tree -i openssl
-```
-
-Then either:
-- Use an alternative crate that does not depend on the banned one
-- Enable a feature flag that uses a different backend (e.g., `rustls` instead of `openssl`)
-
-### Source Failures
-
-```text
-error[unknown-registry]: crate 'foo' sourced from unknown registry
-```
-
-**Fix:** Only crates from crates.io are allowed. If you need a git dependency, add it to `deny.toml`:
-```toml
-[sources]
-allow-git = ["https://github.com/owner/repo"]
-```
-
-### Running Specific Checks
+**Configuration:** `deny.toml` (workspace root)
 
 ```bash
-cargo deny check advisories
-cargo deny check licenses
-cargo deny check bans
-cargo deny check sources
+cargo deny check advisories   # RustSec DB — all advisory types denied
+cargo deny check licenses     # SPDX allow-list only
+cargo deny check bans         # openssl, atty denied
+cargo deny check sources      # crates.io only
 ```
 
----
+**Advisory failure** (`error[vulnerability]: RUSTSEC-2024-XXXX`): update the
+crate (`cargo update -p <crate-name>`), or — if no fix exists — add a dated,
+commented exception to `deny.toml`'s `[advisories] ignore`.
 
-## Test Failures
+**License failure** (`error[rejected]: license 'X' is not in the allow
+list`): either drop the dependency, or add the SPDX identifier to
+`[licenses] allow` if it's genuinely acceptable — see
+[DEPENDENCY-UPDATES.md](DEPENDENCY-UPDATES.md) for the current allow-list.
 
-**Workflow:** `ci-checks.yml` (test job, runs on ubuntu, macos, windows)
+**Ban failure** (`error[banned]: crate 'openssl' is banned`): find what pulls
+it in (`cargo tree -i openssl`), then either switch to an alternative that
+doesn't depend on it, or enable a `rustls` feature flag on the offending
+crate instead.
+
+**Source failure** (`error[unknown-registry]: ...`): only crates.io is
+allowed. A needed git dependency must be added to `deny.toml`'s
+`[sources] allow-git`.
+
+## Test failures
+
+**Workflow:** `pipeline.yml` → `ci-checks.yml` (`test` job, matrix:
+`ubuntu-latest`, `macos-latest`, `windows-latest`)
 **Command:** `cargo test --all-features --verbose`
 
-### Debugging Tips
-
 ```bash
-# Run all tests with output
-cargo test --all-features -- --nocapture
-
-# Run a specific test
-cargo test test_function_name
-
-# Run tests in a specific module
-cargo test module_name::
-
-# Run tests matching a pattern
-cargo test --all-features -- --test-threads=1 pattern
-
-# Run only integration tests
-cargo test --test integration_test
-
-# Run only doc tests
-cargo test --doc
-
-# Show which tests are running
-cargo test --all-features -- --list
+cargo test --workspace --all-features -- --nocapture     # show output
+cargo test -p <crate> test_name                          # one test
+cargo test --workspace -- --test-threads=1 pattern       # serialize + filter
+cargo test --doc                                         # doc tests only
 ```
 
-### Platform-Specific Failures
+If a test passes on one OS but fails on another, check for: hardcoded `/` or
+`\` path separators (use `std::path::PathBuf`), `\n` vs `\r\n` assumptions,
+temp-directory path format differences (`std::env::temp_dir()`), or Unix
+permission checks that need feature-gating on Windows.
 
-If tests pass on one OS but fail on another:
+For a flaky test, run it repeatedly before assuming it's a real regression:
 
-| Symptom | Common cause | Fix |
-|---|---|---|
-| Path separator issues | Hardcoded `/` or `\` | Use `std::path::PathBuf` |
-| Line ending issues | `\n` vs `\r\n` | Normalize with `.trim()` or use `\r?\n` in regex |
-| Temp directory issues | Different temp path formats | Use `std::env::temp_dir()` |
-| File permission issues | Unix permissions on Windows | Feature-gate Unix-specific code |
+```bash
+for i in $(seq 100); do cargo test test_name || break; done
+```
 
-### Flaky Tests
+## Documentation failures
 
-If a test passes sometimes and fails sometimes:
+**Workflow:** `pipeline.yml` → `ci-checks.yml` (`doc` job)
+**Command:** `cargo doc --no-deps --all-features`
+**Environment:** `RUSTDOCFLAGS="-D warnings"`
 
-1. Run it many times: `for i in $(seq 100); do cargo test test_name || break; done`
-2. Check for race conditions in async code
-3. Check for reliance on system time
-4. Check for reliance on HashMap iteration order
+```bash
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+cargo doc --open       # view locally
+cargo test --doc       # doc examples compile as doctests
+```
 
----
+Every public item requires a doc comment (`missing_docs = "warn"`
+workspace-wide). Common failures: an unresolved intra-doc link (fix the
+`[`Type`]` reference), a doc referencing a private type (make it `pub` or
+remove the reference), or a doc example that doesn't compile.
 
-## CodeQL Failures
+## Coverage
 
-**Workflow:** `quality-gates.yml` (the `sast` job; SAST runs via the central
+**Workflow:** `pipeline.yml` → `ci-coverage.yml` (`coverage` job)
+**Tool:** `cargo-llvm-cov` 0.6.14, workspace-wide, all features
+**Threshold:** the job's own "Check coverage threshold" step fails (`exit 1`)
+if line coverage drops below **90%** — the Codecov upload step's
+`fail_ci_if_error: false` only means the job won't fail if the external
+Codecov service itself is unreachable, not that the threshold check is
+advisory. `coverage` is a separate workflow from `ci-checks.yml` and isn't
+part of that workflow's `all-checks-pass` aggregate.
+
+```bash
+cargo install cargo-llvm-cov
+cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+cargo llvm-cov --workspace --all-features --html --output-dir coverage-html
+open coverage-html/index.html
+cargo llvm-cov --workspace --all-features --summary-only
+```
+
+## CodeQL (SAST) failures
+
+**Workflow:** `quality-gates.yml` (`sast` job, calls the org's
 `reusable-sast-codeql.yml`)
-**Schedule:** Weekly (Monday 06:00 UTC) + pushes to `main`
+**Trigger:** push to `main`, every PR, weekly (Monday 06:00 UTC)
+**Language:** `rust`, `build-mode: none`
 
-### Common Findings
+Review findings under **Security → Code scanning alerts**. If a finding is a
+genuine false positive, dismiss it with a reason and a comment explaining
+why — don't silently ignore it.
 
-| Finding | Description | Fix |
-|---|---|---|
-| Uncontrolled format string | User input in `format!()` | Sanitize or use `{}` placeholder |
-| Path traversal | User input in file paths | Validate and canonicalize paths |
-| Command injection | User input in shell commands | Avoid shell; use `Command::new()` |
-| Integer overflow | Unchecked arithmetic | Use `.checked_add()` or `wrapping_add()` |
+| Finding class | Fix |
+|---|---|
+| Uncontrolled format string | Sanitize input or use a `{}` placeholder, not interpolation |
+| Path traversal | Validate and canonicalize user-supplied paths |
+| Command injection | Avoid a shell; build the command with `Command::new()` and explicit args |
+| Integer overflow | Use `.checked_add()` / `.wrapping_add()` instead of unchecked arithmetic |
 
-### False Positives
+## pin-check and actionlint failures
 
-CodeQL uses the `cpp` extractor for Rust, which can produce false positives. To dismiss:
+**Workflow:** `pipeline.yml` (`pin-check` and `validate-workflows` jobs, both
+calling org reusables). Required check contexts: `pin-check / pin-check` and
+`validate-workflows / actionlint`.
 
-1. Review the finding in **Security > Code scanning alerts**
-2. If it is a false positive, click **"Dismiss alert"** and select a reason
-3. Add a comment explaining why it is not a real issue
+- **pin-check** fails when any `uses:` in `.github/workflows/*.yml` isn't
+  pinned to a full 40-character commit SHA (a version tag or branch ref
+  fails). Resolve the SHA and pin it — see
+  [DEPENDENCY-UPDATES.md](DEPENDENCY-UPDATES.md) for the general "update a
+  pinned action" flow.
+- **validate-workflows** (`actionlint`) fails on workflow YAML syntax or
+  semantic errors — a typo'd `needs:` reference, an invalid `if:` expression,
+  etc. Run `actionlint` locally against the changed file to see the same
+  error CI reports.
 
-### Running CodeQL Locally
+## Docker build failures
 
-```bash
-# Install CodeQL CLI: https://github.com/github/codeql-cli-binaries
-codeql database create my-db --language=cpp --command="cargo build --all-features"
-codeql database analyze my-db --format=sarif-latest --output=results.sarif
-```
-
----
-
-## Release Workflow Failures
-
-**Workflow:** `release.yml`
-**Trigger:** Push of `v*.*.*` tag
-
-### Build Failures
-
-| Error | Cause | Fix |
-|---|---|---|
-| `Cargo.toml version mismatch` | Version in Cargo.toml does not match the tag | Ensure `version = "X.Y.Z"` matches tag `vX.Y.Z` |
-| `no [[bin]] target found in Cargo.toml` | The `meta` job resolves the binary name from `cargo metadata` | Ensure Cargo.toml declares a `[[bin]]` target |
-| `error[E0658]: feature not available` | Target requires newer Rust | Check MSRV compatibility for all targets |
-| macos-amd64 build fails | Cross-target build (`x86_64-apple-darwin` on `macos-latest`) | Check the `targets:` input on the toolchain step; all other legs build natively |
-
-### Missing Release Assets
-
-If the release is created but some binaries are missing:
-
-```bash
-# Check which assets exist
-gh release view vX.Y.Z
-
-# Re-run just the failed matrix job
-gh run rerun <run-id> --failed
-```
-
-### Publish or Attestation Failures
-
-crates.io publishing (`publish.yml`) uses Trusted Publishing (OIDC) -- there is no registry token secret. If authentication fails with "No Trusted Publishing config found", complete the one-time setup on crates.io: crate **Settings > Trusted Publishing** > add this repo with workflow `publish.yml` and environment `copilot`.
-
-```bash
-# Verify secrets are configured (you can't read them, just confirm they exist)
-gh secret list
-```
-
-Secrets and permissions involved:
-- `HOMEBREW_TAP_TOKEN` for Homebrew formula pushes (`package-homebrew.yml`)
-- `id-token: write` and `attestations: write` job permissions for attestation steps
-- `GITHUB_TOKEN` is automatic
-
----
-
-## Docker Build Failures
-
-**Workflow:** `docker.yml`
-**Trigger:** Push to `main`, tag push, or PR (build-only)
-
-### Common Issues
+**Workflow:** `pipeline.yml` (`docker` job, needs `ci` + `gate`, calls
+`release-docker.yml`). Runs on every push to `main`/`master` and on tags;
+on a PR it builds without pushing (`push: ${{ github.event_name !=
+'pull_request' }}`). The whole job is skipped while every crate's
+`Cargo.toml` still has `publish = false` (the current state — see
+[RELEASING.md](RELEASING.md)).
 
 | Error | Cause | Fix |
 |---|---|---|
-| `failed to solve: Dockerfile: not found` | Missing Dockerfile | Ensure `Dockerfile` exists in repo root |
-| `COPY failed: file not found` | Wrong path in Dockerfile | Check paths match `crates/` structure |
-| `denied: denied` on push | Missing permissions | Verify `packages: write` in workflow and "Read and write permissions" in repo settings |
-| `ERROR: Multiple platforms not supported` | Buildx not configured | The workflow sets up Buildx; check that step |
-| Build arg mismatch | `RUST_VERSION` arg wrong | Check `build-args` in the workflow matches a valid Rust version |
+| `failed to solve: Dockerfile: not found` | Missing `Dockerfile` | Confirm it still exists at the repo root |
+| `COPY failed: file not found` | Wrong path in `Dockerfile` | Check paths match the `crates/<name>/` layout |
+| `denied: denied` on push | Missing registry permissions | Confirm the job has `packages: write` (only granted when `push: true`) |
+| Build arg mismatch | `RUST_VERSION` build-arg wrong | `release-docker.yml` passes `RUST_VERSION=1.92` — check it matches the workspace MSRV |
 
-### Testing Docker Locally
-
-```bash
-# Build for current platform only
-docker build -t rust-template:test .
-
-# Run the test image
-docker run --rm rust-template:test --version
-
-# Build for multiple platforms (requires buildx)
-docker buildx build --platform linux/amd64,linux/arm64 -t rust-template:test .
-```
-
----
-
-## Dependabot Merge Conflicts
-
-When Dependabot PRs have merge conflicts in `Cargo.lock`:
-
-### Automatic Resolution
-
-Close and reopen the PR to trigger Dependabot to rebase:
+Test locally:
 
 ```bash
-gh pr close <number>
-gh pr reopen <number>
+docker build -t mif-rs:test .
+docker run --rm mif-rs:test --version
+docker buildx build --platform linux/amd64,linux/arm64 -t mif-rs:test .
 ```
 
-Or comment on the PR:
+## Release workflow failures
+
+**Workflow:** `release.yml`, **Trigger:** push of a `v*.*.*` tag.
+
+The release matrix builds both `mif-cli` and `mif-mcp` across 5 platforms and
+publishes all 5 crates (`mif-core`, `mif-schema`, `mif-ontology`, `mif-cli`,
+`mif-mcp`) independently to crates.io. See
+[RELEASING.md](RELEASING.md) for the full chain and monitoring steps; the
+common failure points are:
+
+| Error | Cause | Fix |
+|---|---|---|
+| `Cargo.toml version mismatch` | Workspace `version` doesn't match the tag | Ensure `version = "X.Y.Z"` in `[workspace.package]` matches tag `vX.Y.Z` |
+| macos-amd64 build fails | Cross-target leg (`x86_64-apple-darwin` on `macos-latest`) | Check the toolchain step's `targets:` input; the other 4 legs build natively |
+| Cargo Audit gate fails | Real advisory in `Cargo.lock` | Fix via a normal PR first (see [DEPENDENCY-UPDATES.md](DEPENDENCY-UPDATES.md)), then restart the release |
+| Verify Attestations fails | Missing/unverifiable attestation | The fail-closed gate worked — no release was created. Fix the cause and release with a **new** tag; never re-run against an existing one |
+| crates.io publish fails, "No Trusted Publishing config found" | Trusted Publishing not configured for that crate | One-time setup per crate on crates.io: **Settings → Trusted Publishing**, workflow `publish.yml`, environment `release` |
+| Homebrew formula not updated | `workflow_run` trigger missed, or tap token missing | `gh workflow run package-homebrew.yml -f version=X.Y.Z -f dry_run=false`; check `HOMEBREW_TAP_TOKEN` |
+
+## Dependabot merge conflicts
+
+When a Dependabot PR conflicts on `Cargo.lock`, ask it to rebase first:
 
 ```bash
 gh pr comment <number> --body "@dependabot rebase"
 ```
 
-### Manual Resolution
+If that doesn't clear it:
 
 ```bash
-# Checkout the Dependabot branch
 gh pr checkout <number>
-
-# Merge main into it
 git merge main
-
-# Resolve Cargo.lock conflicts by regenerating it
-git checkout --theirs Cargo.lock
-cargo update
-
-# Or if specific crate needs updating
-cargo update -p <crate-from-dependabot-pr>
-
-# Commit and push
+cargo update -p <crate-from-dependabot-pr>   # regenerate the lockfile
 git add Cargo.lock
 git commit -m "chore: resolve merge conflict in Cargo.lock"
 git push
 ```
 
-### Useful Dependabot Commands
+Useful comment commands: `@dependabot rebase`, `@dependabot recreate`,
+`@dependabot merge`, `@dependabot cancel merge`, `@dependabot ignore this
+major version`, `@dependabot ignore this dependency`.
 
-Comment these on any Dependabot PR:
+## Quick reference: CI jobs and local equivalents
 
-| Command | Effect |
-|---|---|
-| `@dependabot rebase` | Rebase the PR on the latest base branch |
-| `@dependabot recreate` | Close and recreate the PR from scratch |
-| `@dependabot merge` | Merge the PR (if CI passes) |
-| `@dependabot squash and merge` | Squash merge the PR |
-| `@dependabot cancel merge` | Cancel a pending auto-merge |
-| `@dependabot ignore this major version` | Stop updates for this major version |
-| `@dependabot ignore this dependency` | Stop all updates for this dependency |
-
----
-
-## Documentation Failures
-
-**Workflow:** `ci-checks.yml` (doc job)
-**Command:** `cargo doc --no-deps --all-features`
-**Environment:** `RUSTDOCFLAGS="-D warnings"`
-
-### Common Causes
-
-| Error | Cause | Fix |
-|---|---|---|
-| `unresolved link` | Broken intra-doc link `[`Type`]` | Fix the type name or path in the doc comment |
-| `missing documentation` | Public item without `///` doc | Add documentation to the public item |
-| `private item in public doc` | Doc references a private type | Make the type public or remove the reference |
-| `broken code example` | Doc test does not compile | Fix the code in the ```` ```rust ```` block |
-
-### Testing Documentation Locally
-
-```bash
-# Build docs with warnings as errors (matches CI)
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
-
-# Open the docs in a browser
-cargo doc --open
-
-# Run only doc tests
-cargo test --doc
-```
-
----
-
-## Coverage Failures
-
-**Workflow:** `pipeline.yml` (coverage job) -- this job does not block merging (`fail_ci_if_error: false` on Codecov upload)
-
-If coverage generation fails:
-
-```bash
-# Install cargo-llvm-cov
-cargo install cargo-llvm-cov
-
-# Generate coverage locally
-cargo llvm-cov --all-features --lcov --output-path lcov.info
-
-# Generate an HTML report
-cargo llvm-cov --all-features --html
-open target/llvm-cov/html/index.html
-```
-
----
-
-## Quick Reference: CI Jobs and Commands
-
-| CI Job | Local equivalent | Blocks merge? |
+| CI job | Local equivalent | In `ci-checks.yml`'s `all-checks-pass`? |
 |---|---|---|
 | Format | `cargo fmt --all -- --check` | Yes |
-| Clippy | `cargo clippy --all-targets --all-features -- -D warnings` | Yes |
-| Test (ubuntu) | `cargo test --all-features --verbose` | Yes |
-| Test (macos) | Same (run on macOS) | Yes |
-| Test (windows) | Same (run on Windows) | Yes |
-| Documentation | `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features` | Yes |
+| Clippy | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Yes |
+| Test (ubuntu/macos/windows) | `cargo test --workspace --all-features --verbose` | Yes |
+| Documentation | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` | Yes |
 | Cargo Deny | `cargo deny check` | Yes |
 | MSRV | `cargo +1.92 check --all-features` | Yes |
-| Coverage | `cargo llvm-cov --all-features` | No |
-| CodeQL | Build + static analysis | No (scheduled) |
-| Security Audit | `cargo audit --deny warnings` | No (scheduled) |
+| Coverage | `cargo llvm-cov --workspace --all-features` (90% threshold) | No — separate workflow (`ci-coverage.yml`) |
+| CodeQL (SAST) | Static analysis, no local equivalent | No — separate workflow (`quality-gates.yml`) |
+| Security Audit | `cargo audit --deny warnings` | No — separate workflow (`security-audit.yml`) |
+| pin-check / actionlint | No local equivalent for pin-check; `actionlint` for the linter | No — separate `pipeline.yml` jobs |
 
-### Run Everything at Once
+Run the full `all-checks-pass` set at once:
 
 ```bash
-cargo fmt --all -- --check \
-  && cargo clippy --all-targets --all-features -- -D warnings \
-  && cargo test --all-features --verbose \
-  && RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features \
-  && cargo deny check \
-  && cargo +1.92 check --all-features
+just check && just msrv
 ```
+
+Every job above now passes locally, or you know exactly which one to fix
+before pushing again.

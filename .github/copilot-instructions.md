@@ -87,12 +87,12 @@ Use doc comments with examples:
 /// # Examples
 ///
 /// ```rust
-/// use rust_template::{process, Config};
+/// use mif_core::{process, Config};
 ///
 /// let items = vec!["a", "b", "c"];
 /// let config = Config::default();
 /// let result = process(&items, &config)?;
-/// # Ok::<(), rust_template::Error>(())
+/// # Ok::<(), mif_core::Error>(())
 /// ```
 pub fn process(items: &[&str], config: &Config) -> Result<Vec<Item>> {
     // implementation

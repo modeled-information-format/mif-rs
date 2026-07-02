@@ -33,10 +33,51 @@ permissions:
   contents: read
 
 jobs:
+  # Resolves the [[bin]] target list once so the per-bin formula job below
+  # can matrix over it — every bin target across the workspace, not just
+  # .packages[0], since this repo publishes mif-cli and mif-mcp.
+  meta:
+    name: Resolve Binary Targets
+    runs-on: ubuntu-latest
+    outputs:
+      bins: ${{ steps.meta.outputs.bins }}
+    steps:
+      - name: Checkout repository
+        # v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Install Rust toolchain
+        # master
+        uses: >-
+          dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537
+        with:
+          toolchain: stable
+      - name: Resolve bin targets
+        id: meta
+        run: |
+          set -euo pipefail
+          BINS=$(cargo metadata --no-deps --locked --format-version 1 \
+            | jq -c '[.packages[].targets[] | select(.kind | index("bin")) | .name] | unique')
+          echo "bins=${BINS}" >> "$GITHUB_OUTPUT"
+          echo "Resolved bins: ${BINS}"
+
   homebrew:
-    name: Update Homebrew Formula
+    name: Update Homebrew Formula (${{ matrix.bin }})
+    needs: [meta]
     runs-on: macos-latest
-    environment: copilot
+    environment: release
+    # Every matrix cell pushes to the SAME external homebrew-tap repo. The
+    # group deliberately omits matrix.bin so both cells contend for one
+    # slot and run one at a time (cancel-in-progress: false — the second
+    # cell must wait and still push its own formula, not be cancelled),
+    # otherwise two concurrent `git push`es to the same tap branch race and
+    # the second one fails outright on a plain non-fast-forward rejection.
+    concurrency:
+      group: homebrew-tap-push-${{ github.repository }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        bin: ${{ fromJson(needs.meta.outputs.bins) }}
     # workflow_run fires for every Release completion, including branch
     # dry-runs — only proceed for successful tag runs (head_branch is the
     # tag name for tag-triggered runs).
@@ -96,20 +137,21 @@ jobs:
       - name: Resolve project metadata from Cargo.toml
         id: meta
         working-directory: project
+        env:
+          BIN: ${{ matrix.bin }}
         run: |
           set -euo pipefail
           META=$(cargo metadata --no-deps --locked --format-version 1)
-          BIN=$(jq -r \
-            '[.packages[0].targets[] | select(.kind | index("bin"))][0].name' \
+          # Select this bin's own owning package by name, not position —
+          # mif-cli and mif-mcp have independent descriptions/licenses.
+          PKG=$(jq -c --arg bin "$BIN" \
+            '.packages[] | select(any(.targets[]; (.kind | index("bin")) and .name == $bin))' \
             <<< "$META")
-          DESC=$(jq -r '.packages[0].description // ""' <<< "$META")
-          LICENSE=$(jq -r '.packages[0].license // "MIT"' <<< "$META")
-          # `publish = false` in Cargo.toml AT THE RELEASED TAG (the
-          # template's shipped state) disables the tap update; delete
-          # that line in a real project to arm this channel.
-          PUBLISHABLE=$(jq -r \
-            'if .packages[0].publish == [] then "false" else "true" end' \
-            <<< "$META")
+          DESC=$(jq -r '.description // ""' <<< "$PKG")
+          LICENSE=$(jq -r '.license // "MIT"' <<< "$PKG")
+          # Any workspace member with publish != false arms this channel —
+          # each bin's own package.publish, not .packages[0]'s.
+          PUBLISHABLE=$(jq -r '.publish != []' <<< "$PKG")
           # Formula file name: kebab-case of the binary name.
           FORMULA=$(echo "$BIN" | tr '_' '-')
           # Ruby class name: CamelCase of the formula name.
@@ -168,7 +210,11 @@ jobs:
             depends_on "rust" => :build
 
             def install
-              system "cargo", "install", *std_cargo_args
+              # A workspace checkout has no root package to install from —
+              # point cargo at this bin's own crate directory directly
+              # (verified: "cargo install --path ." at a virtual workspace
+              # root fails with "found a virtual manifest").
+              system "cargo", "install", *std_cargo_args(path: "crates/${BIN}")
             end
 
             test do

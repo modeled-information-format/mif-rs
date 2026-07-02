@@ -1,7 +1,7 @@
 ---
 name: quality-gates
 
-# Merge-time quality gates: a thin caller of the attested-delivery/.github central
+# Merge-time quality gates: a thin caller of the modeled-information-format/.github central
 # reusable workflows. Each gate normalizes on SARIF and lands in the
 # code-scanning hub; the "Code scanning results" required check is the merge
 # gate. Pins resolve to the central repo's default-branch HEAD at wiring time;
@@ -39,9 +39,9 @@ jobs:
       contents: read
       actions: read
       packages: read
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-sast-codeql.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/reusable-sast-codeql.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
     with:
       languages: rust
       build-mode: none
@@ -54,13 +54,12 @@ jobs:
       contents: read
       security-events: write
       pull-requests: write
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-sca-osv.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/reusable-sca-osv.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
     with:
       fail-on-severity: high
-      # Scope OSV to the Rust crate lockfile; the docs site under site/ has its
-      # own npm deps covered by Dependabot, not this crate's SCA gate.
+      # Scope OSV to the workspace's single Rust lockfile.
       scan-args: |-
         --lockfile=Cargo.lock
 
@@ -73,12 +72,13 @@ jobs:
       id-token: write
       contents: read
       actions: read
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-scorecard.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/reusable-scorecard.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
 
   # IaC + license — Trivy filesystem scan (Dockerfile, manifests, licenses).
-  # No image-ref: the container is gated by `publish = false` (template state).
+  # No image-ref: this job never scans a container image (that's
+  # pipeline.yml's separate gate-image job, gated on has-bin-target).
   # packages: read — the reusable's (skipped) image job declares it; the caller
   # must still grant >= all the reusable's job permissions or the call fails at
   # startup, even for conditional jobs.
@@ -88,8 +88,8 @@ jobs:
       security-events: write
       actions: read
       packages: read
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-trivy.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/reusable-trivy.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
     with:
       scan-iac: true

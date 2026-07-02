@@ -1,105 +1,138 @@
 ---
-diataxis_type: reference
+id: reference-mif-rs-docs-index
+type: semantic
+created: '2026-07-02T00:00:00Z'
+modified: '2026-07-02T00:00:00Z'
+namespace: reference/documentation
+title: mif-rs Documentation Index
+tags:
+  - reference
+  - documentation
+  - index
+temporal:
+  '@type': TemporalMetadata
+  validFrom: '2026-07-02T00:00:00Z'
+  recordedAt: '2026-07-02T00:00:00Z'
+  ttl: P1Y
+provenance:
+  '@type': Provenance
+  sourceType: user_explicit
+  trustLevel: verified
+  wasDerivedFrom:
+    '@id': urn:mif:tree:mif-rs/docs
+    '@type': prov:Entity
+citations:
+  - '@type': Citation
+    citationType: specification
+    citationRole: methodology
+    title: Diátaxis — Reference
+    url: https://diataxis.fr/reference/
+    accessed: '2026-07-02'
+relationships:
+  - type: relates-to
+    target: adr/0002-documentation-directory-structure.md
+ontology:
+  '@type': OntologyReference
+  id: mif-docs
+  version: 1.0.0
+  uri: https://mif-spec.dev/ontologies/mif-docs
+entity:
+  name: mif-rs Documentation Index
+  entity_type: documentation-index
 ---
-# Documentation Index
 
-> All documentation for the rust_template project.
+# mif-rs Documentation Index
 
-## Template Adoption Guides
+Catalog of every document under `docs/` in the `mif-rs` repository, organized
+by topic subdirectory.
 
-Guides for developers who just created a repository from this template.
+## Synopsis
 
-| Guide | Description |
-|-------|-------------|
-| [Getting Started](template/GETTING-STARTED.md) | "Use this template" → first `cargo build` → first CI pass |
-| [Configuration](template/CONFIGURATION.md) | Cargo.toml fields, placeholder replacement, feature flags, editor setup |
-| [CI Workflows](template/CI-WORKFLOWS.md) | Every included workflow: triggers, secrets, how to enable/disable |
-| [Customization](template/CUSTOMIZATION.md) | Add modules, remove examples, adjust lints, modify release targets |
-| [GitHub Template Features](template/GITHUB-TEMPLATE-FEATURES.md) | What copies when using a template — and what doesn't |
-| [Copilot Jumpstart](template/COPILOT-JUMPSTART.md) | Prompts for automatic project scaffolding with GitHub Copilot |
+```text
+docs/
+├── README.md            (this document)
+├── DEPLOYMENT.md
+├── adr/
+├── distribution/
+├── runbooks/
+├── security/
+├── testing/
+├── ux/
+└── workflows/
+```
 
-## Operational Runbooks
+## Runbooks
 
-Step-by-step procedures for ongoing project maintenance.
+Operational procedures under `docs/runbooks/`.
 
-| Runbook | Description |
-|---------|-------------|
-| [Releasing](runbooks/RELEASING.md) | Version bump → tag → monitor workflows → verify artifacts |
-| [Dependency Updates](runbooks/DEPENDENCY-UPDATES.md) | Dependabot policy, manual cargo-deny audit, handling advisories |
-| [Security Response](runbooks/SECURITY-RESPONSE.md) | Vulnerability triage, fix, coordinated disclosure |
-| [CI Troubleshooting](runbooks/CI-TROUBLESHOOTING.md) | Common CI failure patterns and fixes |
+| Document | Diátaxis mode | Description |
+| --- | --- | --- |
+| [CI Troubleshooting](runbooks/CI-TROUBLESHOOTING.md) | how-to | Common CI failure patterns and fixes for mif-rs. |
+| [Dependency Updates](runbooks/DEPENDENCY-UPDATES.md) | how-to | Managing Cargo and GitHub Actions dependencies. |
+| [Releasing](runbooks/RELEASING.md) | how-to | End-to-end procedure for creating, monitoring, and rolling back releases. |
+| [Security Incident Response](runbooks/SECURITY-RESPONSE.md) | how-to | Handling reported security vulnerabilities. |
 
-## Reference Documentation
+## Security
 
-Detailed reference material organized by topic.
+Security architecture documents under `docs/security/`.
 
-### Workflows
+| Document | Diátaxis mode | Description |
+| --- | --- | --- |
+| [Attested Delivery, End to End](security/ATTESTED-DELIVERY.md) | explanation | How a change travels from a pull request to a signed, independently verifiable release, and which gate signs what. |
+| [Signed Releases & SLSA Provenance](security/SIGNED-RELEASES.md) | explanation | Release artifact cryptographic attestations and the fail-closed verification gate. |
 
-| Document | Description |
-|----------|-------------|
-| [Coverage](workflows/COVERAGE.md) | Code coverage configuration and reporting |
-| [Test Matrix](workflows/TEST-MATRIX.md) | Multi-platform and multi-version test matrix |
-| [Benchmark Regression](workflows/BENCHMARK-REGRESSION.md) | Performance regression detection |
-| [Mutation Testing](workflows/MUTATION-TESTING.md) | Mutation testing with cargo-mutants |
-| [Fuzz Testing](workflows/FUZZ-TESTING.md) | Fuzz testing with cargo-fuzz |
-| [Code Quality](workflows/CODE-QUALITY.md) | Code quality metrics and analysis |
-| [Spell Check](workflows/SPELL-CHECK.md) | Spell checking configuration |
-| [SBOM](workflows/SBOM.md) | Software Bill of Materials generation |
-| [Secrets Scan](workflows/SECRETS-SCAN.md) | Secret scanning with Gitleaks |
-| [Container Scan](workflows/CONTAINER-SCAN.md) | Container image vulnerability scanning |
+## Distribution
 
-### Security
+Publishing-channel documents under `docs/distribution/`.
 
-| Document | Description |
-|----------|-------------|
-| [Signed Releases](security/SIGNED-RELEASES.md) | Release signing and verification |
+| Document | Diátaxis mode | Description |
+| --- | --- | --- |
+| [Package Manager Distribution](distribution/PACKAGE-MANAGERS.md) | how-to | Distribution to Homebrew, Snap, and system package managers. |
+| [Docker Multi-Registry Distribution](distribution/DOCKER-REGISTRIES.md) | reference | Automated Docker image publication to multiple container registries. |
+| [Alternative Cargo Registries](distribution/ALTERNATIVE-REGISTRIES.md) | reference | Publishing to registries beyond crates.io. |
 
-### Distribution
+## Testing
 
-| Document | Description |
-|----------|-------------|
-| [Package Managers](distribution/PACKAGE-MANAGERS.md) | Homebrew, Snap, and system package publishing |
-| [Docker Registries](distribution/DOCKER-REGISTRIES.md) | Docker Hub and GHCR publishing |
-| [Alternative Registries](distribution/ALTERNATIVE-REGISTRIES.md) | Alternative Rust package registries |
+Test-methodology documents under `docs/testing/`.
 
-### Testing
+| Document | Diátaxis mode | Description |
+| --- | --- | --- |
+| [Property-Based Testing Guide](testing/PROPERTY-BASED-TESTING.md) | tutorial | Validating code properties across all inputs with proptest and quickcheck. |
 
-| Document | Description |
-|----------|-------------|
-| [Property-Based Testing](testing/PROPERTY-BASED-TESTING.md) | proptest setup and patterns |
+## UX
 
-### UX
+CLI user-experience documents under `docs/ux/`.
 
-| Document | Description |
-|----------|-------------|
-| [Shell Completions](ux/SHELL-COMPLETIONS.md) | Shell completion generation |
-| [Man Pages](ux/MAN-PAGES.md) | Man page generation |
+| Document | Diátaxis mode | Description |
+| --- | --- | --- |
+| [Shell Completions](ux/SHELL-COMPLETIONS.md) | how-to | Generating shell completions with clap_complete. |
+| [Man Pages Generation](ux/MAN-PAGES.md) | how-to | Generating Unix manual pages with clap_mangen. |
 
-### Observability
+## Workflows
 
-| Document | Description |
-|----------|-------------|
-| [Metrics Dashboard](observability/METRICS-DASHBOARD.md) | Metrics and monitoring setup |
+CI workflow documents under `docs/workflows/`.
 
-### Deployment
+| Document | Diátaxis mode | Description |
+| --- | --- | --- |
+| [Code Coverage Tracking](workflows/COVERAGE.md) | how-to | Coverage measurement with cargo-llvm-cov, with optional Codecov reporting. |
+| [Code Quality Metrics](workflows/CODE-QUALITY.md) | how-to | Unsafe code detection, binary size analysis, and documentation coverage. |
+| [Secrets Scanning with Gitleaks](workflows/SECRETS-SCAN.md) | how-to | Secret detection; fails CI when a secret is found. |
+| [Container Vulnerability Scanning with Trivy](workflows/CONTAINER-SCAN.md) | how-to | Docker image scanning, with findings in the GitHub Security tab. |
+| [Software Bill of Materials (SBOM)](workflows/SBOM.md) | how-to | CycloneDX SBOM generation for supply-chain transparency. |
+| [Spell Checking with typos](workflows/SPELL-CHECK.md) | how-to | Spell checking of docs, code comments, and string literals; warns but does not fail CI. |
 
-| Document | Description |
-|----------|-------------|
-| [Deployment Guide](DEPLOYMENT.md) | Comprehensive deployment instructions |
+## Deployment
 
-### Explanation
-
-Design rationale and trade-offs — the "why" behind the template.
-
-| Document | Description |
-|----------|-------------|
-| [Template Architecture](explanation/architecture.md) | Why `crates/` not `src/`, the CI orchestration model, the `publish = false` gate, attested delivery, lint philosophy, and library conventions |
+| Document | Diátaxis mode | Description |
+| --- | --- | --- |
+| [Deployment Guide](DEPLOYMENT.md) | how-to | Comprehensive deployment instructions for mif-rs. |
 
 ## Architectural Decision Records
 
-| ADR | Description |
-|-----|-------------|
+Decision records under `docs/adr/`. See
+[docs/adr/README.md](adr/README.md) for the full ADR lifecycle process.
+
+| ADR | Title |
+| --- | --- |
 | [ADR-0001](adr/0001-use-architectural-decision-records.md) | Use Architectural Decision Records |
 | [ADR-0002](adr/0002-documentation-directory-structure.md) | Documentation Directory Structure |
-
-See [docs/adr/README.md](adr/README.md) for the full ADR process and workflow.

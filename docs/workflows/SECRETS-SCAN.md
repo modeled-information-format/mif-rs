@@ -1,192 +1,161 @@
 ---
-diataxis_type: how-to
+id: reference-secrets-scan-workflow
+type: semantic
+created: '2026-07-02T00:00:00Z'
+modified: '2026-07-02T00:00:00Z'
+namespace: reference/workflows
+title: secrets-scan.yml — GitHub Actions workflow reference
+tags:
+  - reference
+  - ci
+  - workflow
+  - secrets
+  - gitleaks
+  - trufflehog
+temporal:
+  '@type': TemporalMetadata
+  validFrom: '2026-07-02T00:00:00Z'
+  recordedAt: '2026-07-02T00:00:00Z'
+  ttl: P1Y
+provenance:
+  '@type': Provenance
+  sourceType: system_generated
+  trustLevel: verified
+  wasDerivedFrom:
+    '@id': https://github.com/modeled-information-format/mif-rs/blob/main/.github/workflows/secrets-scan.yml
+    '@type': prov:Entity
+citations:
+  - '@type': Citation
+    citationType: tool
+    citationRole: source
+    title: Gitleaks
+    url: https://github.com/gitleaks/gitleaks
+  - '@type': Citation
+    citationType: tool
+    citationRole: source
+    title: TruffleHog
+    url: https://github.com/trufflesecurity/trufflehog
+  - '@type': Citation
+    citationType: specification
+    citationRole: methodology
+    title: Diátaxis — Reference
+    url: https://diataxis.fr/reference/
+    accessed: '2026-07-02'
+ontology:
+  '@type': OntologyReference
+  id: mif-docs
+  version: 1.0.0
+  uri: https://mif-spec.dev/ontologies/mif-docs
+entity:
+  name: secrets-scan.yml
+  entity_type: reference-document
 ---
-# Secrets Scanning with Gitleaks
 
-Automated secrets detection to prevent credential leaks using [Gitleaks](https://github.com/gitleaks/gitleaks). This scan **fails CI** when a secret is detected.
+# secrets-scan.yml
 
-## Reference
+The `.github/workflows/secrets-scan.yml` workflow ("Secrets Scan") is a thin
+caller of the central `reusable-secrets.yml` (from
+`modeled-information-format/.github`), which runs Gitleaks and TruffleHog
+over the repository. It replaces the licensed `gitleaks-action` (which
+requires a paid `GITLEAKS_LICENSE` for org repos) with checksum-verified
+release binaries of both tools.
 
-| Field | Value |
-|---|---|
-| Workflow | `.github/workflows/secrets-scan.yml` |
-| Configuration | `.gitleaks.toml` |
-| Behavior | **Fails CI** if secrets detected |
-| Triggers | Every push, all pull requests |
+## Synopsis
 
-### What it scans
+```yaml
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
 
-- New commits (on push)
-- All commits in the PR branch
-- Files, comments, diffs
-
-### What it detects
-
-API keys, passwords, tokens (GitHub, AWS, etc.), private keys, database connection strings, and 100+ built-in secret patterns. Example shapes:
-
-```text
-# AWS Access Key
-AKIAIOSFODNN7EXAMPLE
-
-# GitHub Personal Access Token
-ghp_1234567890abcdefghijklmnopqrstuvwxyz
-
-# Private SSH Key
------BEGIN OPENSSH PRIVATE KEY-----
-
-# Generic API Key
-api_key=sk_live_1234567890abcdef
-
-# Database URL
-postgres://user:password@localhost:5432/db
+jobs:
+  secrets:
+    uses: modeled-information-format/.github/.github/workflows/reusable-secrets.yml@<sha>
 ```
 
-### Failure output
+## Triggers
 
-```text
-Error: gitleaks detected secrets in commits
-Finding: api_key="sk_live_..."
-  File: src/config.rs
-  Line: 42
-  Commit: abc1234
-```
+| Event | Condition |
+| --- | --- |
+| `push` | Any branch |
+| `pull_request` | Any branch |
+| `workflow_dispatch` | Manual |
 
-## How-to
+## Job
 
-### Scan locally
+| Job ID | `uses` | Pin |
+| --- | --- | --- |
+| `secrets` | `modeled-information-format/.github/.github/workflows/reusable-secrets.yml` | `e50b004cbdcf2b3258d223b1f6a4d98ff7938abf` |
+
+## Permissions (caller)
+
+| Scope | Level |
+| --- | --- |
+| `contents` | `read` |
+| `security-events` | `write` |
+| `actions` | `read` |
+
+## Reusable workflow inputs
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `directory` | string | `.` | Directory to scan (not overridden by the caller, so `.`) |
+| `gitleaks-version` | string | `8.30.1` | Pinned Gitleaks release (not overridden) |
+| `trufflehog-version` | string | `3.95.6` | Pinned TruffleHog release (not overridden) |
+| `fail-on-verified` | boolean | `true` | Fail the job if TruffleHog confirms a live secret (not overridden) |
+
+## Reusable workflow outputs
+
+| Name | Value | Description |
+| --- | --- | --- |
+| `sarif-artifact` | `secrets-sarif` | Artifact name holding the Gitleaks SARIF |
+| `sarif-filename` | `gitleaks.sarif` | SARIF filename within that artifact |
+
+## Steps (inside the reusable job)
+
+| Step | Effect |
+| --- | --- |
+| Checkout | Fetch source |
+| Install Gitleaks + TruffleHog | Downloads both tools' Linux x64 release tarballs directly from GitHub Releases and verifies each against its published `sha256sum` checksums file before extracting — no third-party Action |
+| Gitleaks → SARIF (soft-fail) | `gitleaks dir "${SCAN_DIR}" --report-format sarif --report-path gitleaks.sarif --exit-code 0 --no-banner`; always exits 0 |
+| TruffleHog (verified-only, hard-fail) | `trufflehog filesystem "${SCAN_DIR}" --results=verified --json --no-update`; if any verified finding and `fail-on-verified: true`, `exit 1` |
+| Upload Gitleaks SARIF | `github/codeql-action/upload-sarif` (`8aad20d150bbac5944a9f9d289da16a4b0d87c1e`, v4.36.2), category `gitleaks` |
+| Upload secrets evidence artifact | `actions/upload-artifact` (`043fb46d1a93c77aae656e7c1c64a875d1fc6a0a`, v7.0.1), name `secrets-sarif`, path `gitleaks.sarif` |
+
+## Failure behavior
+
+| Tool | Failure mode |
+| --- | --- |
+| Gitleaks | Never fails the job directly (`--exit-code 0`). Findings land in the code-scanning SARIF hub as soft-fail signals. |
+| TruffleHog | Fails the job (`exit 1`) only on a **verified** (confirmed-live) secret. Unverified candidate matches do not fail the job. |
+
+## What each tool detects
+
+| Tool | Detection mode |
+| --- | --- |
+| Gitleaks | Pattern-based (100+ built-in rules): API keys, tokens, private keys, connection strings |
+| TruffleHog | Pattern match **plus live verification** against the credential's own provider API — only confirmed-live secrets count as "verified" |
+
+## Local configuration file
+
+`.gitleaks.toml` exists at the repository root (`useDefault = true`, plus an
+allowlist for `docs/.*\.md` / `\.typos\.toml` paths and placeholder/SHA
+regexes). The `gitleaks dir` invocation inside `reusable-secrets.yml` does not
+pass a `--config` flag, so it is not confirmed from the reusable's source
+whether `.gitleaks.toml` is picked up automatically (Gitleaks' own default
+config-discovery behavior) or is unused by this workflow — verify with a local
+run (see Examples) before relying on it.
+
+## Examples
+
+Reproduce the Gitleaks scan locally, including the local config file:
 
 ```bash
-# Install gitleaks
-brew install gitleaks
-# or
-curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz | tar -xz
-
-# Scan current changes
-gitleaks detect --source . --verbose
-
-# Scan entire history
-gitleaks detect --source . --log-opts="--all"
-
-# Scan a specific commit range
-gitleaks detect --source . --log-opts="--since=HEAD~1"
+gitleaks dir . --config .gitleaks.toml --report-format sarif --report-path gitleaks.sarif --no-banner
 ```
 
-Verify: a clean tree reports `no leaks found`.
-
-### Install a pre-commit hook
-
-Block secrets before they are committed:
+Reproduce the TruffleHog verified-only scan locally:
 
 ```bash
-# .git/hooks/pre-commit
-#!/bin/sh
-gitleaks protect --verbose --redact --staged
+trufflehog filesystem . --results=verified --json
 ```
-
-```bash
-chmod +x .git/hooks/pre-commit
-```
-
-Verify: staging a test secret aborts the commit.
-
-### Configure rules and allowlists
-
-Edit `.gitleaks.toml`:
-
-```toml
-[extend]
-useDefault = true  # Use built-in rules
-
-[allowlist]
-paths = [
-    '''test/fixtures/secrets.txt''',  # Ignore test files
-]
-
-regexes = [
-    '''EXAMPLE_.*''',  # Ignore example placeholders
-]
-```
-
-Add project-specific patterns:
-
-```toml
-[[rules]]
-id = "custom-api-key"
-description = "Project API Key"
-regex = '''project_key_[0-9a-f]{32}'''
-```
-
-Verify: `gitleaks detect --source .` honors the new rules and allowlists.
-
-### Handle a false positive
-
-1. Add it to the allowlist in `.gitleaks.toml`:
-
-   ```toml
-   [allowlist]
-   regexes = [
-       '''YOUR_PLACEHOLDER_TOKEN''',
-   ]
-
-   paths = [
-       '''docs/examples/''',
-   ]
-   ```
-
-2. Or mark the line inline:
-
-   ```python
-   secret = "not-a-real-secret"  # gitleaks:allow
-   ```
-
-Verify: re-run `gitleaks detect` and confirm the finding is gone.
-
-### Respond to a real leaked secret
-
-**Critical** — if a real secret is detected:
-
-1. **Rotate immediately** — assume the secret is compromised.
-2. **Remove it from history**:
-
-   ```bash
-   # Use BFG Repo-Cleaner
-   bfg --replace-text secrets.txt repo.git
-   ```
-
-3. **Force push** (destructive):
-
-   ```bash
-   git push --force
-   ```
-
-Verify: `gitleaks detect --source . --log-opts="--all"` no longer finds the secret.
-
-### Troubleshooting
-
-**Slow scans** — scan only staged changes:
-
-```bash
-gitleaks protect --staged
-```
-
-**Ignoring files**:
-
-```toml
-[allowlist]
-paths = [
-    '''\.lock$''',        # Lock files
-    '''vendor/''',        # Vendored code
-    '''test/fixtures/''', # Test data
-]
-```
-
-## Why this matters
-
-A leaked credential is one of the fastest paths from a public repository to a compromised system, and once a secret reaches git history it persists in every clone and fork — rotation, not deletion, is the only real fix. Failing CI on detection makes the leak un-mergeable rather than merely flagged, and the pre-commit hook pushes the check earlier still, stopping the secret before it ever enters history where cleanup becomes destructive and incomplete.
-
-## Links
-
-- [Gitleaks Documentation](https://github.com/gitleaks/gitleaks)
-- [Configuration Guide](https://github.com/gitleaks/gitleaks/tree/master#configuration)
-- [Rule Patterns](https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml)
-- [CI Workflows reference](../template/CI-WORKFLOWS.md)

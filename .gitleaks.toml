@@ -1,7 +1,7 @@
 # Gitleaks configuration
 # https://github.com/gitleaks/gitleaks
 
-title = "Gitleaks Configuration for rust-template"
+title = "Gitleaks Configuration for mif-rs"
 
 [extend]
 useDefault = true

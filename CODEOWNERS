@@ -1,25 +1,2 @@
-# CODEOWNERS file
-# These owners will be requested for review when someone opens a pull request.
-# Learn more: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
-
-# Default owner for everything in the repo
-* @attested-delivery/maintainers
-
-# Source code
-/src/ @attested-delivery/maintainers
-
-# Tests
-/tests/ @attested-delivery/maintainers
-
-# Benchmarks
-/benches/ @attested-delivery/maintainers
-
-# CI/CD configuration
-/.github/ @attested-delivery/maintainers
-
-# Project configuration
-/Cargo.toml @attested-delivery/maintainers
-/Cargo.lock @attested-delivery/maintainers
-/deny.toml @attested-delivery/maintainers
-/clippy.toml @attested-delivery/maintainers
-/rustfmt.toml @attested-delivery/maintainers
+# CODEOWNERS — Defines code ownership for pull request reviews.
+* @zircote @dependabot[bot]

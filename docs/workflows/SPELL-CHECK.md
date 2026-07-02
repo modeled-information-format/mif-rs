@@ -1,115 +1,125 @@
 ---
-diataxis_type: how-to
+id: reference-spell-check-workflow
+type: semantic
+created: '2026-07-02T00:00:00Z'
+modified: '2026-07-02T00:00:00Z'
+namespace: reference/workflows
+title: spell-check.yml — GitHub Actions workflow reference
+tags:
+  - reference
+  - ci
+  - workflow
+  - spell-check
+  - typos
+temporal:
+  '@type': TemporalMetadata
+  validFrom: '2026-07-02T00:00:00Z'
+  recordedAt: '2026-07-02T00:00:00Z'
+  ttl: P1Y
+provenance:
+  '@type': Provenance
+  sourceType: system_generated
+  trustLevel: verified
+  wasDerivedFrom:
+    '@id': https://github.com/modeled-information-format/mif-rs/blob/main/.github/workflows/spell-check.yml
+    '@type': prov:Entity
+citations:
+  - '@type': Citation
+    citationType: tool
+    citationRole: source
+    title: typos
+    url: https://github.com/crate-ci/typos
+  - '@type': Citation
+    citationType: specification
+    citationRole: methodology
+    title: Diátaxis — Reference
+    url: https://diataxis.fr/reference/
+    accessed: '2026-07-02'
+ontology:
+  '@type': OntologyReference
+  id: mif-docs
+  version: 1.0.0
+  uri: https://mif-spec.dev/ontologies/mif-docs
+entity:
+  name: spell-check.yml
+  entity_type: reference-document
 ---
-# Spell Checking with typos
 
-Automated spell checking for documentation, code comments, and string literals using [typos](https://github.com/crate-ci/typos). It warns on typos but does not fail CI.
+# spell-check.yml
 
-## Reference
+The `.github/workflows/spell-check.yml` workflow ("Spell Check") runs
+`crate-ci/typos` over the repository directly (not via a reusable workflow)
+and warns on typos without failing CI.
 
-| Field | Value |
-|---|---|
-| Workflow | `.github/workflows/spell-check.yml` |
-| Configuration | `.typos.toml` |
-| Behavior | Warns on typos, does not fail CI |
+## Synopsis
 
-### Triggers
+```yaml
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+```
 
-The workflow runs on every push to main/master, all pull requests, and manual workflow dispatch. It scans all files (except excluded paths) for common typos and suggests corrections.
+## Triggers
 
-### Warning output
+| Event | Condition |
+| --- | --- |
+| `pull_request` | Any branch |
+| `push` | Branch `main` or `master` |
+| `workflow_dispatch` | Manual |
+
+## Permissions
+
+| Scope | Level |
+| --- | --- |
+| `contents` | `read` |
+
+## Job
+
+| Job ID | Name | Runs on |
+| --- | --- | --- |
+| `typos` | Check Spelling | `ubuntu-latest` |
+
+## Steps
+
+| Step | Action | Pin | `with:` |
+| --- | --- | --- | --- |
+| Checkout repository | `actions/checkout` | `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0` (v7.0.0) | — |
+| Check spelling with typos | `crate-ci/typos` | `37bb98842b0d8c4ffebdb75301a13db0267cef89` (master, latest) | `files: .`, `config: .typos.toml`; step has `continue-on-error: true` |
+
+## Failure behavior
+
+| Condition | Effect |
+| --- | --- |
+| Typo found | Step reports failure internally but `continue-on-error: true` means the job — and the workflow — still succeeds |
+
+## Configuration file
+
+`.typos.toml` (repository root):
+
+| Section | Setting | Value |
+| --- | --- | --- |
+| `[default].extend-ignore-re` | Ignored patterns | `[0-9a-f]{40}` (git SHAs), UUID pattern |
+| `[files].extend-exclude` | Excluded paths | `target/`, `*.lock`, `*.svg`, `.git/` |
+| `[default.extend-words]` | Project dictionary | Empty (no entries defined) |
+
+## Warning output
 
 ```text
 warning: `recieve` should be `receive`
-  --> crates/lib.rs:10
+  --> crates/mif-core/src/entity.rs:10
 ```
 
-Results are visible in the Actions tab.
+Results are visible in the Actions tab (job summary), not the Security tab —
+`typos` does not emit SARIF in this workflow.
 
-## How-to
+## Examples
 
-### Check locally
+Reproduce locally:
 
 ```bash
-# Install typos
 cargo install typos-cli
-
-# Check for typos
 typos
-
-# Auto-fix typos
 typos --write-changes
 ```
-
-Verify: `typos` exits without warnings on clean text.
-
-### Configure behavior
-
-Edit `.typos.toml`:
-
-```toml
-[default]
-# Add regex patterns to ignore
-extend-ignore-re = [
-    "[0-9a-f]{40}",  # Git SHAs
-]
-
-[files]
-# Exclude directories/files
-extend-exclude = [
-    "target/",
-    "*.lock",
-]
-
-[default.extend-words]
-# Project-specific dictionary
-# "typo" = "correct"
-```
-
-Verify: `typos` no longer flags the configured patterns.
-
-### Handle a false positive
-
-Accept a word as correct:
-
-```toml
-[default.extend-words]
-myword = "myword"  # Accept as correct
-```
-
-Verify: re-run `typos` and confirm the word is no longer flagged.
-
-### Exclude specific files
-
-```toml
-[files]
-extend-exclude = [
-    "docs/legacy/",
-]
-```
-
-Verify: `typos` skips the excluded paths.
-
-### Maintain a custom dictionary
-
-```toml
-[default.extend-identifiers]
-# Code identifiers
-myvar = "myvar"
-
-[default.extend-words]
-# Documentation words
-specialterm = "specialterm"
-```
-
-Verify: `typos` treats the listed identifiers and words as correct.
-
-## Why this matters
-
-Typos in public-facing documentation, API names, and error messages erode trust and make a project look unmaintained, but a hard CI failure on every misspelling would block merges for trivial reasons and tempt contributors to disable the check entirely. Running typos as a non-blocking warning keeps spelling visible on every change without gatekeeping, and the configurable dictionary means domain terms and identifiers are accepted once rather than fought repeatedly.
-
-## Links
-
-- [typos Documentation](https://github.com/crate-ci/typos)
-- [Configuration Reference](https://github.com/crate-ci/typos/blob/master/docs/reference.md)
-- [CI Workflows reference](../template/CI-WORKFLOWS.md)

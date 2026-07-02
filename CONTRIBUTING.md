@@ -1,10 +1,10 @@
 # Contributing
 
-Thank you for your interest in contributing to rust_template!
+Thank you for your interest in contributing to mif-rs!
 
 ## Prerequisites
 
-- [Rust](https://rustup.rs/) 1.92 or later — install via `rustup`, **not** Homebrew (see [Getting Started](docs/template/GETTING-STARTED.md#requirements))
+- [Rust](https://rustup.rs/) 1.92 or later — install via `rustup`, **not** Homebrew
 - [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) for supply chain checks
 
 ## Getting Started
@@ -13,8 +13,8 @@ Thank you for your interest in contributing to rust_template!
 2. Clone your fork:
 
    ```bash
-   git clone https://github.com/YOUR_USERNAME/rust-template.git
-   cd rust-template
+   git clone https://github.com/YOUR_USERNAME/mif-rs.git
+   cd mif-rs
    ```
 
 3. Create a feature branch:

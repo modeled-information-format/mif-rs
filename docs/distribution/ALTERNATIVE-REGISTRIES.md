@@ -1,483 +1,97 @@
 ---
-diataxis_type: reference
+id: how-to-publish-crate-to-alternative-registry
+type: procedural
+created: '2026-07-02T00:00:00Z'
+modified: '2026-07-02T00:00:00Z'
+namespace: how-to/distribution
+title: How to Publish an mif-rs Crate to an Alternative Cargo Registry
+tags:
+  - how-to
+  - distribution
+  - cargo
+  - registry
+temporal:
+  '@type': TemporalMetadata
+  validFrom: '2026-07-02T00:00:00Z'
+  recordedAt: '2026-07-02T00:00:00Z'
+  ttl: P1Y
+ontology:
+  '@type': OntologyReference
+  id: mif-docs
+  version: 1.0.0
+  uri: https://mif-spec.dev/ontologies/mif-docs
+entity:
+  name: Publish an mif-rs Crate to an Alternative Cargo Registry
+  entity_type: how-to-guide
 ---
-# Alternative Cargo Registries
 
-## Overview
+# How to Publish an mif-rs Crate to an Alternative Cargo Registry
 
-Publishing Rust crates to alternative registries beyond crates.io for private packages, enterprise distribution, or specialized ecosystems.
+Publish one of the workspace's library crates (`mif-core`, `mif-schema`, or
+`mif-ontology`) to a private or internal sparse-index registry instead of, or
+in addition to, crates.io — for example, when running an internal fork that
+cannot depend on the public registry. This guide uses `mif-core` and a
+registry named `internal` as the concrete example; substitute your own crate
+and registry name throughout.
 
-## Why Alternative Registries? (explanation)
+## Prerequisites
 
-> This section is rationale; the registry catalog and configuration tables below are the reference content.
+- A running Cargo sparse-index registry (any implementation — the registry
+  index URL and an auth token are all Cargo needs) and its sparse index URL.
+- A publish token for that registry.
+- Write access to the crate's `Cargo.toml` and to `~/.cargo/config.toml` or
+  the project's `.cargo/config.toml`.
 
-- **Private packages** - Keep proprietary code internal
-- **Enterprise control** - Host on internal infrastructure
-- **Faster builds** - Geographic proximity, caching
-- **Compliance** - Meet regulatory requirements
-- **Mirrors** - Reduce dependency on crates.io
+## Step 1 — Register the alternative registry with Cargo
 
-## Registry Options
-
-### 1. Cloudsmith (Hosted SaaS)
-
-**Best for:** Commercial projects, easy setup
-
-```toml
-# .cargo/config.toml
-[registries.cloudsmith]
-index = "sparse+https://dl.cloudsmith.io/basic/USER/REPO/cargo/index/"
-token = "Bearer YOUR_TOKEN"
-```
-
-**Publish:**
-```bash
-cargo publish --registry cloudsmith
-```
-
-**Features:**
-- Hosted solution (no infrastructure)
-- Multiple package formats (npm, Maven, Docker)
-- CDN distribution
-- Access control and auditing
-- Free tier available
-
-**Setup:**
-1. Sign up at https://cloudsmith.io/
-2. Create Rust/Cargo repository
-3. Get API token from account settings
-4. Configure `.cargo/config.toml`
-
-### 2. Artifactory (JFrog)
-
-**Best for:** Enterprise with existing JFrog infrastructure
-
-```toml
-# .cargo/config.toml
-[registries.artifactory]
-index = "sparse+https://artifactory.company.com/artifactory/api/cargo/cargo-local/index/"
-```
-
-**Publish:**
-```bash
-# Set credentials
-cargo login --registry artifactory
-
-cargo publish --registry artifactory
-```
-
-**Features:**
-- Enterprise-grade security
-- Advanced access control
-- Vulnerability scanning
-- Build promotion
-- High availability
-
-**Setup:**
-1. Install/access Artifactory instance
-2. Create Cargo repository
-3. Configure authentication
-4. Set up replication (optional)
-
-### 3. Freight (Self-Hosted)
-
-**Best for:** Complete control, on-premise hosting
-
-```toml
-# .cargo/config.toml
-[registries.freight]
-index = "sparse+https://registry.company.com/index/"
-```
-
-**Publish:**
-```bash
-cargo publish --registry freight
-```
-
-**Features:**
-- Open-source (MIT)
-- Self-hosted
-- S3-compatible storage
-- PostgreSQL backend
-- Docker deployment
-
-**Setup:**
-```bash
-# Docker Compose
-docker-compose up -d
-
-# Configure registry
-freight init --storage s3://bucket/path
-
-# Add users
-freight user add username --admin
-```
-
-**Links:** https://github.com/tantaman/freight
-
-### 4. Kellnr (Self-Hosted)
-
-**Best for:** Simple self-hosted option, small teams
-
-```toml
-# .cargo/config.toml
-[registries.kellnr]
-index = "sparse+https://kellnr.company.com/api/v1/crates"
-```
-
-**Publish:**
-```bash
-cargo publish --registry kellnr
-```
-
-**Features:**
-- Written in Rust
-- Simple deployment (single binary)
-- Web UI
-- Local cache/mirror
-- Lightweight
-
-**Setup:**
-```bash
-# Download binary
-wget https://github.com/kellnr/kellnr/releases/latest/download/kellnr
-
-# Run
-./kellnr --port 8080
-```
-
-**Links:** https://kellnr.io/
-
-### 5. Romt (Read-Only Mirror)
-
-**Best for:** Offline/air-gapped environments
-
-```bash
-# Download full crates.io mirror
-romt download --crates --index
-
-# Serve locally
-romt serve
-```
-
-**Configure:**
-```toml
-# .cargo/config.toml
-[source.crates-io]
-replace-with = "romt-mirror"
-
-[source.romt-mirror]
-registry = "sparse+http://localhost:8000/index/"
-```
-
-**Features:**
-- Complete crates.io mirror
-- Offline development
-- Air-gapped networks
-- Bandwidth savings
-
-**Links:** https://github.com/drmikehenry/romt
-
-### 6. Shipyard (Self-Hosted)
-
-**Best for:** Kubernetes-native deployments
-
-```toml
-# .cargo/config.toml
-[registries.shipyard]
-index = "sparse+https://shipyard.k8s.company.com/index/"
-```
-
-**Deploy:**
-```yaml
-# kubernetes/shipyard.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: shipyard
-spec:
-  replicas: 3
-  template:
-    spec:
-      containers:
-      - name: shipyard
-        image: shipyard/server:latest
-        env:
-        - name: STORAGE_BACKEND
-          value: s3
-```
-
-**Features:**
-- Kubernetes-native
-- Horizontal scaling
-- Cloud storage backends
-- High availability
-
-## Configuration
-
-### Global Config
-
-**`~/.cargo/config.toml`:**
-
-```toml
-# Define registries
-[registries.company]
-index = "sparse+https://registry.company.com/index/"
-token = "Bearer YOUR_TOKEN"
-
-[registries.staging]
-index = "sparse+https://staging-registry.company.com/index/"
-
-# Set default registry
-[registry]
-default = "company"
-
-# Configure crates.io as backup
-[source.crates-io]
-registry = "https://github.com/rust-lang/crates.io-index"
-```
-
-### Project Config
-
-**`.cargo/config.toml`:**
+Add the registry's sparse index to `~/.cargo/config.toml` (or
+`.cargo/config.toml` at the workspace root to scope it to this project):
 
 ```toml
 [registries.internal]
-index = "sparse+https://internal.company.com/index/"
-
-# Publish to internal registry by default
-[registry]
-default = "internal"
-
-# Allow dependencies from multiple registries
-[source.crates-io]
-registry = "https://github.com/rust-lang/crates.io-index"
+index = "sparse+https://registry.example.com/index/"
 ```
 
-### Dependency Sources
+## Step 2 — Authenticate to the registry
+
+```bash
+cargo login --registry internal
+```
+
+This stores the token from your registry's credential page in Cargo's
+credential store; it is never checked into `Cargo.toml`.
+
+## Step 3 — Allow the crate to publish there
+
+Workspace crates currently ship `publish = false` in their `[package]`
+table, which blocks publishing to any registry. Replace it with an explicit
+allow-list naming the registries this crate may publish to:
 
 ```toml
-# Cargo.toml
-[dependencies]
-# From crates.io (default)
-serde = "1.0"
-
-# From alternative registry
-internal-lib = { version = "0.1", registry = "company" }
-
-# From Git
-custom = { git = "https://github.com/user/custom.git" }
-
-# From local path
-dev-tool = { path = "../dev-tool" }
-```
-
-## Publishing Workflow
-
-### Manual Publishing
-
-```bash
-# Login to registry
-cargo login --registry company
-
-# Publish
-cargo publish --registry company
-
-# Verify
-cargo search --registry company my-crate
-```
-
-### CI/CD Publishing
-
-**GitHub Actions:**
-
-```yaml
-- name: Publish to internal registry
-  env:
-    CARGO_REGISTRIES_COMPANY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
-  run: |
-    cargo publish --registry company --token $CARGO_REGISTRIES_COMPANY_TOKEN
-```
-
-**Environment Variables:**
-```bash
-export CARGO_REGISTRIES_COMPANY_TOKEN="your-token"
-cargo publish --registry company
-```
-
-## Registry Mirror/Cache
-
-### Use Case: Reduce crates.io Load
-
-```toml
-# .cargo/config.toml
-[source.crates-io]
-replace-with = "company-mirror"
-
-[source.company-mirror]
-registry = "sparse+https://mirror.company.com/crates.io/"
-```
-
-**Benefits:**
-- Faster builds (geographic proximity)
-- Reduced external bandwidth
-- Continued access during crates.io outages
-- Compliance with network policies
-
-### Implement Mirror
-
-**With Romt:**
-```bash
-# Sync crates.io daily
-romt download --crates --index --update
-
-# Serve via nginx/apache
-romt serve --host 0.0.0.0 --port 8080
-```
-
-**With Cloudsmith:**
-- Configure upstream proxy
-- Automatic caching
-- CDN distribution
-
-## Security Considerations
-
-### 1. Authentication
-
-```toml
-# Token-based
-[registries.secure]
-index = "sparse+https://registry.company.com/index/"
-token = "Bearer YOUR_TOKEN"
-
-# Credential provider
-[registries.secure]
-credential-provider = "cargo:token"
-```
-
-### 2. TLS/HTTPS
-
-```toml
-# Enforce HTTPS
-[registries.company]
-index = "sparse+https://registry.company.com/index/"  # ✅
-
-# Never use HTTP for sensitive data
-index = "sparse+http://registry.company.com/index/"   # ❌
-```
-
-### 3. Access Control
-
-Most registries support:
-- User authentication
-- Team-based permissions
-- Read/write separation
-- IP allowlists
-- Audit logging
-
-### 4. Package Signing
-
-```bash
-# Sign package
-cargo package --sign
-
-# Verify signature
-cargo verify my-crate-0.1.0.crate
-```
-
-## Migration Strategies
-
-### From crates.io to Private Registry
-
-**Phase 1: Parallel Publishing**
-```bash
-# Publish to both
-cargo publish  # crates.io
-cargo publish --registry company  # private
-```
-
-**Phase 2: Update Dependencies**
-```toml
-[dependencies]
-my-crate = { version = "0.2", registry = "company" }
-```
-
-**Phase 3: Deprecate Public**
-- Archive crates.io package
-- Update README with migration notice
-
-### From Private to Public
-
-**Checklist:**
-- [ ] Remove proprietary code
-- [ ] Add proper licensing
-- [ ] Security review
-- [ ] Documentation
-- [ ] CI/CD for crates.io
-
-## Troubleshooting
-
-### Authentication Fails
-
-```bash
-# Check token
-cargo login --registry company
-
-# Debug
-CARGO_LOG=cargo::ops::registry=trace cargo publish --registry company
-```
-
-### Index Not Found
-
-```bash
-# Verify index URL
-curl https://registry.company.com/index/
-
-# Check network
-ping registry.company.com
-```
-
-### Slow Publish
-
-```bash
-# Check package size
-cargo package --list | wc -l
-
-# Exclude unnecessary files
-# .cargo/config.toml
+# crates/mif-core/Cargo.toml
 [package]
-exclude = [
-    "tests/fixtures/*",
-    "*.tmp",
-]
+# publish = false
+publish = ["internal"]
 ```
 
-## Cost Comparison
+## Step 4 — Publish
 
-| Registry | Hosting | Cost | Best For |
-|----------|---------|------|----------|
-| crates.io | Public | Free | Open source |
-| Cloudsmith | SaaS | $50+/mo | Commercial |
-| Artifactory | Self/Cloud | $$$$ | Enterprise |
-| Kellnr | Self-hosted | Free | Small teams |
-| Freight | Self-hosted | Free | Control freaks |
-| Romt | Self-hosted | Free | Air-gapped |
+Run from the workspace root, targeting the crate by name:
 
-## Best Practices
+```bash
+cargo publish -p mif-core --registry internal
+```
 
-1. **Use sparse index** - Faster than git index
-2. **Mirror crates.io** - Reduce external dependencies
-3. **Automate publishing** - CI/CD integration
-4. **Version carefully** - Follow semver strictly
-5. **Document privately** - Internal registry docs
-6. **Test thoroughly** - Before publishing
-7. **Backup regularly** - Registry data
+Cargo verifies the package builds in isolation before uploading it.
 
-## Links
+## Step 5 — Verify the crate is resolvable from the registry
 
-- [Alternative Registries RFC](https://rust-lang.github.io/rfcs/2141-alternative-registries.html)
-- [Cargo Registry Documentation](https://doc.rust-lang.org/cargo/reference/registries.html)
-- [Cloudsmith Cargo Guide](https://help.cloudsmith.io/docs/cargo-registry)
-- [Artifactory Cargo Repository](https://www.jfrog.com/confluence/display/JFROG/Cargo+Repositories)
-- [Kellnr Documentation](https://kellnr.io/documentation)
-- [Freight GitHub](https://github.com/tantaman/freight)
+From a separate project configured with the same `[registries.internal]`
+entry:
+
+```bash
+cargo add mif-core --registry internal
+```
+
+The crate resolves and downloads from the alternative registry, confirming
+the publish succeeded.

@@ -1,0 +1,24 @@
+[package]
+name = "mif-ontology"
+description = "Ontology resolution for the MIF (Modeled Information Format) ecosystem"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["mif", "ontology"]
+categories = ["data-structures"]
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+mif-core.workspace = true
+mif-schema.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+serde_norway = "0.9.42"

@@ -1,307 +1,217 @@
 ---
-diataxis_type: how-to
+id: how-to-respond-to-security-vulnerability
+type: procedural
+created: '2026-07-02T00:00:00Z'
+modified: '2026-07-02T00:00:00Z'
+namespace: how-to/security
+title: How to Respond to a Security Vulnerability Report in mif-rs
+tags:
+  - how-to
+  - security
+  - incident-response
+temporal:
+  '@type': TemporalMetadata
+  validFrom: '2026-07-02T00:00:00Z'
+  recordedAt: '2026-07-02T00:00:00Z'
+  ttl: P1Y
+relationships:
+  - type: relates-to
+    target: SECURITY.md
+  - type: relates-to
+    target: docs/runbooks/RELEASING.md
+ontology:
+  '@type': OntologyReference
+  id: mif-docs
+  version: 1.0.0
+  uri: https://mif-spec.dev/ontologies/mif-docs
+entity:
+  name: Respond to a Security Vulnerability Report in mif-rs
+  entity_type: how-to-guide
 ---
 
-# Security Incident Response
+# How to Respond to a Security Vulnerability Report in mif-rs
 
-Runbook for handling security vulnerabilities in rust-template. Based on the project's [Security Policy](../../SECURITY.md).
+Triage, fix, and coordinate disclosure of a security vulnerability reported
+against `mif-rs`, from acknowledgment through a published advisory. Based on
+the project's [Security Policy](../../SECURITY.md).
 
----
+## Prerequisites
 
-## Receiving a Vulnerability Report
+- Maintainer access to `modeled-information-format/mif-rs`, including
+  [GitHub Security Advisories](https://github.com/modeled-information-format/mif-rs/security/advisories).
+- `gh` CLI authenticated with permissions to manage advisories and releases.
 
-Vulnerability reports arrive through [GitHub Security Advisories](https://github.com/attested-delivery/rust-template/security/advisories).
+## Step 1 — Acknowledge the report within 48 hours
 
-**Do not** accept security reports through public issues, discussions, or social media. If someone reports a vulnerability publicly, immediately ask them to re-submit privately and consider the issue already disclosed when setting timelines.
+Vulnerability reports arrive through GitHub Security Advisories, not public
+issues. If someone reports one publicly, ask them to re-submit privately and
+treat the issue as already disclosed when setting timelines.
 
-### What to Expect in a Report
+Reply to the advisory draft with:
 
-Per SECURITY.md, reporters are asked to provide:
+- Confirmation the report was received.
+- An estimated timeline for assessment.
+- Any immediate clarifying questions.
 
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Suggested fix (if any)
+Per SECURITY.md, reporters are asked for a description, reproduction steps,
+potential impact, and a suggested fix (if any).
 
----
+## Step 2 — Assess severity and impact
 
-## Response Timeline
+Use a simplified severity scale to set the response deadline:
 
-| Milestone | Deadline | Owner |
+| Severity | Criteria | Fix target |
 |---|---|---|
-| **Acknowledge receipt** | Within 48 hours | Maintainer |
-| **Initial assessment** | Within 1 week | Maintainer |
-| **Fix development** | As soon as feasible | Maintainer |
-| **Fix and disclosure** | Within 90 days (coordinated with reporter) | Maintainer + reporter |
+| Critical | RCE, data exfiltration, supply-chain compromise | 48 hours |
+| High | Privilege escalation, DoS, significant data exposure | 1 week |
+| Medium | Limited impact, needs uncommon config or local access | 30 days |
+| Low | Minimal impact, theoretical or defense-in-depth | 90 days |
 
----
+Determine scope:
 
-## Triage Process
+- [ ] Is the vulnerability in this workspace's own code (`mif-core`,
+      `mif-schema`, `mif-ontology`, `mif-cli`, `mif-mcp`), or in a dependency?
+- [ ] Which published versions are affected?
+- [ ] What's the attack vector — network, local, physical?
+- [ ] Any evidence of exploitation in the wild?
+- [ ] Does it affect a crates.io crate, a release binary, the container
+      image, or all of them?
 
-### 1. Acknowledge the Report (Within 48 Hours)
+Record the assessment (CVSS score if applicable, affected versions/
+components, exploitation prerequisites, mitigating factors) in the advisory
+draft.
 
-Respond to the advisory with:
+## Step 3 — Develop the fix privately
 
-- Confirmation that the report was received
-- An estimated timeline for assessment
-- Any immediate questions for the reporter
-
-### 2. Severity Assessment
-
-Use the CVSS framework or a simplified severity scale:
-
-| Severity | Criteria | Response time target |
-|---|---|---|
-| **Critical** | Remote code execution, data exfiltration, supply chain compromise | Fix within 48 hours |
-| **High** | Privilege escalation, denial of service, significant data exposure | Fix within 1 week |
-| **Medium** | Limited impact, requires uncommon configuration or local access | Fix within 30 days |
-| **Low** | Minimal impact, theoretical or defense-in-depth improvement | Fix within 90 days |
-
-### 3. Impact Analysis
-
-Determine the scope of the vulnerability:
-
-- [ ] Is the vulnerability in rust_template's own code or a dependency?
-- [ ] Which versions are affected?
-- [ ] What is the attack vector (network, local, physical)?
-- [ ] Is there evidence of exploitation in the wild?
-- [ ] What data or systems are at risk?
-- [ ] Does this affect the published binary, Docker image, crate, or all of them?
-
-### 4. Document the Assessment
-
-Record findings in the GitHub Security Advisory draft:
-
-- CVSS score (if applicable)
-- Affected versions
-- Affected components
-- Exploitation prerequisites
-- Mitigating factors
-
----
-
-## Fix Development
-
-### 1. Create a Private Fix Branch
-
-Use GitHub's Security Advisory "collaborate on a fix" feature to create a temporary private fork:
-
-1. Go to the advisory draft on GitHub
-2. Click **"Start a temporary private fork"**
-3. Create a branch for the fix in the private fork
-
-This ensures the fix is not publicly visible before disclosure.
-
-### 2. Develop the Fix
+Use the advisory's **"Start a temporary private fork"** feature so the fix
+isn't visible before disclosure:
 
 ```bash
-# Clone the private fork (GitHub provides the URL)
+# GitHub provides the private fork URL from the advisory draft
 git clone <private-fork-url>
-cd rust-template
-
-# Create a fix branch
+cd mif-rs
 git checkout -b security/fix-<advisory-id>
 
-# Apply the fix
-# ...
+# Apply the fix, then run the full local check suite:
+just check
+```
 
-# Run the full test suite
-cargo fmt -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
-cargo deny check
+`just check` runs `fmt-check`, `lint`, `test`, `doc-build`, and `deny` — the
+same gates as `ci-checks.yml`'s `fmt`, `clippy`, `test`, `doc`, and `deny`
+jobs. Also run the advisory scan directly:
+
+```bash
 cargo audit --deny warnings
 ```
 
-### 3. Review the Fix
+At least one other maintainer should review the fix in the private fork.
+Confirm it addresses the root cause (not just the symptom), add a regression
+test that doesn't reveal exploit details in its name or comments, and confirm
+no new issues were introduced.
 
-- At least one other maintainer should review the fix (in the private fork)
-- Verify the fix addresses the root cause, not just the symptom
-- Add a regression test for the vulnerability (without revealing exploit details)
-- Confirm no new issues are introduced
-
-### 4. Prepare Release Materials
+## Step 4 — Prepare release materials
 
 While the fix is in review:
 
-- [ ] Determine the new version number (typically a PATCH bump)
-- [ ] Draft release notes that describe the fix without revealing exploit details before coordinated disclosure
-- [ ] Prepare a CVE ID request if the severity warrants it
-- [ ] Coordinate disclosure timing with the reporter
+- [ ] Determine the new version (typically a PATCH bump — see
+      [RELEASING.md](RELEASING.md) for SemVer policy).
+- [ ] Draft release notes describing the fix without revealing exploit
+      details before coordinated disclosure.
+- [ ] Request a CVE ID if severity warrants it.
+- [ ] Agree disclosure timing with the reporter.
 
----
-
-## Coordinated Disclosure
-
-### Timeline
-
-1. **Day 0:** Fix merged to the private fork and verified
-2. **Day 0:** Publish the patched release (see [Emergency Release Process](#emergency-release-process) below)
-3. **Day 0-3:** Notify the reporter that the fix is published
-4. **Day 7-14:** Allow time for users to update
-5. **Day 14+:** Publish the GitHub Security Advisory (makes it public)
-6. **Day 14+:** CVE published (if requested)
-
-### Publishing the Advisory
-
-1. Go to the advisory draft at https://github.com/attested-delivery/rust-template/security/advisories
-2. Fill in all required fields:
-   - **Affected products:** `attested-delivery/rust-template`
-   - **Affected versions:** version range
-   - **Patched versions:** the new release version
-   - **Severity:** based on your assessment
-   - **CWE:** applicable weakness type
-3. Click **"Publish advisory"**
-
-This will:
-- Make the advisory public
-- Notify users watching the repository
-- Add the advisory to the GitHub Advisory Database
-- Trigger Dependabot alerts for affected downstream users
-
----
-
-## Emergency Release Process
-
-For critical and high severity vulnerabilities, use an expedited release process:
-
-### 1. Merge the Fix
+## Step 5 — Merge and ship the fix
 
 ```bash
-# Merge the private fork fix into main
-# (GitHub provides a merge button in the advisory UI)
-```
-
-### 2. Bump Version
-
-```bash
+# Merge the private-fork fix into main (GitHub provides a merge button
+# in the advisory UI), then bump the version:
 git pull origin main
-# Update Cargo.toml version to X.Y.(Z+1)
+# Update version = "X.Y.(Z+1)" in Cargo.toml
+cargo check   # regenerates Cargo.lock — never hand-edit it
 git add Cargo.toml Cargo.lock
 git commit -m "fix: address security vulnerability (GHSA-XXXX-XXXX-XXXX)"
 git push origin main
-```
 
-### 3. Tag and Release
-
-```bash
 git tag -a vX.Y.(Z+1) -m "Security release vX.Y.(Z+1)"
 git push origin vX.Y.(Z+1)
 ```
 
-This triggers the standard release pipeline (release.yml, docker.yml, changelog.yml, publish.yml, signed-releases.yml).
+The tag push triggers the standard release pipeline — see
+[RELEASING.md](RELEASING.md) for the full workflow chain and verification
+steps.
 
-### 4. Verify Deployment
+Verify deployment before notifying anyone:
 
-- [ ] GitHub Release created with binaries and signatures
-- [ ] Docker image pushed to `ghcr.io/attested-delivery/rust-template`
-- [ ] crates.io package updated (if enabled)
-- [ ] All binaries pass smoke tests
+- [ ] GitHub Release created with binaries and attestations.
+- [ ] Container image pushed to `ghcr.io/modeled-information-format/mif-rs`.
+- [ ] Affected crates updated on crates.io.
+- [ ] Binaries pass a smoke test on at least one platform.
 
-### 5. Yank Affected Versions (If on crates.io)
+If the vulnerable version was already published, yank it:
 
 ```bash
-# Yank each affected version
-cargo yank --version X.Y.Z
+cargo yank --version X.Y.Z -p <affected-crate>
 ```
 
-### 6. Notify Users
+## Step 6 — Publish the advisory and notify users
 
-- Publish the GitHub Security Advisory
-- If the project has a mailing list or announcement channel, post there
-- Update the release notes to reference the advisory
+1. Go to the advisory draft at
+   https://github.com/modeled-information-format/mif-rs/security/advisories.
+2. Fill in affected products (`modeled-information-format/mif-rs`), affected
+   version range, patched version, severity, and CWE.
+3. Click **"Publish advisory"**.
 
----
+Publishing makes the advisory public, notifies watchers, adds it to the
+GitHub Advisory Database, and triggers Dependabot alerts for downstream
+consumers.
 
-## Post-Incident Review
+Recommended disclosure timeline: fix published day 0, reporter notified
+within 0-3 days, advisory published 14+ days later to give users time to
+update, CVE published alongside if requested.
 
-After the vulnerability is disclosed and patched, conduct a review:
+## Step 7 — Run a post-incident review
 
-- [ ] **Root cause:** What introduced the vulnerability?
-- [ ] **Detection gap:** Why wasn't this caught by existing tooling?
-- [ ] **Process improvement:** What can be improved?
-  - Should a new lint rule be added?
-  - Should a new cargo-deny ban be added?
-  - Should CI checks be expanded?
-- [ ] **Documentation:** Update SECURITY.md if the process needs changes
-- [ ] **Timeline review:** Were response deadlines met?
+- [ ] **Root cause** — what introduced the vulnerability?
+- [ ] **Detection gap** — why didn't existing tooling catch it? Should a new
+      clippy lint, a new `deny.toml` ban, or a new CI gate be added?
+- [ ] **Documentation** — update SECURITY.md if the process itself needs to
+      change.
+- [ ] **Timeline** — were the response deadlines from Step 2 met?
 
----
+The vulnerability is now patched, disclosed, and the process gap (if any) is
+tracked as a follow-up.
 
-## Automated Security Tools Overview
+## Reference: automated security tooling already in place
 
-This project runs multiple layers of automated security scanning:
+These run continuously regardless of an active incident — useful context when
+assessing "why didn't this get caught earlier."
 
-### Continuous (Every Push/PR)
-
-| Tool | Workflow | What it checks |
-|---|---|---|
-| **cargo-deny** | `ci.yml` (deny job) | Advisories, licenses, banned crates, sources |
-| **Gitleaks** | `secrets-scan.yml` | Accidentally committed secrets, API keys, tokens |
-| **GitHub Secret Scanning** | `.github/secret_scanning.yml` | Provider-specific secret patterns in code |
-
-### Scheduled
-
-| Tool | Workflow | Schedule | What it checks |
+| Tool | Workflow | Trigger | What it checks |
 |---|---|---|---|
-| **cargo-audit** | `security-audit.yml` | Daily at 00:00 UTC | RustSec advisory database |
-| **CodeQL** | `quality-gates.yml` (`sast` job) | Weekly (Monday 06:00 UTC) + every push to main | Static analysis, code quality, security patterns |
-| **Trivy** | `container-scan.yml` | On-demand (workflow_dispatch) | Container image vulnerabilities |
+| cargo-deny | `ci-checks.yml` (`deny` job) | Every push/PR | Advisories, licenses, banned crates (`openssl`, `atty`), sources |
+| cargo-audit | `security-audit.yml` | Daily 00:00 UTC; push touching `Cargo.toml`/`Cargo.lock`; manual | RustSec advisory database |
+| Gitleaks + TruffleHog | `secrets-scan.yml` (calls the org's `reusable-secrets.yml`) | Every push/PR; manual | Committed secrets, API keys, tokens |
+| CodeQL (SAST) | `quality-gates.yml` (`sast` job, calls `reusable-sast-codeql.yml`) | Push to `main`, every PR, weekly Monday 06:00 UTC | Static analysis, Rust code patterns |
+| OSV-Scanner (SCA) | `quality-gates.yml` (`sca` job, calls `reusable-sca-osv.yml`) | Push to `main`, every PR, weekly | Known vulnerabilities against `Cargo.lock`, `fail-on-severity: high` |
+| Trivy (IaC + license) | `quality-gates.yml` (`trivy` job, `scan-iac: true`) | Push to `main`, every PR, weekly | Dockerfile/manifest misconfig, license issues |
+| Trivy (container image) | `pipeline.yml` (`gate-image` job) | Push to `main`/tags, once the container chain is armed (`publish != false`) | Container image vulnerabilities, bound to the image digest via attestation |
+| OpenSSF Scorecard | `quality-gates.yml` (`posture` job, calls `reusable-scorecard.yml`) | Push to `main`; weekly | Supply-chain posture score |
+| pin-check | `pipeline.yml` (`pin-check` job) | Every push/PR | Every `uses:` is pinned to a full commit SHA |
 
-### Dependency Management
-
-| Tool | Configuration | What it does |
-|---|---|---|
-| **Dependabot** | `.github/dependabot.yml` | Opens PRs for outdated Cargo + Actions dependencies weekly |
-| **Dependabot auto-merge** | `dependabot-automerge.yml` | Auto-merges patch and minor dependency updates after CI passes |
-
-### cargo-deny Policy Summary (`deny.toml`)
-
-| Policy | Setting | Details |
-|---|---|---|
-| Advisories | Deny all | No ignored advisories |
-| Licenses | Allow-list only | MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, Zlib, MPL-2.0, Unicode-DFS-2016, Unicode-3.0, CC0-1.0, BSL-1.0, 0BSD |
-| Banned crates | `openssl` (use rustls), `atty` (use std) | Enforced as deny |
-| Sources | crates.io only | Unknown registries and git sources denied |
-| Multiple versions | Warn | Highlighted in output |
-| Wildcards | Deny | No wildcard version requirements |
-
-### What Each Tool Catches
-
-```text
-Supply Chain Attack ──> cargo-deny (sources), Dependabot, secret scanning
-Known Vulnerability ──> cargo-audit (daily), cargo-deny (advisories), Dependabot alerts
-License Violation   ──> cargo-deny (licenses)
-Code-Level Bug      ──> CodeQL (weekly + on push)
-Container Vuln      ──> Trivy (container-scan)
-Leaked Secret       ──> Gitleaks, GitHub Secret Scanning
-Unsafe Code         ──> Clippy + #[forbid(unsafe_code)] in crate
-```
-
----
-
-## Supported Versions
-
-Per SECURITY.md:
-
-| Version | Supported |
-|---|---|
-| Latest release | Yes |
-| Older releases | No |
-
-Only the latest release receives security patches. Users on older versions must upgrade.
-
----
+All SAST/SCA/IaC-license/container-scan verdicts land in the repo's code
+scanning tab and are additionally signed as attestations bound to the release
+artifact digest — see SECURITY.md § Verifying Release Artifacts for the
+`gh attestation verify` commands.
 
 ## Quick Reference
 
 | Action | Command / Location |
 |---|---|
-| View security advisories | https://github.com/attested-delivery/rust-template/security/advisories |
-| Create new advisory | https://github.com/attested-delivery/rust-template/security/advisories/new |
+| View security advisories | https://github.com/modeled-information-format/mif-rs/security/advisories |
+| Create new advisory | https://github.com/modeled-information-format/mif-rs/security/advisories/new |
 | Run cargo-audit locally | `cargo audit --deny warnings` |
 | Run cargo-deny locally | `cargo deny check` |
-| Check for leaked secrets | `gitleaks detect` |
-| View Dependabot alerts | https://github.com/attested-delivery/rust-template/security/dependabot |
-| View code scanning alerts | https://github.com/attested-delivery/rust-template/security/code-scanning |
-| Yank a crate version | `cargo yank --version X.Y.Z` |
+| Run the full local gate suite | `just check` |
+| View Dependabot alerts | https://github.com/modeled-information-format/mif-rs/security/dependabot |
+| View code scanning alerts | https://github.com/modeled-information-format/mif-rs/security/code-scanning |
+| Yank a published crate version | `cargo yank --version X.Y.Z -p <crate>` |
