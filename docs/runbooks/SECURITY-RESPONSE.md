@@ -4,13 +4,13 @@ diataxis_type: how-to
 
 # Security Incident Response
 
-Runbook for handling security vulnerabilities in rust-template. Based on the project's [Security Policy](../../SECURITY.md).
+Runbook for handling security vulnerabilities in mif-rs. Based on the project's [Security Policy](../../SECURITY.md).
 
 ---
 
 ## Receiving a Vulnerability Report
 
-Vulnerability reports arrive through [GitHub Security Advisories](https://github.com/attested-delivery/rust-template/security/advisories).
+Vulnerability reports arrive through [GitHub Security Advisories](https://github.com/modeled-information-format/mif-rs/security/advisories).
 
 **Do not** accept security reports through public issues, discussions, or social media. If someone reports a vulnerability publicly, immediately ask them to re-submit privately and consider the issue already disclosed when setting timelines.
 
@@ -61,7 +61,7 @@ Use the CVSS framework or a simplified severity scale:
 
 Determine the scope of the vulnerability:
 
-- [ ] Is the vulnerability in rust_template's own code or a dependency?
+- [ ] Is the vulnerability in mif_core's own code or a dependency?
 - [ ] Which versions are affected?
 - [ ] What is the attack vector (network, local, physical)?
 - [ ] Is there evidence of exploitation in the wild?
@@ -97,7 +97,7 @@ This ensures the fix is not publicly visible before disclosure.
 ```bash
 # Clone the private fork (GitHub provides the URL)
 git clone <private-fork-url>
-cd rust-template
+cd mif-rs
 
 # Create a fix branch
 git checkout -b security/fix-<advisory-id>
@@ -144,9 +144,9 @@ While the fix is in review:
 
 ### Publishing the Advisory
 
-1. Go to the advisory draft at https://github.com/attested-delivery/rust-template/security/advisories
+1. Go to the advisory draft at https://github.com/modeled-information-format/mif-rs/security/advisories
 2. Fill in all required fields:
-   - **Affected products:** `attested-delivery/rust-template`
+   - **Affected products:** `modeled-information-format/mif-rs`
    - **Affected versions:** version range
    - **Patched versions:** the new release version
    - **Severity:** based on your assessment
@@ -194,7 +194,7 @@ This triggers the standard release pipeline (release.yml, docker.yml, changelog.
 ### 4. Verify Deployment
 
 - [ ] GitHub Release created with binaries and signatures
-- [ ] Docker image pushed to `ghcr.io/attested-delivery/rust-template`
+- [ ] Docker image pushed to `ghcr.io/modeled-information-format/mif-rs`
 - [ ] crates.io package updated (if enabled)
 - [ ] All binaries pass smoke tests
 
@@ -297,11 +297,11 @@ Only the latest release receives security patches. Users on older versions must 
 
 | Action | Command / Location |
 |---|---|
-| View security advisories | https://github.com/attested-delivery/rust-template/security/advisories |
-| Create new advisory | https://github.com/attested-delivery/rust-template/security/advisories/new |
+| View security advisories | https://github.com/modeled-information-format/mif-rs/security/advisories |
+| Create new advisory | https://github.com/modeled-information-format/mif-rs/security/advisories/new |
 | Run cargo-audit locally | `cargo audit --deny warnings` |
 | Run cargo-deny locally | `cargo deny check` |
 | Check for leaked secrets | `gitleaks detect` |
-| View Dependabot alerts | https://github.com/attested-delivery/rust-template/security/dependabot |
-| View code scanning alerts | https://github.com/attested-delivery/rust-template/security/code-scanning |
+| View Dependabot alerts | https://github.com/modeled-information-format/mif-rs/security/dependabot |
+| View code scanning alerts | https://github.com/modeled-information-format/mif-rs/security/code-scanning |
 | Yank a crate version | `cargo yank --version X.Y.Z` |

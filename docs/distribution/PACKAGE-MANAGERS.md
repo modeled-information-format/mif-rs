@@ -22,13 +22,13 @@ Both workflows resolve project specificity (crate name, binary name, description
 
 ```bash
 # Add tap
-brew tap attested-delivery/tap
+brew tap modeled-information-format/tap
 
 # Install
-brew install rust-template
+brew install mif-rs
 
 # Update
-brew upgrade rust-template
+brew upgrade mif-rs
 ```
 
 **Setup Requirements:**
@@ -44,10 +44,10 @@ brew upgrade rust-template
 
 ```bash
 # Install the binary
-cargo install rust_template
+cargo install mif_core
 
 # Or use as a dependency
-cargo add rust_template
+cargo add mif_core
 ```
 
 Publishing runs in `publish.yml` on every `v*.*.*` tag using crates.io **Trusted Publishing** (OIDC). There is no `CARGO_REGISTRY_TOKEN` secret.
@@ -60,26 +60,26 @@ After publishing, the workflow downloads the `.crate` the registry serves, byte-
 
 ```bash
 curl -fsSL -A 'release-check' \
-  -O https://static.crates.io/crates/rust_template/rust_template-0.1.0.crate
-gh attestation verify rust_template-0.1.0.crate --repo USER/REPO
+  -O https://static.crates.io/crates/mif_core/mif_core-0.1.0.crate
+gh attestation verify mif_core-0.1.0.crate --repo USER/REPO
 ```
 
 ### GitHub Releases (prebuilt binaries)
 
 Every release attaches attested binaries named `{bin}-{version}-{platform}`:
 
-- `rust_template-0.1.0-linux-amd64`
-- `rust_template-0.1.0-linux-arm64`
-- `rust_template-0.1.0-macos-amd64`
-- `rust_template-0.1.0-macos-arm64`
-- `rust_template-0.1.0-windows-amd64.exe`
+- `mif_core-0.1.0-linux-amd64`
+- `mif_core-0.1.0-linux-arm64`
+- `mif_core-0.1.0-macos-amd64`
+- `mif_core-0.1.0-macos-arm64`
+- `mif_core-0.1.0-windows-amd64.exe`
 
 Plus a CycloneDX SBOM and a `{bin}-{version}-checksums.txt` file. Verify before use:
 
 ```bash
 gh release download v0.1.0 --repo USER/REPO
-gh attestation verify rust_template-0.1.0-linux-amd64 --repo USER/REPO
-shasum -a 256 -c rust_template-0.1.0-checksums.txt
+gh attestation verify mif_core-0.1.0-linux-amd64 --repo USER/REPO
+shasum -a 256 -c mif_core-0.1.0-checksums.txt
 ```
 
 See [SECURITY.md](../../SECURITY.md#verifying-release-artifacts) for the full verification reference.
@@ -154,19 +154,19 @@ For official Homebrew inclusion:
 winget can install the release binary directly as a portable package. Create a manifest in [winget-pkgs](https://github.com/microsoft/winget-pkgs):
 
 ```yaml
-# manifests/r/rust-template/rust-template/0.1.0/rust-template.rust-template.yaml
-PackageIdentifier: rust-template.rust-template
+# manifests/r/mif-rs/mif-rs/0.1.0/mif-rs.mif-rs.yaml
+PackageIdentifier: mif-rs.mif-rs
 PackageVersion: 0.1.0
 PackageLocale: en-US
 Publisher: Your Name
-PackageName: rust-template
+PackageName: mif-rs
 License: MIT
 ShortDescription: Modern Rust template
 Installers:
   - Architecture: x64
     InstallerType: portable
-    InstallerUrl: https://github.com/USER/REPO/releases/download/v0.1.0/rust_template-0.1.0-windows-amd64.exe
-    InstallerSha256: HASH  # from rust_template-0.1.0-checksums.txt
+    InstallerUrl: https://github.com/USER/REPO/releases/download/v0.1.0/mif_core-0.1.0-windows-amd64.exe
+    InstallerSha256: HASH  # from mif_core-0.1.0-checksums.txt
 ManifestType: singleton
 ManifestVersion: 1.0.0
 ```
@@ -177,15 +177,15 @@ ManifestVersion: 1.0.0
 
 ```bash
 # Homebrew
-brew install USER/tap/rust-template && rust-template --version
+brew install USER/tap/mif-rs && mif-rs --version
 
 # crates.io
-cargo install rust_template && rust_template --version
+cargo install mif_core && mif_core --version
 
 # GitHub Release binary (Linux)
-gh attestation verify rust_template-0.1.0-linux-amd64 --repo USER/REPO && \
-  chmod +x rust_template-0.1.0-linux-amd64 && \
-  ./rust_template-0.1.0-linux-amd64 --version
+gh attestation verify mif_core-0.1.0-linux-amd64 --repo USER/REPO && \
+  chmod +x mif_core-0.1.0-linux-amd64 && \
+  ./mif_core-0.1.0-linux-amd64 --version
 ```
 
 ## Links

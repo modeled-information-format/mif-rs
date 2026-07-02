@@ -43,7 +43,7 @@ During a release the `sbom` job in `release.yml`:
   "metadata": {
     "component": {
       "type": "application",
-      "name": "rust_template",
+      "name": "mif_core",
       "version": "0.1.0"
     }
   },
@@ -94,10 +94,10 @@ Verify: `sbom.cdx.json` parses as JSON and lists component entries.
 
 ```bash
 # Download from a GitHub release
-wget https://github.com/attested-delivery/rust-template/releases/download/v0.1.0/rust_template-0.1.0-sbom.cdx.json
+wget https://github.com/modeled-information-format/mif-rs/releases/download/v0.1.0/mif_core-0.1.0-sbom.cdx.json
 
 # Validate with a CycloneDX-aware tool
-cyclonedx validate --input-file rust_template-0.1.0-sbom.cdx.json
+cyclonedx validate --input-file mif_core-0.1.0-sbom.cdx.json
 ```
 
 Verify: the validator reports the document as valid.

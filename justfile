@@ -119,10 +119,10 @@ mutants:
 # === Template Sync ===
 
 # Template upstream repository
-template_repo := "attested-delivery/rust-template"
+template_repo := "modeled-information-format/mif-rs"
 template_branch := "main"
 
-# Sync shared tooling from the rust-template upstream
+# Sync shared tooling from the mif-rs upstream
 template-sync:
     #!/usr/bin/env bash
     set -euo pipefail

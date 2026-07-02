@@ -4,7 +4,7 @@ diataxis_type: how-to
 
 # Releasing
 
-End-to-end runbook for creating, monitoring, and rolling back releases of rust-template.
+End-to-end runbook for creating, monitoring, and rolling back releases of mif-rs.
 
 > **Prefer the `/release` skill.** Releases are orchestrated end-to-end by the `/release` skill (`.claude/skills/release/SKILL.md`): release-prep PR, tag, monitoring of every workflow chain, and independent workstation verification. The manual procedure below is the same process the skill drives.
 
@@ -45,7 +45,7 @@ Configure in GitHub repository settings (**Settings > Secrets and variables > Ac
 
 Run through this checklist before every release.
 
-- [ ] All CI checks pass on `main` (check [Actions](https://github.com/attested-delivery/rust-template/actions/workflows/ci.yml))
+- [ ] All CI checks pass on `main` (check [Actions](https://github.com/modeled-information-format/mif-rs/actions/workflows/ci.yml))
 - [ ] Update version in `Cargo.toml`:
   ```toml
   [package]
@@ -102,7 +102,7 @@ Pushing a `v*.*.*` tag triggers these workflows in parallel:
 |---|---|---|
 | **Release** | `release.yml` | Resolves bin/version from `cargo metadata`, builds 5 platform binaries (`{bin}-{version}-{platform}`) with SLSA build provenance, generates + attests a CycloneDX SBOM, verifies every attestation **fail-closed**, then creates the GitHub Release with auto-generated notes and a `{bin}-{version}-checksums.txt` file |
 | **Publish** | `publish.yml` | Runs pre-publish checks, publishes to crates.io via Trusted Publishing (OIDC), then downloads the registry-served `.crate`, byte-compares it, and attests it |
-| **Pipeline (container)** | `pipeline.yml` | Builds multi-platform images (linux/amd64, linux/arm64), pushes to `ghcr.io/attested-delivery/rust-template` with version + `latest` tags; images are signed/attested by the central signer workflow and verified fail-closed |
+| **Pipeline (container)** | `pipeline.yml` | Builds multi-platform images (linux/amd64, linux/arm64), pushes to `ghcr.io/modeled-information-format/mif-rs` with version + `latest` tags; images are signed/attested by the central signer workflow and verified fail-closed |
 
 After the Release workflow completes, `package-homebrew.yml` fires via `workflow_run` and regenerates the source formula in `{owner}/homebrew-tap`.
 
@@ -114,7 +114,7 @@ After the Release workflow completes, `package-homebrew.yml` fires via `workflow
 
 ### GitHub Actions Dashboard
 
-- **All workflows:** https://github.com/attested-delivery/rust-template/actions
+- **All workflows:** https://github.com/modeled-information-format/mif-rs/actions
 - **Filter by tag:** Click the specific workflow run triggered by the tag push
 
 ### CLI Monitoring
@@ -163,34 +163,34 @@ Run through this after all workflows complete.
   - `rust_template-X.Y.Z-checksums.txt`
 - [ ] **Attestations verify** from an independent machine (full reference: [SECURITY.md](../../SECURITY.md#verifying-release-artifacts)):
   ```bash
-  gh release download vX.Y.Z --repo attested-delivery/rust-template
-  gh attestation verify rust_template-X.Y.Z-linux-amd64 --repo attested-delivery/rust-template
-  gh attestation verify rust_template-X.Y.Z-linux-amd64 --repo attested-delivery/rust-template \
+  gh release download vX.Y.Z --repo modeled-information-format/mif-rs
+  gh attestation verify rust_template-X.Y.Z-linux-amd64 --repo modeled-information-format/mif-rs
+  gh attestation verify rust_template-X.Y.Z-linux-amd64 --repo modeled-information-format/mif-rs \
     --predicate-type https://cyclonedx.org/bom
   shasum -a 256 -c rust_template-X.Y.Z-checksums.txt
   ```
 - [ ] **Release notes** are generated correctly
 - [ ] **Docker image** is available:
   ```bash
-  docker pull ghcr.io/attested-delivery/rust-template:vX.Y.Z
-  docker run --rm ghcr.io/attested-delivery/rust-template:vX.Y.Z --version
+  docker pull ghcr.io/modeled-information-format/mif-rs:vX.Y.Z
+  docker run --rm ghcr.io/modeled-information-format/mif-rs:vX.Y.Z --version
   ```
 - [ ] **Docker `latest` tag** points to the new release:
   ```bash
-  docker pull ghcr.io/attested-delivery/rust-template:latest
-  docker run --rm ghcr.io/attested-delivery/rust-template:latest --version
+  docker pull ghcr.io/modeled-information-format/mif-rs:latest
+  docker run --rm ghcr.io/modeled-information-format/mif-rs:latest --version
   ```
 - [ ] **crates.io** package updated, and the served `.crate` attestation verifies:
   ```bash
   curl -fsSL -A 'release-check' \
     -O https://static.crates.io/crates/rust_template/rust_template-X.Y.Z.crate
-  gh attestation verify rust_template-X.Y.Z.crate --repo attested-delivery/rust-template
+  gh attestation verify rust_template-X.Y.Z.crate --repo modeled-information-format/mif-rs
   # Or check: https://crates.io/crates/rust_template
   ```
 - [ ] **Homebrew formula** updated in the tap (a `package-homebrew.yml` run appeared after Release completed)
 - [ ] Download and test a binary on at least one platform:
   ```bash
-  wget https://github.com/attested-delivery/rust-template/releases/download/vX.Y.Z/rust_template-X.Y.Z-linux-amd64
+  wget https://github.com/modeled-information-format/mif-rs/releases/download/vX.Y.Z/rust_template-X.Y.Z-linux-amd64
   chmod +x rust_template-X.Y.Z-linux-amd64
   ./rust_template-X.Y.Z-linux-amd64 --version
   ```
@@ -233,9 +233,9 @@ Docker images on GHCR are immutable by tag. To mitigate:
 
 1. **Point users to a previous version:**
    ```bash
-   docker pull ghcr.io/attested-delivery/rust-template:vPREVIOUS
+   docker pull ghcr.io/modeled-information-format/mif-rs:vPREVIOUS
    ```
-2. **Delete the package version** via GitHub UI: Packages > rust-template > Package versions > Delete
+2. **Delete the package version** via GitHub UI: Packages > mif-rs > Package versions > Delete
 3. **Re-tag `latest`** to the previous good version by re-pushing a known-good tag
 
 ---
@@ -320,13 +320,13 @@ Conventional commit prefixes still map cleanly onto changelog sections:
 
 ### GitHub Releases
 
-- **URL:** https://github.com/attested-delivery/rust-template/releases
+- **URL:** https://github.com/modeled-information-format/mif-rs/releases
 - **Platforms:** Linux (amd64, arm64), macOS (amd64, arm64), Windows (amd64)
 - **Attestations:** SLSA build provenance + CycloneDX SBOM attestation per binary, single `{bin}-{version}-checksums.txt` file; verify per [SECURITY.md](../../SECURITY.md#verifying-release-artifacts)
 
 ### Docker (GHCR)
 
-- **Registry:** `ghcr.io/attested-delivery/rust-template`
+- **Registry:** `ghcr.io/modeled-information-format/mif-rs`
 - **Platforms:** linux/amd64, linux/arm64
 - **Base image:** distroless/cc-debian12 (minimal attack surface)
 - **User:** nonroot:nonroot (unprivileged)
@@ -346,17 +346,17 @@ Conventional commit prefixes still map cleanly onto changelog sections:
 
 ```bash
 # From GitHub release (Linux)
-wget https://github.com/attested-delivery/rust-template/releases/download/vX.Y.Z/rust_template-X.Y.Z-linux-amd64
+wget https://github.com/modeled-information-format/mif-rs/releases/download/vX.Y.Z/rust_template-X.Y.Z-linux-amd64
 chmod +x rust_template-X.Y.Z-linux-amd64
 
 # From Docker
-docker pull ghcr.io/attested-delivery/rust-template:vX.Y.Z
+docker pull ghcr.io/modeled-information-format/mif-rs:vX.Y.Z
 
 # From crates.io
 cargo install rust_template
 
 # From source
-cargo install --git https://github.com/attested-delivery/rust-template
+cargo install --git https://github.com/modeled-information-format/mif-rs
 ```
 
 ---

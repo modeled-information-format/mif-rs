@@ -347,9 +347,9 @@ jobs:
       contents: read
       actions: read
       packages: read   # reusable's analyze job declares it (CodeQL pkg resolution)
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-sast-codeql.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/reusable-sast-codeql.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       languages: rust
       build-mode: none
@@ -362,9 +362,9 @@ jobs:
       contents: read
       security-events: write
       pull-requests: write   # reusable's (skipped) dependency-review job declares it
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-sca-osv.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/reusable-sca-osv.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       fail-on-severity: high
       scan-args: |-
@@ -378,9 +378,9 @@ jobs:
       security-events: write
       actions: read
       packages: read   # reusable's (skipped) image job declares it
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-trivy.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/reusable-trivy.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       scan-iac: true
 
@@ -393,13 +393,13 @@ jobs:
       id-token: write
       attestations: write
       contents: read
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       subject-name: ${{ needs.source.outputs.subject-name }}
       subject-digest: ${{ needs.source.outputs.subject-digest }}
-      predicate-type: https://attested-delivery.github.io/attestations/sca/v1
+      predicate-type: https://modeled-information-format.github.io/attestations/sca/v1
       predicate-artifact: ${{ needs.gate-sca.outputs.sarif-artifact }}
       predicate-filename: ${{ needs.gate-sca.outputs.sarif-filename }}
 
@@ -412,13 +412,13 @@ jobs:
       id-token: write
       attestations: write
       contents: read
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       subject-name: ${{ needs.source.outputs.subject-name }}
       subject-digest: ${{ needs.source.outputs.subject-digest }}
-      predicate-type: https://attested-delivery.github.io/attestations/iac-license/v1
+      predicate-type: https://modeled-information-format.github.io/attestations/iac-license/v1
       predicate-artifact: ${{ needs.gate-trivy.outputs.sarif-artifact }}
       predicate-filename: ${{ needs.gate-trivy.outputs.sarif-filename }}
 
@@ -431,13 +431,13 @@ jobs:
       id-token: write
       attestations: write
       contents: read
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-attest-scan.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       subject-name: ${{ needs.source.outputs.subject-name }}
       subject-digest: ${{ needs.source.outputs.subject-digest }}
-      predicate-type: https://attested-delivery.github.io/attestations/sast/v1
+      predicate-type: https://modeled-information-format.github.io/attestations/sast/v1
       predicate-artifact: ${{ needs.gate-sast.outputs.sarif-artifact }}
       predicate-filename: ${{ needs.gate-sast.outputs.sarif-filename }}
 
@@ -454,9 +454,9 @@ jobs:
       id-token: write
       attestations: write
       contents: read
-    # attested-delivery/.github main @ ca91728 (2026-06-23)
+    # modeled-information-format/.github main @ ca91728 (2026-06-23)
     uses: >-
-      attested-delivery/.github/.github/workflows/reusable-vex.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
+      modeled-information-format/.github/.github/workflows/reusable-vex.yml@ca91728c87beb08742325b4ed4d06fcfb261435b
     with:
       subject-name: ${{ needs.source.outputs.subject-name }}
       subject-digest: ${{ needs.source.outputs.subject-digest }}
@@ -490,8 +490,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           OWNER: ${{ github.repository_owner }}
-          SEAM: attested-delivery/.github/.github/workflows/reusable-attest-scan.yml
-          VEX_SIGNER: attested-delivery/.github/.github/workflows/reusable-vex.yml
+          SEAM: modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml
+          VEX_SIGNER: modeled-information-format/.github/.github/workflows/reusable-vex.yml
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -517,7 +517,7 @@ jobs:
                   gh attestation verify "$f" --owner "$OWNER" \
                     --signer-workflow "$SEAM" \
                     --predicate-type \
-                    "https://attested-delivery.github.io/attestations/${pt}/v1"
+                    "https://modeled-information-format.github.io/attestations/${pt}/v1"
                 done
                 echo "Verifying VEX disposition: ${f}"
                 gh attestation verify "$f" --owner "$OWNER" \

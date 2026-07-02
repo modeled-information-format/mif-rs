@@ -14,24 +14,26 @@ Instructions for AI coding agents working on this Rust project.
 
 ## File Structure
 
+Virtual Cargo workspace, 5 members under `crates/`:
+
 ```
 crates/
-  lib.rs           # Library entry point and public API
-  main.rs          # Binary entry point (optional)
-tests/             # Integration tests
-benches/           # Benchmarks (criterion)
-examples/          # Example programs
+  mif-core/src/      # Shared types: OntologyReference, EntityReference, EntityData, ConceptType
+  mif-schema/src/    # JSON Schema validation (vendored schemas under src/schemas/)
+  mif-ontology/src/  # Three-tier ontology extends-chain resolution
+  mif-cli/src/       # CLI binary (validate, ontology resolve)
+  mif-mcp/src/       # MCP server binary (same two operations as tools)
 ```
 
 ## Build and Test Commands
 
 ```bash
-cargo build                                    # Build
-cargo test --all-features                      # Run all tests
-cargo clippy --all-targets --all-features -- -D warnings  # Lint
-cargo fmt -- --check                           # Check formatting
-cargo doc --no-deps                            # Build docs
-cargo deny check                               # Supply chain audit
+cargo build --workspace                                              # Build
+cargo test --workspace --all-features                                # Run all tests
+cargo clippy --workspace --all-targets --all-features -- -D warnings # Lint
+cargo fmt --all -- --check                                           # Check formatting
+cargo doc --workspace --no-deps                                      # Build docs
+cargo deny check                                                     # Supply chain audit
 ```
 
 ## Code Rules
@@ -74,9 +76,9 @@ Include `# Examples` and `# Errors` sections:
 /// # Examples
 ///
 /// ```rust
-/// use rust_template::process;
+/// use mif_core::process;
 /// let result = process("data")?;
-/// # Ok::<(), rust_template::Error>(())
+/// # Ok::<(), mif_core::Error>(())
 /// ```
 pub fn process(input: &str) -> Result<Output, Error> {
     // implementation

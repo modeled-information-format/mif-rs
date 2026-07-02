@@ -10,7 +10,7 @@ Every release artifact carries cryptographic attestations, and nothing publishes
 **Workflows:**
 - `.github/workflows/release.yml` - SLSA build provenance and CycloneDX SBOM attestations on every release binary, verified fail-closed before the release is published
 - `.github/workflows/publish.yml` - provenance attestation on the `.crate` archive that crates.io actually serves
-- `.github/workflows/pipeline.yml` - container image signing and attestation via the centralized `attested-delivery/.github` signer workflow (SLSA Build L3), then fail-closed verification
+- `.github/workflows/pipeline.yml` - container image signing and attestation via the centralized `modeled-information-format/.github` signer workflow (SLSA Build L3), then fail-closed verification
 
 The canonical verification commands live in [SECURITY.md](../../SECURITY.md#verifying-release-artifacts). This document explains the architecture and expands on each artifact type.
 
@@ -26,7 +26,7 @@ The canonical verification commands live in [SECURITY.md](../../SECURITY.md#veri
 ### How It Works
 
 1. **Tag pushed** - `release.yml` triggers; binary name and version are resolved from `cargo metadata`
-2. **Build binaries** - 5 platform targets, named `{bin}-{version}-{platform}` (e.g. `rust_template-0.1.0-linux-amd64`)
+2. **Build binaries** - 5 platform targets, named `{bin}-{version}-{platform}` (e.g. `mif_core-0.1.0-linux-amd64`)
 3. **Attest provenance** - `actions/attest-build-provenance` attaches SLSA build provenance to each binary at build time
 4. **Generate + attest SBOM** - a CycloneDX SBOM is generated (`anchore/sbom-action`) and bound to every binary via `actions/attest-sbom`
 5. **Verify fail-closed** - a dedicated job runs `gh attestation verify` (provenance and SBOM) against every artifact; any failure blocks the release
@@ -43,17 +43,17 @@ Prerequisite: an authenticated `gh` CLI.
 gh release download v0.1.0 --repo USER/REPO
 
 # Verify SLSA build provenance
-gh attestation verify rust_template-0.1.0-linux-amd64 --repo USER/REPO
+gh attestation verify mif_core-0.1.0-linux-amd64 --repo USER/REPO
 
 # Verify the SBOM attestation
-gh attestation verify rust_template-0.1.0-linux-amd64 --repo USER/REPO \
+gh attestation verify mif_core-0.1.0-linux-amd64 --repo USER/REPO \
   --predicate-type https://cyclonedx.org/bom
 ```
 
 ### Verifying Checksums
 
 ```bash
-shasum -a 256 -c rust_template-0.1.0-checksums.txt
+shasum -a 256 -c mif_core-0.1.0-checksums.txt
 ```
 
 ### Verifying the Published Crate
@@ -62,8 +62,8 @@ shasum -a 256 -c rust_template-0.1.0-checksums.txt
 
 ```bash
 curl -fsSL -A 'release-check' \
-  -O https://static.crates.io/crates/rust_template/rust_template-0.1.0.crate
-gh attestation verify rust_template-0.1.0.crate --repo USER/REPO
+  -O https://static.crates.io/crates/mif_core/mif_core-0.1.0.crate
+gh attestation verify mif_core-0.1.0.crate --repo USER/REPO
 ```
 
 ### Keyless Signing
@@ -82,7 +82,7 @@ Attestations are signed keyless via Sigstore:
 
 ## Container Image Attestations
 
-Container images are **not** signed by this repository. They are signed and attested by the centralized signer workflow `attested-delivery/.github/.github/workflows/sign-and-attest.yml`, then verified fail-closed by `docker-verify` in `pipeline.yml`. Under SLSA Build L3 the signing identity is the central workflow, not this repo — so verification must assert both where the build ran (`--repo`) and who signed (`--signer-workflow`):
+Container images are **not** signed by this repository. They are signed and attested by the centralized signer workflow `modeled-information-format/.github/.github/workflows/sign-and-attest.yml`, then verified fail-closed by `docker-verify` in `pipeline.yml`. Under SLSA Build L3 the signing identity is the central workflow, not this repo — so verification must assert both where the build ran (`--repo`) and who signed (`--signer-workflow`):
 
 ```bash
 # Resolve the digest for a tag
@@ -92,12 +92,12 @@ DIGEST=$(gh api 'users/USER/packages/container/REPO/versions?per_page=20' \
 # SLSA provenance — --repo alone fails by design
 gh attestation verify "oci://ghcr.io/USER/REPO@${DIGEST}" \
   --repo USER/REPO \
-  --signer-workflow attested-delivery/.github/.github/workflows/sign-and-attest.yml \
+  --signer-workflow modeled-information-format/.github/.github/workflows/sign-and-attest.yml \
   --predicate-type https://slsa.dev/provenance/v1
 
 # Keyless signature
 cosign verify "ghcr.io/USER/REPO@${DIGEST}" \
-  --certificate-identity-regexp '^https://github.com/attested-delivery/\.github/\.github/workflows/sign-and-attest\.yml@.*$' \
+  --certificate-identity-regexp '^https://github.com/modeled-information-format/\.github/\.github/workflows/sign-and-attest\.yml@.*$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
@@ -121,7 +121,7 @@ The central signer also attaches SBOM and vulnerability-report attestations; see
 |---|---|---|
 | Release binaries + SBOM | This repo's `release.yml` | `gh attestation verify <file> --repo USER/REPO` |
 | Published `.crate` | This repo's `publish.yml` | `gh attestation verify <crate> --repo USER/REPO` |
-| Container images | Central `attested-delivery/.github` signer (SLSA Build L3) | `gh attestation verify oci://... --repo USER/REPO --signer-workflow ...` |
+| Container images | Central `modeled-information-format/.github` signer (SLSA Build L3) | `gh attestation verify oci://... --repo USER/REPO --signer-workflow ...` |
 
 No `--signer-workflow` flag is needed for binaries and crates — they are attested by this repository's own workflows.
 
@@ -129,11 +129,11 @@ No `--signer-workflow` flag is needed for binaries and crates — they are attes
 
 ```bash
 # Print the full verification result, including the provenance statement
-gh attestation verify rust_template-0.1.0-linux-amd64 --repo USER/REPO \
+gh attestation verify mif_core-0.1.0-linux-amd64 --repo USER/REPO \
   --format json | jq '.[0].verificationResult.statement'
 
 # Extract specific fields
-gh attestation verify rust_template-0.1.0-linux-amd64 --repo USER/REPO \
+gh attestation verify mif_core-0.1.0-linux-amd64 --repo USER/REPO \
   --format json | jq '.[0].verificationResult.statement.predicate.buildDefinition'
 ```
 
@@ -146,8 +146,8 @@ Verify a binary before adding it to an image:
 ```dockerfile
 # Verify provenance before adding to image (gh CLI in the build stage)
 RUN gh release download v0.1.0 --repo USER/REPO \
-      --pattern 'rust_template-0.1.0-linux-amd64' && \
-    gh attestation verify rust_template-0.1.0-linux-amd64 --repo USER/REPO
+      --pattern 'mif_core-0.1.0-linux-amd64' && \
+    gh attestation verify mif_core-0.1.0-linux-amd64 --repo USER/REPO
 ```
 
 ### CI Consumers
@@ -177,7 +177,7 @@ For organizations with existing PKI, GPG signatures can be layered on top of att
 
 **Verify GPG:**
 ```bash
-gpg --verify rust-template.asc rust-template
+gpg --verify mif-rs.asc mif-rs
 ```
 
 ## Security Best Practices
@@ -212,7 +212,7 @@ gpg --verify rust-template.asc rust-template
 
 ```bash
 # Inspect what attestations exist for the artifact
-gh attestation verify rust_template-0.1.0-linux-amd64 --repo USER/REPO --format json
+gh attestation verify mif_core-0.1.0-linux-amd64 --repo USER/REPO --format json
 ```
 
 **Common issues:**

@@ -4,7 +4,7 @@ diataxis_type: how-to
 
 # Dependency Updates
 
-Runbook for managing Cargo and GitHub Actions dependencies in rust-template.
+Runbook for managing Cargo and GitHub Actions dependencies in mif-rs.
 
 ---
 
@@ -20,7 +20,7 @@ Dependabot is configured in `.github/dependabot.yml` with two ecosystems:
 | PR limit | 10 open PRs |
 | Commit prefix | `chore(deps)` |
 | Labels | `dependencies`, `rust` |
-| Reviewer | `attested-delivery` |
+| Reviewer | `modeled-information-format` |
 
 **Grouped updates** (minor + patch combined into single PRs):
 
@@ -38,7 +38,7 @@ Dependabot is configured in `.github/dependabot.yml` with two ecosystems:
 | PR limit | 5 open PRs |
 | Commit prefix | `chore(deps)` |
 | Labels | `dependencies`, `github-actions` |
-| Reviewer | `attested-delivery` |
+| Reviewer | `modeled-information-format` |
 
 **Grouped updates:** All actions grouped together for minor + patch updates.
 

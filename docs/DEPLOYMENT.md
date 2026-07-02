@@ -3,7 +3,7 @@ diataxis_type: how-to
 ---
 # Deployment Guide
 
-This document provides comprehensive deployment instructions for the rust-template project.
+This document provides comprehensive deployment instructions for the mif-rs project.
 
 ## Overview
 
@@ -70,7 +70,7 @@ Pushing the tag automatically triggers:
 
 1. **Release Workflow** (`release.yml`)
    - Resolves the binary name and version from `cargo metadata`
-   - Builds binaries for all 5 platforms, named `rust_template-<version>-<platform>`
+   - Builds binaries for all 5 platforms, named `mif_core-<version>-<platform>`
    - Attaches SLSA build provenance and a CycloneDX SBOM attestation to every binary
    - Verifies every attestation fail-closed, then creates the GitHub release with auto-generated notes and a checksums file
 
@@ -91,32 +91,32 @@ Pushing the tag automatically triggers:
 
 ### GitHub Releases
 
-**Access:** https://github.com/attested-delivery/rust-template/releases
+**Access:** https://github.com/modeled-information-format/mif-rs/releases
 
 **Artifacts** (version embedded in every name):
-- `rust_template-<version>-linux-amd64` - Linux x86_64
-- `rust_template-<version>-linux-arm64` - Linux ARM64
-- `rust_template-<version>-macos-amd64` - macOS x86_64
-- `rust_template-<version>-macos-arm64` - macOS ARM64 (Apple Silicon)
-- `rust_template-<version>-windows-amd64.exe` - Windows x86_64
-- `rust_template-<version>-sbom.cdx.json` - CycloneDX SBOM
-- `rust_template-<version>-checksums.txt` - SHA-256 checksums
+- `mif_core-<version>-linux-amd64` - Linux x86_64
+- `mif_core-<version>-linux-arm64` - Linux ARM64
+- `mif_core-<version>-macos-amd64` - macOS x86_64
+- `mif_core-<version>-macos-arm64` - macOS ARM64 (Apple Silicon)
+- `mif_core-<version>-windows-amd64.exe` - Windows x86_64
+- `mif_core-<version>-sbom.cdx.json` - CycloneDX SBOM
+- `mif_core-<version>-checksums.txt` - SHA-256 checksums
 
 **Download and Verify Example:**
 
 ```bash
 # Linux
-wget https://github.com/attested-delivery/rust-template/releases/download/v0.1.0/rust_template-0.1.0-linux-amd64
-gh attestation verify rust_template-0.1.0-linux-amd64 --repo attested-delivery/rust-template
-chmod +x rust_template-0.1.0-linux-amd64
-./rust_template-0.1.0-linux-amd64 --version
+wget https://github.com/modeled-information-format/mif-rs/releases/download/v0.1.0/mif_core-0.1.0-linux-amd64
+gh attestation verify mif_core-0.1.0-linux-amd64 --repo modeled-information-format/mif-rs
+chmod +x mif_core-0.1.0-linux-amd64
+./mif_core-0.1.0-linux-amd64 --version
 ```
 
 Full verification commands (provenance, SBOM, checksums, container images, crate) are in [SECURITY.md](../SECURITY.md#verifying-release-artifacts). For *why* releases are attested and how the attestation chain is structured, see [Signed Releases & SLSA Provenance](security/SIGNED-RELEASES.md).
 
 ### Docker (GitHub Container Registry)
 
-**Registry:** ghcr.io/attested-delivery/rust-template
+**Registry:** ghcr.io/modeled-information-format/mif-rs
 
 **Supported Platforms:**
 - linux/amd64
@@ -126,15 +126,15 @@ Full verification commands (provenance, SBOM, checksums, container images, crate
 
 ```bash
 # Latest version
-docker pull ghcr.io/attested-delivery/rust-template:latest
-docker run --rm ghcr.io/attested-delivery/rust-template:latest --version
+docker pull ghcr.io/modeled-information-format/mif-rs:latest
+docker run --rm ghcr.io/modeled-information-format/mif-rs:latest --version
 
 # Specific version
-docker pull ghcr.io/attested-delivery/rust-template:v0.1.0
-docker run --rm ghcr.io/attested-delivery/rust-template:v0.1.0 --version
+docker pull ghcr.io/modeled-information-format/mif-rs:v0.1.0
+docker run --rm ghcr.io/modeled-information-format/mif-rs:v0.1.0 --version
 
 # With volumes
-docker run --rm -v $(pwd):/data ghcr.io/attested-delivery/rust-template:latest
+docker run --rm -v $(pwd):/data ghcr.io/modeled-information-format/mif-rs:latest
 ```
 
 **Image Details:**
@@ -145,26 +145,26 @@ docker run --rm -v $(pwd):/data ghcr.io/attested-delivery/rust-template:latest
 
 ### crates.io
 
-**Package:** https://crates.io/crates/rust_template
+**Package:** https://crates.io/crates/mif_core
 
 **Install:**
 
 ```bash
 # Latest version
-cargo install rust_template
+cargo install mif_core
 
 # Specific version
-cargo install rust_template@0.1.0
+cargo install mif_core@0.1.0
 
 # From source
-cargo install --git https://github.com/attested-delivery/rust-template
+cargo install --git https://github.com/modeled-information-format/mif-rs
 ```
 
 **Use in Project:**
 
 ```toml
 [dependencies]
-rust_template = "0.1"
+mif_core = "0.1"
 ```
 
 ## Versioning
@@ -215,7 +215,7 @@ gh release delete v0.1.1
 Images are immutable; use previous version tags:
 
 ```bash
-docker pull ghcr.io/attested-delivery/rust-template:v0.1.0
+docker pull ghcr.io/modeled-information-format/mif-rs:v0.1.0
 ```
 
 ### crates.io
@@ -239,7 +239,7 @@ docker pull ghcr.io/attested-delivery/rust-template:v0.1.0
 ### GitHub Actions
 
 Monitor workflow runs:
-- Actions tab: https://github.com/attested-delivery/rust-template/actions
+- Actions tab: https://github.com/modeled-information-format/mif-rs/actions
 
 ### Security Audits
 

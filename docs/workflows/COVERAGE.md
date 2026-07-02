@@ -223,8 +223,8 @@ Verify: the Codecov dashboard shows the uploaded report.
 git diff --name-only main | grep '\.rs$' | xargs cargo llvm-cov --include-ffi
 
 # Generate profdata for analysis
-cargo llvm-cov --no-report --profdata-output rust_template.profdata
-llvm-profdata show rust_template.profdata
+cargo llvm-cov --no-report --profdata-output mif_core.profdata
+llvm-profdata show mif_core.profdata
 
 # Include documentation tests
 cargo llvm-cov --doc

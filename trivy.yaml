@@ -1,7 +1,7 @@
 # Trivy configuration — auto-loaded from the repo root by the Trivy CLI
 # (no --config flag needed). Governs the filesystem scan run by the
 # `trivy` job in .github/workflows/quality-gates.yml, which calls the
-# attested-delivery/.github reusable with scanners=misconfig,license.
+# modeled-information-format/.github reusable with scanners=misconfig,license.
 #
 # Why skip `site/`:
 #   `site/` is the Astro documentation site — a private ("private": true),

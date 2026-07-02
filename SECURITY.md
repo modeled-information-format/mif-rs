@@ -11,7 +11,7 @@
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-Instead, please report them via [GitHub Security Advisories](https://github.com/attested-delivery/rust-template/security/advisories/new).
+Instead, please report them via [GitHub Security Advisories](https://github.com/modeled-information-format/mif-rs/security/advisories/new).
 
 ### What to Include
 
@@ -37,7 +37,7 @@ We follow responsible disclosure practices:
 
 ### Scope
 
-This policy applies to the rust_template crate and its published artifacts. Third-party dependencies
+This policy applies to the mif_core crate and its published artifacts. Third-party dependencies
 are managed via `cargo-deny` and audited regularly through our CI pipeline.
 
 ## Security Measures
@@ -55,14 +55,14 @@ This project employs several security practices:
 ## Verifying Release Artifacts
 
 Container images are signed and attested by the centralized signer workflow
-`attested-delivery/.github/.github/workflows/sign-and-attest.yml` (SLSA Build L3:
+`modeled-information-format/.github/.github/workflows/sign-and-attest.yml` (SLSA Build L3:
 the signing identity is the central workflow, not this repository).
 Prerequisites: `gh` CLI authenticated, `cosign` installed.
 
 ### Resolve the digest for a tag
 
 ```bash
-DIGEST=$(gh api 'users/attested-delivery/packages/container/rust-template/versions?per_page=100' \
+DIGEST=$(gh api 'users/modeled-information-format/packages/container/mif-rs/versions?per_page=100' \
   --jq '[.[] | select((.metadata.container.tags // []) | index("<tag>"))][0].name')
 ```
 
@@ -72,26 +72,26 @@ DIGEST=$(gh api 'users/attested-delivery/packages/container/rust-template/versio
 signing identity. Both are required — `--repo` alone fails by design.
 
 ```bash
-gh attestation verify "oci://ghcr.io/attested-delivery/rust-template@${DIGEST}" \
-  --repo attested-delivery/rust-template \
-  --signer-workflow attested-delivery/.github/.github/workflows/sign-and-attest.yml \
+gh attestation verify "oci://ghcr.io/modeled-information-format/mif-rs@${DIGEST}" \
+  --repo modeled-information-format/mif-rs \
+  --signer-workflow modeled-information-format/.github/.github/workflows/sign-and-attest.yml \
   --predicate-type https://slsa.dev/provenance/v1
 ```
 
 ### Keyless signature
 
 ```bash
-cosign verify "ghcr.io/attested-delivery/rust-template@${DIGEST}" \
-  --certificate-identity-regexp '^https://github.com/attested-delivery/\.github/\.github/workflows/sign-and-attest\.yml@.*$' \
+cosign verify "ghcr.io/modeled-information-format/mif-rs@${DIGEST}" \
+  --certificate-identity-regexp '^https://github.com/modeled-information-format/\.github/\.github/workflows/sign-and-attest\.yml@.*$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 ### SBOM and vulnerability report attestations
 
 ```bash
-cosign verify-attestation "ghcr.io/attested-delivery/rust-template@${DIGEST}" \
+cosign verify-attestation "ghcr.io/modeled-information-format/mif-rs@${DIGEST}" \
   --type cyclonedx \
-  --certificate-identity-regexp '^https://github.com/attested-delivery/\.github/\.github/workflows/sign-and-attest\.yml@.*$' \
+  --certificate-identity-regexp '^https://github.com/modeled-information-format/\.github/\.github/workflows/sign-and-attest\.yml@.*$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 # Vulnerability report: same command with
 #   --type "https://in-toto.io/attestation/vulns/v0.1"
@@ -102,16 +102,16 @@ cosign verify-attestation "ghcr.io/attested-delivery/rust-template@${DIGEST}" \
 Binaries attached to a GitHub Release carry SLSA build provenance and a
 CycloneDX SBOM attestation, both attested by this repository's own
 release workflow (no `--signer-workflow` needed). Artifact names embed
-the version: `rust_template-<version>-<platform>`.
+the version: `mif_core-<version>-<platform>`.
 
 ```bash
-gh release download v<X.Y.Z> --repo attested-delivery/rust-template
-gh attestation verify rust_template-<X.Y.Z>-linux-amd64 \
-  --repo attested-delivery/rust-template
-gh attestation verify rust_template-<X.Y.Z>-linux-amd64 \
-  --repo attested-delivery/rust-template \
+gh release download v<X.Y.Z> --repo modeled-information-format/mif-rs
+gh attestation verify mif_core-<X.Y.Z>-linux-amd64 \
+  --repo modeled-information-format/mif-rs
+gh attestation verify mif_core-<X.Y.Z>-linux-amd64 \
+  --repo modeled-information-format/mif-rs \
   --predicate-type https://cyclonedx.org/bom
-shasum -a 256 -c rust_template-<X.Y.Z>-checksums.txt
+shasum -a 256 -c mif_core-<X.Y.Z>-checksums.txt
 ```
 
 A passing `gh attestation verify` is the contract: it confirms the artifact's
@@ -129,8 +129,8 @@ returned attestation may surface the `-dev` subject. To pin the release-specific
 one, filter by the tag ref:
 
 ```bash
-gh attestation verify rust_template-<X.Y.Z>-linux-amd64 \
-  --repo attested-delivery/rust-template --format json \
+gh attestation verify mif_core-<X.Y.Z>-linux-amd64 \
+  --repo modeled-information-format/mif-rs --format json \
 | jq -r '.[] | select(.verificationResult.signature.certificate.buildSignerURI
         | endswith("release.yml@refs/tags/v<X.Y.Z>"))
         | .verificationResult.statement.subject[0].name'
@@ -147,19 +147,19 @@ insufficient. Verify one signer/predicate per command:
 
 ```bash
 # SAST (CodeQL), SCA (OSV), IaC/license (Trivy) verdicts over the source snapshot.
-# gh release download v<X.Y.Z> --repo attested-delivery/rust-template first.
-SUBJECT=rust_template-<X.Y.Z>-source.tar.gz
+# gh release download v<X.Y.Z> --repo modeled-information-format/mif-rs first.
+SUBJECT=mif_core-<X.Y.Z>-source.tar.gz
 for PT in sast sca iac-license; do
-  gh attestation verify "$SUBJECT" --owner attested-delivery \
-    --signer-workflow attested-delivery/.github/.github/workflows/reusable-attest-scan.yml \
-    --predicate-type "https://attested-delivery.github.io/attestations/${PT}/v1"
+  gh attestation verify "$SUBJECT" --owner modeled-information-format \
+    --signer-workflow modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml \
+    --predicate-type "https://modeled-information-format.github.io/attestations/${PT}/v1"
 done
 
 # Container-scan (Trivy image) verdict over the image digest.
-gh attestation verify "oci://ghcr.io/attested-delivery/rust-template@${DIGEST}" \
-  --owner attested-delivery \
-  --signer-workflow attested-delivery/.github/.github/workflows/reusable-attest-scan.yml \
-  --predicate-type https://attested-delivery.github.io/attestations/container-scan/v1
+gh attestation verify "oci://ghcr.io/modeled-information-format/mif-rs@${DIGEST}" \
+  --owner modeled-information-format \
+  --signer-workflow modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml \
+  --predicate-type https://modeled-information-format.github.io/attestations/container-scan/v1
 ```
 
 A passing verification proves the gate **ran and recorded a verdict** bound to
@@ -182,6 +182,6 @@ actually serves:
 
 ```bash
 curl -fsSL -A 'release-check' \
-  -O https://static.crates.io/crates/rust_template/rust_template-<X.Y.Z>.crate
-gh attestation verify rust_template-<X.Y.Z>.crate --repo attested-delivery/rust-template
+  -O https://static.crates.io/crates/mif_core/mif_core-<X.Y.Z>.crate
+gh attestation verify mif_core-<X.Y.Z>.crate --repo modeled-information-format/mif-rs
 ```

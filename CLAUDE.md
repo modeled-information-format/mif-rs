@@ -4,7 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a **GitHub template repository** for Rust crates. The crate name is `rust_template` (Rust edition 2024, MSRV 1.92). It ships both a library (`crates/lib.rs`) and a binary (`crates/main.rs`). Source lives in `crates/`, not the standard `src/` directory.
+`mif-rs` is a Cargo **workspace** implementing the [MIF (Modeled Information
+Format)](https://mif-spec.dev) specification in Rust (edition 2024, MSRV
+1.92). Five members, in dependency order:
+
+| Crate | Kind | Purpose |
+|---|---|---|
+| `mif-core` | library | Shared types: `OntologyReference`, `EntityReference`, `EntityData`, `ConceptType` |
+| `mif-schema` | library | JSON Schema validation of MIF documents/citations/ontology definitions |
+| `mif-ontology` | library | Three-tier ontology `extends` chain resolution |
+| `mif-cli` | binary | CLI: `mif-cli validate <file>`, `mif-cli ontology resolve <id> --ontologies-dir <dir>` |
+| `mif-mcp` | binary | MCP server exposing the same two operations as tools |
+
+Source for each crate lives at `crates/<name>/src/`. This is a **virtual
+workspace** (the root `Cargo.toml` has no `[package]` section) — shared
+lints live in `[workspace.lints]`, shared release profiles in the root
+`[profile.*]` tables, and every member opts in via `[lints] workspace = true`.
 
 ---
 
@@ -40,81 +55,54 @@ All documentation in this project follows the [Diátaxis framework](https://diat
 
 ```bash
 just                  # List all recipes
-just check            # Full CI check (fmt + clippy + test + doc + deny)
-just build            # Debug build
-just build-release    # Release build
-just run              # Run the binary
-just template-sync    # Sync shared tooling from rust-template upstream
+just check            # Full CI check (fmt + clippy + test + doc + deny), workspace-wide
+just build            # Debug build (workspace)
+just build-release    # Release build (workspace)
 ```
 
 <details>
 <summary>Raw cargo equivalents</summary>
 
 ```bash
-cargo build                                              # Build
-cargo test --all-features                                # Run all tests
-cargo test test_name                                     # Run specific test
-cargo test -- --nocapture                                # Run tests with stdout
-cargo clippy --all-targets --all-features -- -D warnings # Lint (CI uses -D warnings)
-cargo fmt                                                # Format
-cargo fmt -- --check                                     # Check formatting
-cargo deny check                                         # Supply chain audit
-cargo doc --no-deps --all-features                       # Build docs
-cargo +nightly miri test                                 # UB detection
+cargo build --workspace
+cargo test --workspace --all-features
+cargo test -p <crate> test_name
+cargo test --workspace -- --nocapture
+cargo clippy --workspace --all-targets --all-features -- -D warnings  # CI uses -D warnings
+cargo fmt --all
+cargo fmt --all -- --check
+cargo deny check
+cargo doc --workspace --no-deps --all-features
+cargo +nightly miri test -p <crate>
 
 # Full CI check (run before pushing)
-cargo fmt -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test && cargo doc --no-deps && cargo deny check
+cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo test --workspace --all-features && cargo doc --workspace --no-deps && cargo deny check
 ```
 
 </details>
 
-### Run Tests
+### Add a New Public Type or Function
 
-```bash
-just test             # All tests (unit + integration + doc)
-just test-verbose     # Tests with stdout visible
-just test-single NAME # Single test by name
-just coverage         # LCOV coverage report
-just coverage-html    # HTML coverage report
-just msrv             # Check against MSRV 1.92
-just miri             # Miri undefined behavior detection
-just mutants          # Mutation testing
-```
-
-### Lint and Format
-
-```bash
-just fmt              # Format code
-just fmt-check        # Check formatting (no modify)
-just lint             # Clippy with CI-equivalent flags
-just lint-fix         # Clippy auto-fix
-just deny             # Supply chain audit
-just audit            # Advisory database check
-```
-
-### Add a New Public Function
-
-1. Add the function in `crates/lib.rs` (or a module under `crates/`).
+1. Add it in the appropriate crate under `crates/<name>/src/`. Respect the
+   dependency chain — `mif-core` has no internal deps; `mif-schema` depends
+   only on `mif-core`; `mif-ontology` depends on both; `mif-cli`/`mif-mcp`
+   depend on whichever libraries they call, directly.
 2. Annotate with `#[must_use]` if it returns a value without side effects.
-3. Use `const fn` if the body permits.
-4. Write a doc comment with `# Arguments`, `# Returns`, `# Errors` (if fallible), and `# Examples`.
+3. Use `const fn` only where the compiler actually allows it — see "Why Not
+   All Builders Are `const fn`" below; a struct-field reassignment that
+   drops an `Option<String>` (or any type with a non-trivial `Drop`) cannot
+   be `const`, even via `mut self`.
+4. Write a doc comment: brief summary, `# Errors` (if fallible), `# Examples`
+   where practical.
 5. Add a unit test in the `#[cfg(test)] mod tests` block within the same file.
-6. Add an integration test in `tests/integration_test.rs`.
-7. Run `just check` before committing.
+6. Run `just check` before committing.
 
 ### Add a New Error Variant
 
-1. Add the variant to the `Error` enum in `crates/lib.rs`.
+1. Add the variant to the relevant crate's error enum (`mif_schema::MifSchemaError`, `mif_ontology::OntologyError`), derived with `thiserror::Error`.
 2. Include a `#[error("...")]` format string with meaningful context.
-3. Prefer structured variants (named fields) over tuple variants when there are multiple pieces of context.
-4. Add a display test in the `test_error_display` test.
-
-### Add a Builder Field to Config
-
-1. Add the field to the `Config` struct with a doc comment.
-2. Set a sensible default in `Config::new()`.
-3. Add a `with_<field>(mut self, value: T) -> Self` method marked `#[must_use]` and `const fn`.
-4. Add a test case in `test_config_builder` and `test_config_default`.
+3. Prefer structured variants (named fields, e.g. `{ path: String, source: ... }`) over tuple variants when there are multiple pieces of context.
+4. Add a test exercising the new failure path.
 
 ---
 
@@ -126,87 +114,65 @@ just audit            # Advisory database check
 
 | Path | Purpose |
 |---|---|
-| `crates/lib.rs` | Library root: `Error` (thiserror), `Result<T>`, `Config` (builder), `add()`, `divide()` |
-| `crates/main.rs` | Binary entry point: `main() -> ExitCode`, delegates to `run() -> Result` |
-| `tests/integration_test.rs` | Integration tests including property-based tests (proptest) |
-| `clippy.toml` | Clippy thresholds and test-mode exemptions |
-| `rustfmt.toml` | Formatter settings (stable options active, nightly options commented) |
-| `deny.toml` | Supply chain policy: licenses, bans, source restrictions |
+| `crates/mif-core/src/{concept,entity,ontology}.rs` | `ConceptType`; `EntityReference`/`EntityId`/`EntityType`/`KnownEntityType`; `OntologyReference` |
+| `crates/mif-schema/src/lib.rs` | Vendored-schema validators (`validate_document`, `validate_citation`, `validate_ontology_definition`) |
+| `crates/mif-schema/src/schemas/` | Vendored copies of `mif.schema.json`, `citation.schema.json`, `ontology.schema.json`, `definitions/entity-reference.schema.json`, synced from the `MIF` repo's `schema/` |
+| `crates/mif-ontology/src/lib.rs` | `OntologyMetadata`, `parse_definition`, `load_corpus_from_dir`, `resolve_chain` |
+| `crates/mif-cli/src/main.rs`, `crates/mif-mcp/src/main.rs` | Thin binaries calling straight into the library crates' public functions |
+| `clippy.toml` | Clippy thresholds and test-mode exemptions (workspace-root, applies to all members) |
+| `rustfmt.toml` | Formatter settings (workspace-root) |
+| `deny.toml` | Supply chain policy: licenses, bans, source restrictions (workspace-root) |
 | `justfile` | Local task runner recipes (CI parity) |
 
 ### Error Handling
 
-- **Crate error type**: `Error` enum derived with `thiserror::Error`.
-- **Result alias**: `pub type Result<T> = std::result::Result<T, Error>`.
-- **Propagation**: use `?` operator. Never `unwrap()`, `expect()`, or `panic!()` in library code.
-- **Binary**: `main()` returns `ExitCode`; delegates to `run() -> Result`. On `Err`, the binary renders the error to stderr in the format selected by `--format` / TTY (below).
-
-#### Dual-Consumer Error Output (RFC 9457)
-
-The crate emits errors for two consumers from one `Error` value: the human (the `thiserror` `Display`, unchanged) and the LLM agent (a serializable `application/problem+json` envelope). The envelope type is `ProblemDetails` in `crates/problem.rs`, re-exported from the crate root alongside `Applicability`, `CodeAction`, `SuggestedFix`, and `OutputFormat`. Map any error with `Error::to_problem()`; render for a format with `Error::render(OutputFormat)`.
-
-**Envelope members** (`ProblemDetails`):
-
-| Field | RFC 9457 role | Notes |
-|---|---|---|
-| `type` | standard | Stable, version-embedded URI (`.../v1`). |
-| `title` | standard | Short summary, stable per `type`. |
-| `status` | standard | Numeric status class. |
-| `detail` | standard | This-occurrence text; equals the `Display` string. |
-| `instance` | standard | `urn:` occurrence reference. |
-| `retry_after` | agent extension | Delta-seconds, or `null` (serialized) on non-transient errors. |
-| `suggested_fix` | agent extension | `{ description, applicability }`, or `null`. |
-| `code_actions` | agent extension | Array of LSP-`CodeAction`-shaped `{ title, kind, applicability }`. |
-| `exit_code` | optional extension | Process exit code; omitted from JSON when absent. |
-
-**Applicability markers** (on every `suggested_fix` and `code_action`): `machine_applicable` (auto-apply), `maybe_incorrect` (escalate to human), `has_placeholders` (fill slots first), `unspecified` (default; treat as `maybe_incorrect`).
-
-**Type URIs** (one per variant, distinct, versioned): `InvalidInput` → `https://attested-delivery.github.io/rust-template/errors/invalid-input/v1`; `OperationFailed` → `https://attested-delivery.github.io/rust-template/errors/operation-failed/v1`. A breaking change ships a new version rather than redefining the existing one. The base is a single configurable constant, `ERROR_TYPE_BASE_URI` (derived URI = `{base}/{slug}/{version}`); adopters point it at their own docs host. Each URI is dereferenceable — it resolves to a per-type reference page under `docs/reference/errors/` (the canonical source). The `instance` URN namespace tracks `CARGO_PKG_NAME`.
-
-**Format selection** (`OutputFormat::select(explicit, is_terminal)`): JSON when `--format=json` or (no flag and stderr is not a TTY); pretty otherwise. Pretty output is byte-identical to the historical `Error: {e}` line.
-
-For the rationale, see the **Dual-Consumer Error Output** explanation doc (`docs/explanation/error-architecture.md`).
+- Each library crate owns its own error enum, derived with `thiserror::Error` (`MifSchemaError`, `OntologyError`). No shared top-level error type across the workspace — each crate's errors are scoped to what it actually does.
+- **Propagation**: use `?`. Never `unwrap()`, `expect()`, or `panic!()` in library code (`crates/mif-core`, `mif-schema`, `mif-ontology`) — all three are `deny`d workspace-wide via `[workspace.lints.clippy]`.
+- **Binaries** (`mif-cli`, `mif-mcp`): `main()` returns `ExitCode`/`anyhow::Result` respectively; both render errors as plain text to stdout/stderr, exempting themselves from `print_stdout`/`print_stderr` via `#![allow(...)]` at the crate root (a CLI/server naturally needs to print — see "Lint Configuration" below).
 
 ### Ownership and Borrowing
 
 - Prefer `&str` over `String` in function parameters.
 - Prefer `&[T]` over `Vec<T>` in function parameters.
-- Use `Cow<'_, str>` when a function may or may not allocate.
 - Pass large structs by reference; pass `Copy` types by value.
 - Avoid unnecessary `.clone()` — if you need ownership, take owned types in the signature.
 
 ### Type Design
 
-- Use newtypes to enforce domain invariants (e.g., `struct Port(u16)` over bare `u16`).
-- Derive `Debug` on all types. Derive `Clone`, `PartialEq`, `Eq`, `Hash` when semantically correct.
-- Use `#[non_exhaustive]` on public enums and structs that may grow.
-- Prefer `enum` for closed sets, `trait` for open extension.
+- Derive `Debug` on all types. Derive `Clone`, `PartialEq`, `Eq`, `Hash` when semantically correct (clippy's `derive_partial_eq_without_eq` is a hard error — if you derive `PartialEq`, derive `Eq` too whenever the fields allow it).
+- Prefer `enum` for closed sets. `mif_core::EntityType` uses a `Known(..) | Custom(String)` pattern (via `#[serde(untagged)]`) for schema fields that are a closed enum *or* a pattern-matched custom string — this preserves round-trip fidelity for values the closed variant doesn't cover; don't use `#[serde(other)]` for this, it discards the original string.
+- `HashMap`-accepting public functions should be generic over `S: std::hash::BuildHasher` (clippy's `implicit_hasher`), e.g. `mif_ontology::resolve_chain<S: BuildHasher>(id: &str, corpus: &HashMap<String, OntologyMetadata, S>)`.
 
 ### Builder Pattern
 
-This project uses consuming-self builders with `const fn`:
+Consuming-self builders, matching this workspace's convention:
 
 ```rust
 #[must_use]
-pub const fn with_field(mut self, value: T) -> Self {
+pub fn with_field(mut self, value: T) -> Self {
     self.field = value;
     self
 }
 ```
 
-- `Config::new()` is `const fn` and `#[must_use]`.
-- `Default` impl delegates to `new()`.
-- Every builder method is `const fn` and `#[must_use]`.
+**Not always `const fn`.** Reassigning `self.field` when the field's type
+has a non-trivial `Drop` (e.g. `Option<String>`, `Option<SomeEnumHoldingAString>`)
+requires the compiler to drop the old value first, and `String`'s destructor
+is not const-evaluable in stable Rust — this fails to compile as `const fn`
+even though it looks identical to a builder over `Copy` fields. Fresh struct
+*construction* (`Self { field: None, .. }` in a `new()`) has no old value to
+drop and stays `const fn`-able; *mutation* of an existing `self`'s
+String-bearing field does not. Mark `const` only where it actually compiles
+— don't assume it from this pattern alone.
 
 ### Const and Must-Use Annotations
 
 - `#[must_use]` on all pure functions that return a value.
-- `const fn` wherever the compiler allows it.
-- Both annotations on builder methods.
+- `const fn` wherever the compiler allows it (see caveat above).
 
 ### Lint Configuration
 
-Clippy runs with **pedantic + nursery + cargo** lint groups. All are set to `warn` with priority -1.
+Set in the workspace root `Cargo.toml`'s `[workspace.lints]` (not per-crate); every member opts in via `[lints] workspace = true`. Clippy runs with **pedantic + nursery + cargo** lint groups, all `warn` priority -1.
 
 **Denied lints** (hard errors):
 
@@ -218,10 +184,10 @@ Clippy runs with **pedantic + nursery + cargo** lint groups. All are set to `war
 | `todo` | No placeholder code |
 | `unimplemented` | No placeholder code |
 | `dbg_macro` | No debug prints in production |
-| `print_stdout` | Use logging; binary exempts itself with `#[allow]` |
-| `print_stderr` | Use logging; binary exempts itself with `#[allow]` |
+| `print_stdout` | Use logging; binaries exempt themselves with `#![allow(...)]` at the crate root |
+| `print_stderr` | Use logging; binaries exempt themselves with `#![allow(...)]` at the crate root |
 
-**Allowed lints**:
+**Allowed lints** (set explicitly in `[workspace.lints.clippy]`):
 
 | Lint | Reason |
 |---|---|
@@ -230,8 +196,11 @@ Clippy runs with **pedantic + nursery + cargo** lint groups. All are set to `war
 | `module_name_repetitions` | Common in Rust API design |
 | `must_use_candidate` | Applied manually where meaningful |
 | `redundant_pub_crate` | Allow `pub(crate)` for clarity |
+| `multiple_crate_versions` | Inherent to a dependency graph pulling in `jsonschema`/`rmcp`/`tokio`; not a code-quality signal about this workspace's own code |
 
-**Clippy thresholds** (from `clippy.toml`):
+**Framework-imposed exceptions** (documented inline where used, not workspace-wide): `mif-mcp`'s `#[tool]`-annotated methods require an `&self` receiver for `rmcp`'s dispatch mechanism even when unused — `#[allow(clippy::unused_self)]` on that `impl` block, with a comment explaining why.
+
+**Clippy thresholds** (from `clippy.toml`, workspace-root, applies to every member):
 
 | Threshold | Value |
 |---|---|
@@ -244,11 +213,11 @@ Clippy runs with **pedantic + nursery + cargo** lint groups. All are set to `war
 | `pass-by-value-size-limit` | 256 bytes |
 | `type-complexity-threshold` | 250 |
 
-**Test exemptions**: `allow-unwrap-in-tests`, `allow-expect-in-tests`, `allow-dbg-in-tests`, `allow-print-in-tests` are all `true`.
+**Test exemptions**: `allow-unwrap-in-tests`, `allow-expect-in-tests`, `allow-dbg-in-tests`, `allow-print-in-tests` are all `true` — use plain `.unwrap()` in `#[cfg(test)]` code, not `.unwrap_or_default()` workarounds.
 
 ### Formatting
 
-Configured in `rustfmt.toml` (stable options active):
+Configured in `rustfmt.toml` (workspace-root, stable options active):
 
 | Setting | Value |
 |---|---|
@@ -262,79 +231,39 @@ Configured in `rustfmt.toml` (stable options active):
 | `newline_style` | Unix |
 | `match_block_trailing_comma` | true |
 
-Nightly-only options (`imports_granularity`, `group_imports`, `trailing_comma`, `brace_style`, etc.) are commented out but documented for when nightly is used.
-
 ### Import Ordering
 
-Group imports in this order, separated by blank lines:
-
-1. `std` / `core` / `alloc`
-2. External crates
-3. `crate` / `super` / `self`
-
-Within each group, alphabetical order (enforced by `reorder_imports = true`).
+Group imports in this order, separated by blank lines: `std`/`core`/`alloc`, external crates, `crate`/`super`/`self`. Alphabetical within each group (`reorder_imports = true`). rustfmt also alphabetizes `use rmcp::{A, B, C}`-style multi-imports — don't fight it.
 
 ### Doc Comments
 
-All public items require doc comments. Structure:
-
-```rust
-/// Brief one-line summary.
-///
-/// Extended description (optional, for complex items).
-///
-/// # Arguments
-///
-/// * `param` - Description.
-///
-/// # Returns
-///
-/// What this function returns.
-///
-/// # Errors
-///
-/// When and why this function returns an error (required for fallible functions).
-///
-/// # Examples
-///
-/// ```rust
-/// use rust_template::my_function;
-///
-/// let result = my_function(42);
-/// assert_eq!(result, 42);
-/// ```
-```
-
-- Doc examples must compile (`cargo test` runs them as doctests).
-- Use `#![doc = include_str!("../README.md")]` at the crate root to pull in README as crate docs.
+All public items require doc comments (`missing_docs = "warn"` workspace-wide). Structure: brief one-line summary, extended description if needed, `# Errors` for fallible functions, `# Examples` where it adds value. Doc examples compile as doctests (`cargo test` runs them).
 
 ### Unsafe Code
 
-`unsafe` code is **forbidden** (`unsafe_code = "forbid"` in `[lints.rust]`). No exceptions.
+`unsafe` code is **forbidden** (`unsafe_code = "forbid"` in `[workspace.lints.rust]`). No exceptions.
 
 ### Supply Chain Security
 
-`deny.toml` enforces:
+`deny.toml` (workspace-root) enforces:
 
-- **Licenses**: only permissive (MIT, Apache-2.0, BSD-2/3, ISC, Zlib, MPL-2.0, Unicode, CC0, BSL-1.0, 0BSD).
+- **Licenses**: permissive only (MIT, MIT-0, Apache-2.0, BSD-2/3, ISC, Zlib, MPL-2.0, Unicode, CC0, BSL-1.0, 0BSD). When a new dependency's license isn't in the allow-list yet, verify it's genuinely a safe permissive license before adding it (`cargo deny check licenses` names the exact crate/license) — don't blanket-allow.
 - **Sources**: crates.io only; unknown registries and git sources denied.
 - **Bans**: `openssl` (use `rustls`), `atty` (use `std::io::IsTerminal`).
 - **Advisories**: all advisory types (vulnerability, unmaintained, unsound, notice, yanked) denied.
 - **Wildcards**: wildcard version requirements denied.
+- **Multiple versions**: set to `warn`, not `deny` — real-world dependency graphs (this one included: `hashbrown` 0.16 vs 0.17 via `jsonschema` vs `serde_norway`) routinely carry duplicate transitive versions that aren't worth pinning around.
+
+**Dependency feature hygiene**: don't take a crate's default features blind. `jsonschema`'s defaults pull in a full `reqwest`/`rustls`/`aws-lc-rs` HTTP-resolver stack for `$ref` resolution this workspace doesn't use (all `$ref`s resolve offline via a custom `Registry` in `mif-schema`) — it's pinned `default-features = false` in `[workspace.dependencies]`. Check `cargo tree -i <suspicious-crate>` when a build pulls in something unexpected.
 
 ### Testing
 
-| Test type | Location | Crate |
-|---|---|---|
-| Unit tests | `#[cfg(test)] mod tests` inside source files | — |
-| Integration tests | `tests/integration_test.rs` | — |
-| Property tests | `tests/integration_test.rs::property_tests` | `proptest` |
-| Parameterized tests | anywhere, via `#[test_case]` | `test-case` |
-| Doc tests | `///` examples on public items | — |
+| Test type | Location |
+|---|---|
+| Unit tests | `#[cfg(test)] mod tests` inside each crate's source files |
+| Doc tests | `///` examples on public items |
 
-**Code coverage requirement**: 90% minimum. Run `just coverage` to generate an LCOV report and verify. CI enforces this threshold via Codecov.
-
-**Property test pattern** (proptest):
+**Property test pattern** (if adding `proptest` to a crate that needs it — not currently a workspace dependency):
 
 ```rust
 mod property_tests {
@@ -352,27 +281,17 @@ mod property_tests {
 
 ### CI/CD
 
-CI and the container chain run through `pipeline.yml`; releases run through flat, independent tag-triggered workflows (`release.yml`, `publish.yml`, `package-homebrew.yml`) — the same architecture as `attested-delivery/rlm-rs`, the verified reference.
+CI runs through `pipeline.yml`, `ci-checks.yml`, and `quality-gates.yml`; releases run through tag-triggered `release.yml`, `publish.yml`, `package-homebrew.yml`. `quality-gates.yml` and `pipeline.yml`'s security-gate jobs (`pin-check`, `sign-and-attest`, `verify-attestation`, `reusable-attest-scan`, `reusable-trivy`) call **`modeled-information-format/.github`**'s reusable workflow catalog, not `attested-delivery/.github` — this repo forked from `attested-delivery/rust-template`, but as a member of the `modeled-information-format` org it uses the org's own security-gate infrastructure, matching every other repo in this workspace's ecosystem.
 
-**Project specificity is var-driven**: the release workflows resolve the crate name, binary name, version, description, and license from `cargo metadata` at runtime, and owner/repo from the GitHub context. Instantiating the template requires editing only `Cargo.toml` (plus optional repo variable `HOMEBREW_TAP_REPO`, default `homebrew-tap`, and optional secret `HOMEBREW_TAP_TOKEN`). Nothing in the workflow files is renamed.
+**Multi-crate, multi-binary, not single-package**: `publish.yml`'s guard/publish logic and `release.yml`/`package-homebrew.yml`'s binary-resolution logic are driven dynamically off `cargo metadata` (`.packages[] | select(...)`, never `.packages[0]`) so they scale to any number of workspace members and `[[bin]]` targets — both `mif-cli` and `mif-mcp` build on every release, and a future third binary crate needs zero workflow changes to join them. See `docs/runbooks/RELEASING.md` for the full procedure.
 
-**Publication is disabled in the template**: `publish = false` in Cargo.toml gates the container build, crates.io publishing, GitHub Release creation, and Homebrew tap updates (the workflows read it via `cargo metadata`; cargo itself also refuses `cargo publish`). In template state the `pipeline.yml` `gate` job resolves `publishable=false`, so the Docker build → sign → verify chain is **skipped** rather than built — a template ships no container. Deleting that one line in a downstream project arms all four channels.
+**`environment: release`** gates `publish.yml`/`release.yml`/`package-homebrew.yml` (renamed from the template's `copilot`) — configure real protection rules (required reviewer) on it in repo Settings before arming external publish channels.
 
-**CI stage** (`ci-checks.yml`): fmt, clippy, test (Linux/macOS/Windows), doc build, cargo-deny, MSRV check (1.92), `all-checks-pass` gate. Runs in parallel with `ci-coverage.yml` (LCOV/Codecov), `ci-test-matrix.yml` (12-combo matrix, PR only), and `pin-check` (central `attested-delivery/.github` workflow asserting every `uses:` is pinned to a full commit SHA).
-
-**Docker** (`release-docker.yml`): multi-platform build after CI passes, **gated on `publish` (skipped in template state)**. PR = build-only; push on main/tags. Pushed images flow through `docker-sign` (centralized `attested-delivery/.github` `sign-and-attest.yml`, pinned by full SHA — under SLSA Build L3 the signing identity is the central workflow, not this repo) and `docker-verify` (fail-closed attestation verification).
-
-**Release** (`release.yml`, tags + dispatch dry-run): resolve metadata → 5-platform build matrix with per-binary SLSA provenance attested at build time (`{bin}-{version}-{platform}` naming) → test + cargo-audit gates (tags are untrusted input) → CycloneDX SBOM generated and attested over every binary → **fail-closed `gh attestation verify` before the release exists** → tag-gated GitHub Release with checksums. A tag publishes nothing unattested.
-
-**Publish** (`publish.yml`, tags + dispatch dry-run): pre-publish gauntlet → crates.io **Trusted Publishing** (OIDC, no long-lived token; one-time crates.io setup: workflow `publish.yml`, environment `copilot`) → download the registry-served `.crate`, byte-compare against the local package, attest the registry bytes.
-
-**Homebrew** (`package-homebrew.yml`): `workflow_run` on Release completion (bot-authored release events don't trigger workflows) → source formula generated from Cargo.toml metadata into `{owner}/homebrew-tap`.
-
-Releases are orchestrated by the `/release` skill (`.claude/skills/release/`). Artifact verification commands live in `SECURITY.md` § Verifying Release Artifacts.
-
-See `docs/template/CI-WORKFLOWS.md` for the full reference.
+Releases are orchestrated by the `/release` skill at **`.github/skills/release/SKILL.md`** (not `.claude/skills/` — that path doesn't exist in this repo). Artifact verification commands live in `SECURITY.md` § Verifying Release Artifacts.
 
 ### Cargo Profiles
+
+Set once at the workspace root (`[profile.*]` — not member-level; profiles are workspace-only in a virtual manifest):
 
 | Profile | Optimization | LTO | Codegen Units | Panic | Strip | Debug |
 |---|---|---|---|---|---|---|
@@ -386,21 +305,25 @@ See `docs/template/CI-WORKFLOWS.md` for the full reference.
 
 ## Explanation
 
-### Why `crates/` Instead of `src/`
+### Why a Virtual Workspace, Not a Root Package
 
-This template uses `crates/` as the source directory to distinguish it from the common `src/` layout. This is a template convention — downstream projects may restructure. The `[lib]` and `[[bin]]` paths in `Cargo.toml` point to `crates/lib.rs` and `crates/main.rs`.
+Five crates share a strict dependency chain (`mif-core` -> `mif-schema` -> `mif-ontology` -> `{mif-cli, mif-mcp}`) and are versioned/released together. A workspace gives real path dependencies during development, one shared `Cargo.lock`, and CI that catches a breaking `mif-core` change in the same PR that introduces it. The root manifest has no `[package]` section (a *virtual* workspace) since no code lives at the workspace root itself — every crate is a real member under `crates/`.
+
+### Why the Libraries Don't Depend on the Binaries
+
+`mif-cli` and `mif-mcp` are thin consumers of `mif-core`/`mif-schema`/`mif-ontology`'s public APIs, not the other way around. The three libraries are published independently and meant to be genuinely reusable by third parties who have no interest in a CLI or an MCP server — CLI/MCP-specific concerns (argument parsing, tool-schema derivation) stay out of the library layer entirely.
 
 ### Why `thiserror` for Errors
 
-`thiserror` provides derive macros for `std::error::Error` with zero runtime overhead. It generates `Display` and `From` implementations from attributes, keeping error definitions concise and consistent. The crate-level `Result<T>` alias reduces boilerplate across the API.
+`thiserror` provides derive macros for `std::error::Error` with zero runtime overhead, generating `Display` and `From` implementations from attributes. Each library crate's error enum stays scoped to that crate's own failure modes rather than a shared top-level type, since `mif-schema` and `mif-ontology` fail in genuinely different ways (schema validation vs. corpus/graph resolution).
 
-### Why Consuming-Self Builders
+### Why Vendor the JSON Schema Instead of Fetching at Validate Time
 
-The builder pattern uses `fn with_field(mut self, ...) -> Self` instead of `&mut self`. This enables:
+A library doing an HTTP fetch on every validation call is non-deterministic and breaks offline/sandboxed CI. `mif-schema` embeds `mif.schema.json`, `citation.schema.json`, `ontology.schema.json`, and `definitions/entity-reference.schema.json` via `include_str!` and resolves `$ref`s through a custom `jsonschema::Registry` keyed by each file's own `$id` — no network access happens at validation time, and `jsonschema`'s default HTTP/file-resolver features are explicitly disabled.
 
-- **Const evaluation**: `const fn` is compatible with owned self, not `&mut self`.
-- **Chaining**: `Config::new().with_a(1).with_b(2)` reads naturally.
-- **Move semantics**: no hidden shared state; the builder is consumed on each call.
+### Why Hand-Written Types, Not Schema-to-Rust Codegen
+
+`mif-core`'s four types (`OntologyReference`, `EntityReference`, `EntityData`, `ConceptType`) are hand-written and field-verified directly against the live schema, not generated via a tool like `typify`. The scoped 4-type surface is stable and low-drift-risk, and generic codegen doesn't naturally produce this workspace's idiomatic conventions (consuming-self builders, the closed-enum-or-custom `EntityType` fallback that preserves unknown values verbatim). Revisit codegen if/when a fuller document-type surface (a full `Mif` struct mirroring every optional field of `mif.schema.json`) gets built — that's the case where hand-maintenance drift risk would outweigh codegen's ergonomic cost.
 
 ### Why Pedantic Clippy
 
@@ -408,7 +331,7 @@ Enabling `pedantic`, `nursery`, and `cargo` lint groups catches subtle issues ea
 
 ### Why `panic = "abort"` in Release
 
-Release builds use `panic = "abort"` to eliminate unwinding tables, reducing binary size. Combined with `strip = true` and `lto = "thin"`, this produces small, fast binaries. The `release-debug` profile inherits these optimizations but preserves debug symbols for profiling.
+Release builds use `panic = "abort"` to eliminate unwinding tables, reducing binary size. Combined with `strip = true` and `lto = "thin"`, this produces small, fast binaries for both `mif-cli` and `mif-mcp`. The `release-debug` profile inherits these optimizations but preserves debug symbols for profiling.
 
 ### Why Ban `openssl` and `atty`
 

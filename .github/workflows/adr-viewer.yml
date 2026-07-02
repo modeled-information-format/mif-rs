@@ -29,7 +29,7 @@ jobs:
 
       - name: Generate ADR HTML
         # main
-        uses: attested-delivery/adrscope@e6384bf222c179d4083e1003b17154e48fc0f914
+        uses: modeled-information-format/adrscope@e6384bf222c179d4083e1003b17154e48fc0f914
         with:
           command: html
           adr-path: docs/adr
@@ -44,4 +44,4 @@ jobs:
           retention-days: 90
 
 # To enable GitHub Pages deployment, see:
-# https://github.com/attested-delivery/adrscope#github-pages-deployment
+# https://github.com/modeled-information-format/adrscope#github-pages-deployment

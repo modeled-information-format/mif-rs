@@ -70,7 +70,7 @@ NOTES
 
 ## Phase 0 — Preflight
 
-0. **Publication gate** — this project ships from rust-template, where
+0. **Publication gate** — this project ships from mif-rs, where
    all publication channels are disabled by `publish = false` in
    Cargo.toml (the workflows read it via `cargo metadata`; release
    creation, crates.io publishing, and Homebrew updates all skip while
@@ -194,7 +194,7 @@ multiple conditions — report each as it lands):
 | Cargo Audit job fails | Real advisory in `Cargo.lock` | Fix the dependency (usually `cargo update <crate>`) via a normal PR, then start the release over at Phase 0. Note: cargo-deny may NOT have flagged it — deny analyzes the feature/target graph, audit scans the raw lockfile; an unreachable phantom lock entry trips audit only. Both gates are intentional; keep both. |
 | A build leg fails | Platform/toolchain issue | The five legs are linux-amd64, linux-arm64 (`ubuntu-24.04-arm`), macos-arm64, macos-amd64 (cross-target on macos-latest), windows-amd64. Binaries build with **default features** (matches `cargo install`). |
 | Release event didn't trigger Homebrew | Releases are authored by `github-actions[bot]`; bot events don't trigger workflows | The `workflow_run` trigger handles this; `head_branch` in the workflow_run payload IS the tag name for tag-triggered runs (verified empirically — and the payload has no `ref` field, whatever a reviewer may claim). |
-| Image verify fails on the tag run | Central signer/verify regression | Check the central repo pin in pipeline.yml and `references/platform-constraints.md` of the attested-delivery skill before anything else. |
+| Image verify fails on the tag run | Central signer/verify regression | Check the central repo pin in pipeline.yml and `references/platform-constraints.md` of the modeled-information-format skill before anything else. |
 
 ## Phase 5 — Independent workstation verification
 

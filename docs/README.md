@@ -3,7 +3,7 @@ diataxis_type: reference
 ---
 # Documentation Index
 
-> All documentation for the rust_template project.
+> All documentation for the mif_core project.
 
 ## Template Adoption Guides
 

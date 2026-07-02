@@ -16,7 +16,7 @@ independently verifiable release — and exactly which gate signs what.
 > pieces compose.
 
 This repository is a **Mode-A consumer** of the central reusable-workflow
-repository `attested-delivery/.github`: it does not re-implement signing, scanning, or
+repository `modeled-information-format/.github`: it does not re-implement signing, scanning, or
 verification — it *calls* central reusables pinned to a full commit SHA, and
 each gate's verdict normalizes on SARIF.
 
@@ -41,7 +41,7 @@ it becomes a **signed predicate** bound to a release subject.
 
 ## Stage 1 — Merge-Time Quality Gates (`quality-gates.yml`)
 
-`quality-gates.yml` is a thin caller of four `attested-delivery/.github` central
+`quality-gates.yml` is a thin caller of four `modeled-information-format/.github` central
 reusables. It runs on push and PR to `main`, on a weekly Monday 06:00 UTC
 schedule, and on manual dispatch. Top-level permissions are `contents: read`;
 each job widens scope only as its reusable requires.
@@ -145,8 +145,8 @@ dry-run: version suffixed `-dev`, release job skipped). Flow:
 
    | Attest job | predicate-type | predicate from |
    |---|---|---|
-   | `attest-sca` | `https://attested-delivery.github.io/attestations/sca/v1` | `gate-sca.outputs.sarif-{artifact,filename}` |
-   | `attest-iac-license` | `https://attested-delivery.github.io/attestations/iac-license/v1` | `gate-trivy.outputs.sarif-{artifact,filename}` |
+   | `attest-sca` | `https://modeled-information-format.github.io/attestations/sca/v1` | `gate-sca.outputs.sarif-{artifact,filename}` |
+   | `attest-iac-license` | `https://modeled-information-format.github.io/attestations/iac-license/v1` | `gate-trivy.outputs.sarif-{artifact,filename}` |
 
    SAST (CodeQL) and posture (Scorecard) are **not** re-run here — they are
    repo/source-level and already enforced at merge in `quality-gates.yml`.
@@ -157,7 +157,7 @@ dry-run: version suffixed `-dev`, release job skipped). Flow:
    each:
    - platform binary → verify provenance + SBOM (`--predicate-type https://cyclonedx.org/bom`);
    - source tarball → verify provenance + both gate verdicts, asserting the
-     signer with `--signer-workflow attested-delivery/.github/.github/workflows/reusable-attest-scan.yml`
+     signer with `--signer-workflow modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml`
      and the predicate-type URIs above.
 7. **`release`** (tag-gated — `publishable` is **not** required) — attaches
    binaries, the SBOM, the source snapshot, and `{bin}-{version}-checksums.txt`
@@ -187,7 +187,7 @@ non-PR push/tag:
 4. **`gate-image` → `attest-container-scan`** — a parallel container-vuln seam:
    `reusable-trivy.yml` scans the image by digest (artifact
    `container-scan-sarif`) and `reusable-attest-scan.yml` signs the verdict
-   under predicate-type `https://attested-delivery.github.io/attestations/container-scan/v1`,
+   under predicate-type `https://modeled-information-format.github.io/attestations/container-scan/v1`,
    bound to the image digest.
 
 > Container *verification* commands (including the mandatory `--signer-workflow`
@@ -282,12 +282,12 @@ version that produces no diff is a no-op.
    delivery. See the
    [Required Secrets Summary](../template/CI-WORKFLOWS.md#required-secrets-summary).
 
-   > **Note:** no `DEPLOY_DOCS` variable exists in any attested-delivery
+   > **Note:** no `DEPLOY_DOCS` variable exists in any modeled-information-format
    > workflow in this repository; documentation deployment is configured
    > separately in `docs-deploy.yml` and is out of scope for delivery.
 
 6. **Keep the SHA-pinning convention.** Every `uses:` in this repository —
-   third-party actions *and* the `attested-delivery/.github` central reusables — is
+   third-party actions *and* the `modeled-information-format/.github` central reusables — is
    pinned to a **full 40-character commit SHA**, never a tag or branch. The
    `pin-check` required check (central
    `pin-check.yml@740cb8efb57af0187f88e9b4f939355b871a5895`) fails the build

@@ -7,7 +7,7 @@ Automated Docker container vulnerability scanning using [Trivy](https://github.c
 
 ## Reference
 
-Trivy runs via the central reusable `reusable-trivy.yml` (from `attested-delivery/.github`), invoked from two callers:
+Trivy runs via the central reusable `reusable-trivy.yml` (from `modeled-information-format/.github`), invoked from two callers:
 
 | Field | Value |
 |---|---|
@@ -89,25 +89,25 @@ brew install trivy
 curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
 
 # Build and scan image
-docker build -t rust-template:local .
-trivy image rust-template:local
+docker build -t mif-rs:local .
+trivy image mif-rs:local
 
 # Scan a specific severity
-trivy image --severity HIGH,CRITICAL rust-template:local
+trivy image --severity HIGH,CRITICAL mif-rs:local
 
 # Output formats
-trivy image --format json rust-template:local > scan.json
-trivy image --format sarif rust-template:local > scan.sarif
+trivy image --format json mif-rs:local > scan.json
+trivy image --format sarif mif-rs:local > scan.sarif
 ```
 
-Verify: `trivy image rust-template:local` prints a vulnerability table.
+Verify: `trivy image mif-rs:local` prints a vulnerability table.
 
 ### Configure the severity threshold
 
-Trivy behaviour is configured in the central reusable workflow (`attested-delivery/.github`), not in this repo. To adjust severity for a local scan:
+Trivy behaviour is configured in the central reusable workflow (`modeled-information-format/.github`), not in this repo. To adjust severity for a local scan:
 
 ```bash
-trivy image --severity CRITICAL,HIGH rust-template:local
+trivy image --severity CRITICAL,HIGH mif-rs:local
 ```
 
 Verify: confirm only the selected severities are reported.
@@ -117,7 +117,7 @@ Verify: confirm only the selected severities are reported.
 For a local scan, drop vulnerabilities that have no available fix:
 
 ```bash
-trivy image --ignore-unfixed rust-template:local
+trivy image --ignore-unfixed mif-rs:local
 ```
 
 Verify: vulnerabilities with no available fix no longer appear.
@@ -134,7 +134,7 @@ CVE-2021-12345
 pkg:deb/debian/openssl@1.1.1
 ```
 
-Verify: `trivy image rust-template:local` no longer lists the ignored entries.
+Verify: `trivy image mif-rs:local` no longer lists the ignored entries.
 
 ### Remediate a finding
 
@@ -153,8 +153,8 @@ Verify: `trivy image rust-template:local` no longer lists the ignored entries.
    ```bash
    cargo update
    cargo audit
-   docker build -t rust-template:patched .
-   trivy image rust-template:patched
+   docker build -t mif-rs:patched .
+   trivy image mif-rs:patched
    ```
 
 3. **Accept a documented risk** (false positive or mitigated):
@@ -178,17 +178,17 @@ trivy image --clear-cache
 **False positives** — inspect the finding, then suppress if confirmed:
 
 ```bash
-trivy image --format json rust-template:local | jq '.Results[].Vulnerabilities[] | select(.VulnerabilityID=="CVE-2021-12345")'
+trivy image --format json mif-rs:local | jq '.Results[].Vulnerabilities[] | select(.VulnerabilityID=="CVE-2021-12345")'
 ```
 
 **Slow scans**:
 
 ```bash
 # Scan only critical/high
-trivy image --severity CRITICAL,HIGH rust-template:local
+trivy image --severity CRITICAL,HIGH mif-rs:local
 
 # Skip DB download (use cache)
-trivy image --skip-db-update rust-template:local
+trivy image --skip-db-update mif-rs:local
 ```
 
 ## Why this matters

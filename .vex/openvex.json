@@ -1,7 +1,7 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "https://attested-delivery.github.io/vex/rust-template/v1",
-  "author": "attested-delivery",
+  "@id": "https://modeled-information-format.github.io/vex/mif-rs/v1",
+  "author": "modeled-information-format",
   "role": "Project Maintainer",
   "timestamp": "2026-06-19T00:00:00Z",
   "version": 1,
@@ -9,7 +9,7 @@
     {
       "vulnerability": { "name": "CVE-0000-00000" },
       "products": [
-        { "@id": "pkg:cargo/rust_template" }
+        { "@id": "pkg:cargo/mif_core" }
       ],
       "status": "not_affected",
       "justification": "vulnerable_code_not_in_execute_path",

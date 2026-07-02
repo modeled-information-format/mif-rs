@@ -30,15 +30,15 @@ Example report:
 ```markdown
 ## Unsafe Code Analysis
 Functions  Expressions  Impls  Traits  Methods  Dependency
-0/10       0/100        0/5    0/2     0/20     rust_template
+0/10       0/100        0/5    0/2     0/20     mif_core
 
 ## Binary Size Analysis
 File   .text   Size    Crate
  71.0%  59.0%   1.2MiB  std
-  8.5%   7.1%   147KiB  rust_template
+  8.5%   7.1%   147KiB  mif_core
 
 ## Documentation Coverage
-Documenting rust_template v0.1.0
+Documenting mif_core v0.1.0
 warning: missing documentation for public function
 ```
 
@@ -46,7 +46,7 @@ warning: missing documentation for public function
 
 ```text
 Functions  Expressions  Impls  Traits  Methods  Dependency
-2/10       5/100        0/5    0/2     0/20     ✓ rust_template
+2/10       5/100        0/5    0/2     0/20     ✓ mif_core
 ```
 
 - **Functions**: 2 functions contain unsafe code.
@@ -58,7 +58,7 @@ Functions  Expressions  Impls  Traits  Methods  Dependency
 ```text
 File   .text   Size    Crate
 71.0%  59.0%   1.2MiB  std        ← Standard library
- 8.5%   7.1%   147KiB  rust_template
+ 8.5%   7.1%   147KiB  mif_core
  5.2%   4.3%   89KiB   serde
 ```
 
