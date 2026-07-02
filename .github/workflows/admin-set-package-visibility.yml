@@ -1,0 +1,46 @@
+---
+name: Admin — Set Package Visibility
+
+# One-off admin action, not part of the release pipeline. GHCR packages
+# default to private on first push even for a public repo; this makes
+# ghcr.io/modeled-information-format/mif-rs/{mif-cli,mif-mcp} public to
+# match the repo's own visibility, and to unblock reusable-trivy.yml's
+# image scan (which pulls the just-pushed image unauthenticated-adjacent,
+# via its own GITHUB_TOKEN login, and 401s on a private package).
+# Once set, GHCR visibility persists — this does not need to run per-release.
+
+"on":
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  set-visibility:
+    name: Set Package Visibility
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Mint release app token
+        id: app-token
+        # v3.2.0
+        uses: >-
+          actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RELEASE_CLIENT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_CLIENT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Set mif-cli and mif-mcp packages to public
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          for bin in mif-cli mif-mcp; do
+            echo "Setting ghcr.io/${{ github.repository }}/${bin} to public..."
+            gh api -X PATCH \
+              "orgs/${{ github.repository_owner }}/packages/container/mif-rs%2F${bin}" \
+              -f visibility=public
+          done
