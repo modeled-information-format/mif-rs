@@ -47,7 +47,7 @@ covers the direct path from a version bump to a verified, live release.
 - crates.io Trusted Publishing configured once, per crate you intend to
   publish: on crates.io, crate **Settings → Trusted Publishing → Add**,
   repository `modeled-information-format/mif-rs`, workflow `publish.yml`,
-  environment `copilot`. Publishing uses OIDC — no `CARGO_REGISTRY_TOKEN`
+  environment `release`. Publishing uses OIDC — no `CARGO_REGISTRY_TOKEN`
   secret exists.
 - If you intend to push a container image: **Settings → Actions → General
   → Workflow permissions → "Read and write permissions"**, so

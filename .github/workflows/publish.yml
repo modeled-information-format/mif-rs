@@ -23,14 +23,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # `publish = false` in Cargo.toml (the template's shipped state)
-  # disables this entire workflow; delete that line in a real project
-  # to arm crates.io publishing.
+  # A workspace member with `publish = false` is excluded from
+  # `cargo publish --workspace`; a member with no `publish` line, or
+  # `publish = true`, is included. This gate looks at every member, not
+  # just .packages[0] — mif-core/mif-schema/mif-ontology/mif-cli/mif-mcp
+  # are armed independently (see Cargo.toml's per-crate `publish` line).
   guard:
     name: Publish Gate
     runs-on: ubuntu-latest
     outputs:
       publishable: ${{ steps.gate.outputs.publishable }}
+      publishable-names: ${{ steps.gate.outputs.publishable-names }}
     steps:
       - name: Checkout repository
         # v7.0.0
@@ -43,14 +46,16 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Read package.publish from Cargo.toml
+      - name: Read package.publish from cargo metadata
         id: gate
         run: |
-          PUBLISHABLE=$(cargo metadata --no-deps --locked --format-version 1 \
-            | jq -r \
-            'if .packages[0].publish == [] then "false" else "true" end')
+          set -euo pipefail
+          META=$(cargo metadata --no-deps --locked --format-version 1)
+          NAMES=$(jq -c '[.packages[] | select(.publish != []) | .name]' <<< "$META")
+          PUBLISHABLE=$(jq -r 'length > 0' <<< "$NAMES")
           echo "publishable=${PUBLISHABLE}" >> "$GITHUB_OUTPUT"
-          echo "publishable: ${PUBLISHABLE}"
+          echo "publishable-names=${NAMES}" >> "$GITHUB_OUTPUT"
+          echo "publishable: ${PUBLISHABLE} (${NAMES})"
 
   publish:
     name: Publish to crates.io
@@ -83,15 +88,12 @@ jobs:
         with:
           tool: cargo-deny
 
-      - name: Resolve crate name
-        id: crate-meta
-        run: |
-          NAME=$(cargo metadata --no-deps --locked --format-version 1 \
-            | jq -r '.packages[0].name')
-          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
-
       # cargo publish ships the Cargo.toml version regardless of the tag;
       # publishing is irreversible, so a mismatch must fail before publish.
+      # Every workspace member shares `version.workspace = true`, so reading
+      # .packages[0].version is safe here specifically — unlike `.publish`
+      # or bin/crate names, which differ per-crate and must never be read
+      # positionally.
       - name: Assert tag version matches Cargo.toml
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
@@ -104,23 +106,36 @@ jobs:
             exit 1
           fi
 
-      - name: Verify package
-        run: |
-          cargo package --list
-          cargo package --allow-dirty
+      - name: List package contents
+        run: cargo package --workspace --list --allow-dirty
 
       - name: Run pre-publish checks
         run: |
-          cargo fmt -- --check
-          cargo clippy --all-targets --all-features --locked -- -D warnings
-          cargo test --all-features --locked
-          cargo doc --no-deps --all-features --locked
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test --workspace --all-features --locked
+          cargo doc --workspace --no-deps --all-features --locked
           cargo deny check
 
+      # This IS the packaging verification for an interdependent workspace,
+      # not just a publish rehearsal: a bare `cargo package --workspace`
+      # (without going through `cargo publish --workspace`) fails outright
+      # here — mif-schema depends on mif-core by path, and cargo package's
+      # own verification step re-resolves dependencies against the REAL
+      # crates.io index, where mif-core doesn't exist yet before its first
+      # publish. `cargo publish --workspace --dry-run` doesn't have that
+      # problem — confirmed empirically — because it stages each crate into
+      # a local scratch registry as it goes, so mif-schema's dry-run
+      # verification build resolves mif-core from that staged registry, the
+      # same dependency-ordered flow the real publish uses.
       - name: Dry run publish
-        run: cargo publish --dry-run --allow-dirty
+        run: cargo publish --workspace --dry-run --allow-dirty
 
-      # Trusted Publishing (OIDC): no long-lived registry token.
+      # Trusted Publishing (OIDC): no long-lived registry token. The token
+      # exchange is workflow-scoped (this repo/workflow/environment), not
+      # per-crate — crates.io authorizes each individual `cargo publish`
+      # call against that crate's own Trusted Publishing linkage, so one
+      # exchange covers every crate `cargo publish --workspace` touches.
       - name: Authenticate with crates.io
         id: auth
         if: startsWith(github.ref, 'refs/tags/v')
@@ -128,53 +143,91 @@ jobs:
         uses: >-
           rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18
 
-      - name: Publish to crates.io
+      # cargo publish is documented non-atomic and re-publishing an
+      # already-live exact version is documented to error — so a re-run
+      # after a partial failure must not blow up on members that already
+      # succeeded. Check each publishable member against the registry
+      # first and only pass the not-yet-published ones to `cargo publish`.
+      - name: Resolve unpublished members
+        id: unpublished
         if: startsWith(github.ref, 'refs/tags/v')
-        run: cargo publish --token "$CARGO_REGISTRY_TOKEN"
+        env:
+          NAMES: ${{ needs.guard.outputs.publishable-names }}
+        run: |
+          set -euo pipefail
+          META=$(cargo metadata --no-deps --locked --format-version 1)
+          ARGS=""
+          ANY=false
+          for name in $(jq -r '.[]' <<< "$NAMES"); do
+            VERSION=$(jq -r --arg n "$name" \
+              '.packages[] | select(.name == $n) | .version' <<< "$META")
+            if curl -fsS -A "${name}-publish-check" \
+              "https://crates.io/api/v1/crates/${name}/${VERSION}" \
+              >/dev/null 2>&1; then
+              echo "::notice::${name}@${VERSION} already on crates.io — skipping"
+            else
+              ARGS="${ARGS} -p ${name}"
+              ANY=true
+            fi
+          done
+          echo "args=${ARGS}" >> "$GITHUB_OUTPUT"
+          echo "any=${ANY}" >> "$GITHUB_OUTPUT"
+          echo "unpublished:${ARGS}"
+
+      - name: Publish unpublished workspace members to crates.io
+        if: >-
+          startsWith(github.ref, 'refs/tags/v')
+          && steps.unpublished.outputs.any == 'true'
+        run: >-
+          cargo publish --token "$CARGO_REGISTRY_TOKEN"
+          ${{ steps.unpublished.outputs.args }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
       # Attest the bytes the registry actually serves, not a local rebuild:
-      # download the published .crate, assert it matches what cargo packaged
-      # locally (cargo packaging is deterministic for a given commit — a
-      # mismatch means something is wrong and must fail loudly), then attach
-      # SLSA provenance to it.
-      - name: Download published crate from registry
-        id: crate
+      # download every publishable crate's published .crate, assert each
+      # matches what cargo packaged locally (cargo packaging is
+      # deterministic for a given commit — a mismatch means something is
+      # wrong and must fail loudly), then attach SLSA provenance to all of
+      # them in one call (subject-path accepts a glob).
+      - name: Download published crates from registry
         if: startsWith(github.ref, 'refs/tags/v')
         env:
-          NAME: ${{ steps.crate-meta.outputs.name }}
+          NAMES: ${{ needs.guard.outputs.publishable-names }}
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF#refs/tags/v}"
-          CRATE="${NAME}-${VERSION}.crate"
-          URL="https://static.crates.io/crates/${NAME}/${CRATE}"
-          downloaded=0
-          # static.crates.io can reject requests without a User-Agent
-          for attempt in 1 2 3 4 5 6; do
-            if curl -fsSL -A "${NAME}-release-check" \
-              -o "${CRATE}" "$URL"; then
-              downloaded=1
-              break
+          mkdir -p crates-out
+          for name in $(jq -r '.[]' <<< "$NAMES"); do
+            CRATE="${name}-${VERSION}.crate"
+            URL="https://static.crates.io/crates/${name}/${CRATE}"
+            downloaded=0
+            # static.crates.io can reject requests without a User-Agent
+            for attempt in 1 2 3 4 5 6; do
+              if curl -fsSL -A "${name}-release-check" \
+                -o "crates-out/${CRATE}" "$URL"; then
+                downloaded=1
+                break
+              fi
+              echo "crate not yet on CDN (attempt ${attempt}); retrying"
+              sleep 10
+            done
+            if [ "$downloaded" -ne 1 ] || [ ! -s "crates-out/${CRATE}" ]; then
+              echo "::error::failed to download ${URL} after 6 attempts"
+              exit 1
             fi
-            echo "crate not yet on CDN (attempt ${attempt}); retrying"
-            sleep 10
+            LOCAL="target/package/${CRATE}"
+            if [ ! -f "$LOCAL" ]; then
+              echo "::error::locally packaged crate missing: ${LOCAL}"
+              exit 1
+            fi
+            sha_remote=$(sha256sum "crates-out/${CRATE}" | cut -d' ' -f1)
+            sha_local=$(sha256sum "$LOCAL" | cut -d' ' -f1)
+            if [ "$sha_remote" != "$sha_local" ]; then
+              echo "::error::registry crate bytes differ from local package for ${name}"
+              exit 1
+            fi
           done
-          if [ "$downloaded" -ne 1 ] || [ ! -s "${CRATE}" ]; then
-            echo "::error::failed to download ${URL} after 6 attempts"
-            exit 1
-          fi
-          LOCAL="target/package/${CRATE}"
-          if [ ! -f "$LOCAL" ]; then
-            echo "::error::locally packaged crate missing: ${LOCAL}"
-            exit 1
-          fi
-          sha_remote=$(sha256sum "${CRATE}" | cut -d' ' -f1)
-          sha_local=$(sha256sum "$LOCAL" | cut -d' ' -f1)
-          if [ "$sha_remote" != "$sha_local" ]; then
-            echo "::error::registry crate bytes differ from local package"
-            exit 1
-          fi
-          echo "crate-path=${CRATE}" >> "$GITHUB_OUTPUT"
 
       - name: Attest crate provenance
         if: startsWith(github.ref, 'refs/tags/v')
@@ -182,4 +235,4 @@ jobs:
         uses: >-
           actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
-          subject-path: ${{ steps.crate.outputs.crate-path }}
+          subject-path: crates-out/*
