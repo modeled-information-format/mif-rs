@@ -184,6 +184,39 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
+      # Produce the LOCAL comparison file the next step needs, now that
+      # publish has actually happened. `cargo package` (unlike
+      # `cargo publish --workspace --dry-run`, used only for pre-publish
+      # verification above) writes its .crate directly to the documented,
+      # stable `target/package/<name>-<version>.crate` path — but only
+      # succeeds once a crate's path-dependencies are resolvable from the
+      # real crates.io index, which for mif-schema/mif-ontology/mif-cli/
+      # mif-mcp is only true AFTER their siblings just got published above
+      # (confirmed empirically: this same command fails with "no matching
+      # package named mif-core found" if run before mif-core is live).
+      # A small retry absorbs index-propagation lag right after publish.
+      - name: Package published crates for byte comparison
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          NAMES: ${{ needs.guard.outputs.publishable-names }}
+        run: |
+          set -euo pipefail
+          for name in $(jq -r '.[]' <<< "$NAMES"); do
+            packaged=0
+            for attempt in 1 2 3 4 5 6; do
+              if cargo package -p "$name" --allow-dirty; then
+                packaged=1
+                break
+              fi
+              echo "package index not yet propagated for ${name} (attempt ${attempt}); retrying"
+              sleep 10
+            done
+            if [ "$packaged" -ne 1 ]; then
+              echo "::error::failed to package ${name} locally after 6 attempts"
+              exit 1
+            fi
+          done
+
       # Attest the bytes the registry actually serves, not a local rebuild:
       # download every publishable crate's published .crate, assert each
       # matches what cargo packaged locally (cargo packaging is

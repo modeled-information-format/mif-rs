@@ -65,6 +65,15 @@ jobs:
     needs: [meta]
     runs-on: macos-latest
     environment: release
+    # Every matrix cell pushes to the SAME external homebrew-tap repo. The
+    # group deliberately omits matrix.bin so both cells contend for one
+    # slot and run one at a time (cancel-in-progress: false — the second
+    # cell must wait and still push its own formula, not be cancelled),
+    # otherwise two concurrent `git push`es to the same tap branch race and
+    # the second one fails outright on a plain non-fast-forward rejection.
+    concurrency:
+      group: homebrew-tap-push-${{ github.repository }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:

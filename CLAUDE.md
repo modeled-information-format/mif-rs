@@ -128,7 +128,8 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 
 - Each library crate owns its own error enum, derived with `thiserror::Error` (`MifSchemaError`, `OntologyError`). No shared top-level error type across the workspace — each crate's errors are scoped to what it actually does.
 - **Propagation**: use `?`. Never `unwrap()`, `expect()`, or `panic!()` in library code (`crates/mif-core`, `mif-schema`, `mif-ontology`) — all three are `deny`d workspace-wide via `[workspace.lints.clippy]`.
-- **Binaries** (`mif-cli`, `mif-mcp`): `main()` returns `ExitCode`/`anyhow::Result` respectively; both render errors as plain text to stdout/stderr, exempting themselves from `print_stdout`/`print_stderr` via `#![allow(...)]` at the crate root (a CLI/server naturally needs to print — see "Lint Configuration" below).
+- **`mif-cli`**: `main()` returns `ExitCode`, renders errors as plain text to stdout/stderr, and exempts itself from `print_stdout`/`print_stderr` via `#![allow(...)]` at the crate root (a CLI naturally needs to print — see "Lint Configuration" below).
+- **`mif-mcp`**: `main()` returns `anyhow::Result<()>`, but its `#[tool]` methods return `String` values through the MCP protocol rather than printing — it needs no `print_stdout`/`print_stderr` allow, since it never calls `println!`/`eprintln!`.
 
 ### Ownership and Borrowing
 

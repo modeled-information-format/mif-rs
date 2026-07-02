@@ -77,7 +77,8 @@ jobs:
       modeled-information-format/.github/.github/workflows/reusable-scorecard.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
 
   # IaC + license — Trivy filesystem scan (Dockerfile, manifests, licenses).
-  # No image-ref: the container is gated by `publish = false` (template state).
+  # No image-ref: this job never scans a container image (that's
+  # pipeline.yml's separate gate-image job, gated on has-bin-target).
   # packages: read — the reusable's (skipped) image job declares it; the caller
   # must still grant >= all the reusable's job permissions or the call fails at
   # startup, even for conditional jobs.
