@@ -604,16 +604,30 @@ mod tests {
     #[test]
     fn validate_tool_reports_a_directory_io_fault_at_500() {
         // Reading a directory as if it were a file is a genuine I/O fault,
-        // not a mistaken path — it must stay at 500, not be misclassified
-        // as the same 4xx "wrong path" case as a missing file.
+        // not a mistaken path — on Unix this must stay at 500, not be
+        // misclassified as the same 4xx "wrong path" case as a missing
+        // file. Windows genuinely reports this differently: opening a
+        // directory for read access fails at the OS level with "access
+        // denied", which `std::io` surfaces as `ErrorKind::PermissionDenied`
+        // — the same kind a real permissions fault would produce — so
+        // `classify_io_error` cannot tell the two apart there and correctly
+        // classifies it as the 403 "maybe incorrect" case instead.
         let dir = tempfile::tempdir().unwrap();
         let result = Mif.validate_mif_document(Parameters(ValidateParams {
             file: dir.path().to_path_buf(),
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(value["type"], "https://mif-spec.dev/errors/io/v1");
-        assert_eq!(value["status"], 500);
-        assert_eq!(value["suggested_fix"]["applicability"], "unspecified");
+        #[cfg(not(windows))]
+        {
+            assert_eq!(value["status"], 500);
+            assert_eq!(value["suggested_fix"]["applicability"], "unspecified");
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(value["status"], 403);
+            assert_eq!(value["suggested_fix"]["applicability"], "maybe_incorrect");
+        }
     }
 
     #[test]
