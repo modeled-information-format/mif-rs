@@ -1,0 +1,10 @@
+# CVE-2026-6791 (glibc, cgr.dev/chainguard/glibc-dynamic base image): Trivy
+# detects the package/version match but trivy-db lacks a complete advisory
+# record for this CVE (an internal "no vulnerability details" gap, not a
+# database typo), so it reports UNKNOWN severity. A fixed glibc build
+# (2.43-r10) is referenced in the partial advisory data, but as of this
+# writing the currently-pinned Chainguard image digest is identical to
+# :latest — no newer build with the fix has been published yet, so bumping
+# the pin does not resolve this. Re-check when Chainguard ships glibc
+# 2.43-r10 and drop this line.
+CVE-2026-6791 exp:2027-01-02
