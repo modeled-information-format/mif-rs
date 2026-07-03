@@ -1,0 +1,16 @@
+# Unfixed glibc (libc6) CVEs in the gcr.io/distroless/cc-debian12 base image.
+# Debian has classified all four `<no-dsa>` ("Minor issue") for bookworm —
+# no security-advisory fix is planned, so no base-image update resolves them:
+#   https://security-tracker.debian.org/tracker/CVE-2026-6238
+#   https://security-tracker.debian.org/tracker/CVE-2026-5928
+#   https://security-tracker.debian.org/tracker/CVE-2026-5450
+#   https://security-tracker.debian.org/tracker/CVE-2026-5435
+# All four affect deprecated debugging-only resolver functions
+# (ns_printrrf/ns_printrr/fp_nquery) or scanf/%mc and ungetwc edge cases this
+# workspace's binaries do not exercise. `exp:` forces a revisit rather than
+# relying on someone rereading this comment — re-check the Debian tracker
+# links above when the gate reactivates on expiry.
+CVE-2026-6238 exp:2027-01-02
+CVE-2026-5928 exp:2027-01-02
+CVE-2026-5450 exp:2027-01-02
+CVE-2026-5435 exp:2027-01-02
