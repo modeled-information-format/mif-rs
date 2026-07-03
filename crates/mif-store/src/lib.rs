@@ -661,7 +661,7 @@ mod tests {
         .to_problem();
         assert_eq!(
             missing.problem_type,
-            "https://mif-spec.dev/errors/missing-parent-dir/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/missing-parent-dir/v1"
         );
         assert_eq!(missing.status, 400);
         assert_eq!(
@@ -672,7 +672,7 @@ mod tests {
         let too_large = StoreError::DimensionTooLarge { len: usize::MAX }.to_problem();
         assert_eq!(
             too_large.problem_type,
-            "https://mif-spec.dev/errors/dimension-too-large/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/dimension-too-large/v1"
         );
         assert_ne!(missing.problem_type, too_large.problem_type);
     }
@@ -783,21 +783,21 @@ mod tests {
 
         assert_eq!(
             open_problem.problem_type,
-            "https://mif-spec.dev/errors/open-database-failure/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/open-database-failure/v1"
         );
         assert_eq!(open_problem.status, 500);
         assert_eq!(
             query_problem.problem_type,
-            "https://mif-spec.dev/errors/sqlite-query-failure/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/sqlite-query-failure/v1"
         );
         assert_eq!(query_problem.status, 500);
         assert_eq!(
             corrupt_problem.problem_type,
-            "https://mif-spec.dev/errors/corrupt-dimension/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/corrupt-dimension/v1"
         );
         assert_eq!(
             mismatch_problem.problem_type,
-            "https://mif-spec.dev/errors/vector-blob-mismatch/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/vector-blob-mismatch/v1"
         );
 
         for problem in [

@@ -338,7 +338,7 @@ mod tests {
 
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/invalid-document/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/invalid-document/v1"
         );
         assert_eq!(problem.status, 422);
         assert_eq!(problem.exit_code, Some(2));
@@ -354,7 +354,7 @@ mod tests {
 
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/schema-compilation/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/schema-compilation/v1"
         );
         assert_eq!(problem.status, 500);
         assert_eq!(problem.exit_code, Some(1));

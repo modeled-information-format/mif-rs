@@ -415,7 +415,9 @@ mod tests {
             let problem = error.to_problem();
             assert_eq!(
                 problem.problem_type,
-                format!("https://mif-spec.dev/errors/{slug}/v1")
+                format!(
+                    "https://modeled-information-format.github.io/mif-rs/references/errors/{slug}/v1"
+                )
             );
             assert_eq!(problem.status, status);
             assert_eq!(
@@ -430,7 +432,7 @@ mod tests {
         let problem = EmbedError::Tokenize(tokenizers::Error::from("bad input text")).to_problem();
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/tokenize-failure/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/tokenize-failure/v1"
         );
         assert_eq!(problem.status, 422);
         assert_eq!(
@@ -465,7 +467,7 @@ mod tests {
         .to_problem();
         assert_eq!(
             fetch.problem_type,
-            "https://mif-spec.dev/errors/model-fetch-failure/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/model-fetch-failure/v1"
         );
         assert_eq!(fetch.status, 503);
         assert_eq!(fetch.retry_after, Some(30));
@@ -476,7 +478,7 @@ mod tests {
         .to_problem();
         assert_eq!(
             no_cache.problem_type,
-            "https://mif-spec.dev/errors/no-cache-dir/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/no-cache-dir/v1"
         );
         assert_eq!(no_cache.retry_after, None);
         assert_ne!(fetch.problem_type, no_cache.problem_type);

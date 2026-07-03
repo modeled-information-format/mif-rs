@@ -565,7 +565,7 @@ mod tests {
         }
         assert_eq!(
             value["type"],
-            "https://mif-spec.dev/errors/invalid-document/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/invalid-document/v1"
         );
     }
 
@@ -620,7 +620,7 @@ mod tests {
         let problem = error.to_problem();
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/ontology-not-found/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/ontology-not-found/v1"
         );
         assert_eq!(problem.status, 404);
     }
@@ -748,7 +748,7 @@ No type field.
         }
         assert_eq!(
             value["type"],
-            "https://mif-spec.dev/errors/invalid-document/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/invalid-document/v1"
         );
     }
 
@@ -946,7 +946,7 @@ No type field.
         let problem = error.to_problem();
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/document-not-found/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/document-not-found/v1"
         );
         assert_eq!(problem.status, 404);
     }

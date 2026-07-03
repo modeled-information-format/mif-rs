@@ -1,5 +1,13 @@
 # mif-rs
 
+<p align="center">
+  <img src=".github/social-preview.png" width="860"
+       alt="mif-rs, a Rust implementation of MIF. The chevron-M mark and wordmark on a dark
+            field, the promise Validate. Resolve. Embed. Search., and its four core crates —
+            mif-schema, mif-ontology, mif-embed, mif-store — as machine-cyan and human-amber
+            chips.">
+</p>
+
 <!-- Badges -->
 [![CI](https://github.com/modeled-information-format/mif-rs/actions/workflows/pipeline.yml/badge.svg)](https://github.com/modeled-information-format/mif-rs/actions/workflows/pipeline.yml)
 [![Rust Version](https://img.shields.io/badge/rust-1.92%2B-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/)

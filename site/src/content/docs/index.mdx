@@ -1,0 +1,60 @@
+---
+title: mif-rs
+template: splash
+description: "mif-rs — a Rust implementation of MIF: schema validation, ontology resolution, lossless markdown/JSON-LD projection, local embeddings, and vector search, exposed as a CLI and an MCP server."
+hero:
+  tagline: A Rust engine for MIF — the same document a person reads and a parser reads, kept losslessly in sync, validated, embedded, and searchable.
+  image:
+    file: ../../assets/hero.svg
+  actions:
+    - text: Error reference
+      link: /mif-rs/references/errors/
+      icon: right-arrow
+    - text: Rust API docs
+      link: /mif-rs/rustdoc/mif_core/
+      icon: right-arrow
+      variant: minimal
+    - text: GitHub
+      link: https://github.com/modeled-information-format/mif-rs
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+`mif-rs` implements the [MIF (Modeled Information Format)](https://mif-spec.dev)
+specification as nine Cargo workspace crates: seven libraries and two thin
+binaries built on top of them.
+
+<CardGrid>
+	<Card title="Validate" icon="approve-check">
+		`mif-schema` validates MIF documents, citations, and ontology
+		definitions against the canonical, vendored JSON Schema — offline,
+		no network access at validation time.
+	</Card>
+	<Card title="Resolve ontologies" icon="puzzle">
+		`mif-ontology` resolves the three-tier `extends` inheritance chain
+		across a corpus of ontology definition files.
+	</Card>
+	<Card title="Project losslessly" icon="document">
+		`mif-frontmatter` projects markdown frontmatter to JSON-LD and back,
+		proving the round trip is lossless — the frontmatter markdown is
+		source of truth; JSON-LD is always a derived projection.
+	</Card>
+	<Card title="Embed and search" icon="magnifier">
+		`mif-embed` computes local sentence embeddings offline after first
+		fetch; `mif-store` ranks them by cosine similarity in a `SQLite`-backed
+		vector store.
+	</Card>
+</CardGrid>
+
+Both `mif-cli` and `mif-mcp` are thin consumers of those five libraries: a
+command-line tool and an MCP server exposing the identical
+validate/ingest/search/resolve operations as tools for an agent.
+
+## Errors are a first-class, machine-readable surface
+
+Every failure across the workspace maps to an
+[RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) `application/problem+json`
+envelope with a stable, versioned `type` URI — not just a human-readable
+message. See the [error reference](/mif-rs/references/errors/) for the full catalog.

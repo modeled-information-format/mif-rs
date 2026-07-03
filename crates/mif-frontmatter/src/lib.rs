@@ -857,7 +857,7 @@ legitimate batch consumers against gateway saturation.
             .to_problem();
         assert_eq!(
             missing.problem_type,
-            "https://mif-spec.dev/errors/missing-frontmatter/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/missing-frontmatter/v1"
         );
         assert_eq!(missing.status, 422);
         assert_eq!(missing.exit_code, Some(2));
@@ -870,7 +870,7 @@ legitimate batch consumers against gateway saturation.
         .to_problem();
         assert_eq!(
             drift.problem_type,
-            "https://mif-spec.dev/errors/roundtrip-drift/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/roundtrip-drift/v1"
         );
         assert_eq!(drift.exit_code, Some(4));
         assert_ne!(missing.problem_type, drift.problem_type);
@@ -1104,7 +1104,7 @@ This exec-summary synthesis covers example findings.
         let problem = err.to_problem();
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/invalid-frontmatter-yaml/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/invalid-frontmatter-yaml/v1"
         );
         assert_eq!(problem.status, 422);
         assert!(problem.suggested_fix.is_some());
@@ -1117,7 +1117,7 @@ This exec-summary synthesis covers example findings.
         let problem = err.to_problem();
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/frontmatter-not-a-mapping/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/frontmatter-not-a-mapping/v1"
         );
         assert_eq!(problem.status, 422);
         assert!(problem.suggested_fix.is_some());
@@ -1152,7 +1152,7 @@ This exec-summary synthesis covers example findings.
         let problem = err.to_problem();
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/field-not-a-string/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/field-not-a-string/v1"
         );
         assert_eq!(problem.status, 422);
     }
@@ -1168,7 +1168,7 @@ This exec-summary synthesis covers example findings.
         let problem = err.to_problem();
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/jsonld-not-an-object/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/jsonld-not-an-object/v1"
         );
         assert_eq!(problem.status, 422);
     }
@@ -1210,7 +1210,7 @@ This exec-summary synthesis covers example findings.
         let problem = err.to_problem();
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/field-json-conversion-failure/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/field-json-conversion-failure/v1"
         );
         assert_eq!(problem.status, 422);
     }
@@ -1237,7 +1237,7 @@ This exec-summary synthesis covers example findings.
         let problem = yaml_serialize.to_problem();
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/yaml-serialization-failure/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/yaml-serialization-failure/v1"
         );
         assert_eq!(problem.status, 500);
         assert_eq!(problem.exit_code, Some(1));
@@ -1251,7 +1251,7 @@ This exec-summary synthesis covers example findings.
         let problem = yaml_conversion.to_problem();
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/field-yaml-conversion-failure/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/field-yaml-conversion-failure/v1"
         );
         assert_eq!(problem.status, 422);
 
@@ -1261,7 +1261,7 @@ This exec-summary synthesis covers example findings.
         let problem = json_roundtrip.to_problem();
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/json-roundtrip-failure/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/json-roundtrip-failure/v1"
         );
         assert_eq!(problem.status, 500);
         assert_eq!(problem.exit_code, Some(1));

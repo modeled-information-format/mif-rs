@@ -1,0 +1,49 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="mif-rs — a Rust implementation of MIF">
+  <title>mif-rs — a Rust implementation of MIF</title>
+  <desc>A chevron-M mark of two halves — machine-cyan and human-amber — meeting at one node over a dark field. Wordmark mif-rs, the line "a Rust implementation of MIF", and its four core crates: schema, ontology, embed, store.</desc>
+  <defs>
+    <linearGradient id="field" x1="0" y1="0" x2="1280" y2="640" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0A0D13"/>
+      <stop offset="1" stop-color="#0E121B"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Field -->
+  <rect width="1280" height="640" fill="url(#field)"/>
+  <!-- Faint inset frame -->
+  <rect x="36" y="36" width="1208" height="568" rx="20" fill="none" stroke="#222C3C" stroke-width="2"/>
+
+  <!-- Mark: chevron M, centered upper -->
+  <g transform="translate(532 70) scale(4.5)" fill="none" stroke-width="4" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M6 42 L6 6 L24 29" stroke="#34D3E8"/>
+    <path d="M24 29 L42 6 L42 42" stroke="#F5B642"/>
+    <path d="M24 25.6 L27.4 29 L24 32.4 L20.6 29 Z" fill="#E8EEF6" stroke="none"/>
+  </g>
+
+  <!-- Wordmark -->
+  <text x="640" y="352" text-anchor="middle"
+        font-family="Menlo, 'SF Mono', 'JetBrains Mono', monospace"
+        font-size="76" font-weight="700" letter-spacing="0.02em" fill="#E8EEF6">mif-rs</text>
+
+  <!-- Spelled-out description -->
+  <text x="640" y="398" text-anchor="middle"
+        font-family="Menlo, 'SF Mono', 'JetBrains Mono', monospace"
+        font-size="24" fill="#AEBCCF" letter-spacing="0.03em">A Rust implementation of MIF</text>
+
+  <!-- The promise -->
+  <text x="640" y="460" text-anchor="middle"
+        font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
+        font-size="30" fill="#E8EEF6" letter-spacing="-0.01em">Validate. Resolve. Embed. Search.</text>
+
+  <!-- Core crate chips -->
+  <text x="640" y="524" text-anchor="middle"
+        font-family="Menlo, 'SF Mono', 'JetBrains Mono', monospace"
+        font-size="22" letter-spacing="0.01em">
+    <tspan fill="#34D3E8">mif-schema</tspan><tspan fill="#7C8AA0">  ·  </tspan><tspan fill="#F5B642">mif-ontology</tspan><tspan fill="#7C8AA0">  ·  </tspan><tspan fill="#34D3E8">mif-embed</tspan><tspan fill="#7C8AA0">  ·  </tspan><tspan fill="#F5B642">mif-store</tspan>
+  </text>
+
+  <!-- Footer locator -->
+  <text x="640" y="576" text-anchor="middle"
+        font-family="Menlo, 'SF Mono', 'JetBrains Mono', monospace"
+        font-size="17" fill="#7C8AA0" letter-spacing="0.01em">modeled-information-format.github.io/mif-rs</text>
+</svg>
