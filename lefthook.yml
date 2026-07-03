@@ -26,12 +26,21 @@ pre-push:
         reported lints, or run `cargo clippy --workspace --all-targets
         --all-features --fix` for auto-fixable ones.
     test:
-      run: cargo test --workspace --all-features
+      run: cargo test --workspace --all-features --verbose
+      env:
+        # Matches CI's workflow-level RUSTFLAGS (ci-checks.yml) — without
+        # it, a plain rustc warning that isn't also a clippy lint could
+        # pass here and still fail CI.
+        RUSTFLAGS: "-D warnings"
       fail_text: |
         A test failed. Run `cargo test --workspace --all-features` locally
         to see the failure, and do not push until it passes.
     doc:
       run: cargo doc --workspace --no-deps --all-features
+      env:
+        # Matches CI's doc job (ci-checks.yml) — without it, a broken
+        # intra-doc link or bad doc-example could pass here silently.
+        RUSTDOCFLAGS: "-D warnings"
       fail_text: |
         `cargo doc` failed to build. This usually means a broken doc-link
         or an invalid doc-example; fix it before pushing.

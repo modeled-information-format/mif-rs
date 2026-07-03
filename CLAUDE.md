@@ -131,6 +131,7 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 | `rustfmt.toml` | Formatter settings (workspace-root) |
 | `deny.toml` | Supply chain policy: licenses, bans, source restrictions (workspace-root) |
 | `justfile` | Local task runner recipes (CI parity) |
+| `lefthook.yml` | Git hooks (pre-commit fmt-check; pre-push full CI parity), activated via `lefthook install` |
 
 ### Error Handling
 
