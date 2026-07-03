@@ -1,6 +1,6 @@
 ---
 title: "Error reference"
-description: "The RFC 9457 Problem Details catalog every mif-rs crate emits."
+description: "The RFC 9457 Problem Details catalog that every mif-rs crate emits."
 ---
 
 Every library crate in this workspace (`mif-schema`, `mif-ontology`,
