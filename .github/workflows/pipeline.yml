@@ -247,9 +247,9 @@ jobs:
       security-events: write
       actions: read
       packages: read
-    # modeled-information-format/.github main @ e50b004c (2026-07-01)
+    # modeled-information-format/.github main @ 7c56346c (2026-07-02)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-trivy.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
+      modeled-information-format/.github/.github/workflows/reusable-trivy.yml@7c56346c4bc47b15f08d44889116486583a1a7ac
     with:
       image-ref: >-
         ghcr.io/${{ github.repository }}/${{
