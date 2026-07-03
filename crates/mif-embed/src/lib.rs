@@ -380,6 +380,80 @@ mod tests {
     }
 
     #[test]
+    fn remaining_error_variants_map_to_their_own_slug_and_status() {
+        let cases: [(EmbedError, &str, u16); 5] = [
+            (
+                EmbedError::HubClient(hf_hub::api::sync::ApiError::LockAcquisition(
+                    std::path::PathBuf::from("/tmp/lock"),
+                )),
+                "hub-client-init-failure",
+                500,
+            ),
+            (
+                EmbedError::Config(serde_json::from_str::<i32>("not json").unwrap_err()),
+                "invalid-model-config",
+                500,
+            ),
+            (
+                EmbedError::LoadTokenizer(tokenizers::Error::from("bad tokenizer definition")),
+                "load-tokenizer-failure",
+                500,
+            ),
+            (
+                EmbedError::Model(candle_core::Error::msg("bad weights")),
+                "load-model-weights-failure",
+                500,
+            ),
+            (
+                EmbedError::Inference(candle_core::Error::msg("bad tensor op")),
+                "inference-failure",
+                500,
+            ),
+        ];
+
+        for (error, slug, status) in cases {
+            let problem = error.to_problem();
+            assert_eq!(
+                problem.problem_type,
+                format!("https://mif-spec.dev/errors/{slug}/v1")
+            );
+            assert_eq!(problem.status, status);
+            assert_eq!(
+                problem.suggested_fix.unwrap().applicability,
+                Applicability::Unspecified
+            );
+        }
+    }
+
+    #[test]
+    fn tokenize_error_maps_to_a_client_side_status_and_input_fix() {
+        let problem = EmbedError::Tokenize(tokenizers::Error::from("bad input text")).to_problem();
+        assert_eq!(
+            problem.problem_type,
+            "https://mif-spec.dev/errors/tokenize-failure/v1"
+        );
+        assert_eq!(problem.status, 422);
+        assert_eq!(
+            problem.suggested_fix.unwrap().applicability,
+            Applicability::MaybeIncorrect
+        );
+    }
+
+    #[test]
+    fn read_to_string_wraps_a_missing_file_as_a_read_file_variant() {
+        let path = std::path::Path::new("/nonexistent-mif-embed-test-path/config.json");
+        let err = super::read_to_string(path).unwrap_err();
+        assert!(matches!(err, EmbedError::ReadFile { .. }));
+    }
+
+    #[test]
+    fn read_wraps_a_missing_file_as_a_read_file_variant() {
+        let path = std::path::Path::new("/nonexistent-mif-embed-test-path/model.safetensors");
+        let err = super::read(path).unwrap_err();
+        assert!(matches!(err, EmbedError::ReadFile { .. }));
+    }
+
+    #[test]
     fn distinct_error_variants_map_to_distinct_problem_types() {
         let fetch = EmbedError::Fetch {
             repo: "sentence-transformers/all-MiniLM-L6-v2",
@@ -408,8 +482,39 @@ mod tests {
         assert_ne!(fetch.problem_type, no_cache.problem_type);
     }
 
+    // `cargo test` runs tests in parallel threads within one process. Every
+    // test below that calls `Embedder::load()` races the others to download
+    // and lock the same model blob on a cold cache — `hf-hub`'s lock
+    // acquisition is not reliably concurrent across platforms. Warming the
+    // cache once, serialized through `Once`, means every real
+    // `Embedder::load()` call below hits an already-populated cache and
+    // never contends on the download lock.
+    fn warm_embedding_model_cache() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let _ = Embedder::load();
+        });
+    }
+
+    #[test]
+    fn embedder_debug_output_names_the_type_without_dumping_internal_fields() {
+        warm_embedding_model_cache();
+        let embedder = match Embedder::load() {
+            Ok(embedder) => embedder,
+            Err(err) => {
+                eprintln!("skipping: could not load embedding model: {err}");
+                return;
+            },
+        };
+
+        let debug_output = format!("{embedder:?}");
+        assert!(debug_output.starts_with("Embedder"));
+        assert!(debug_output.contains("device"));
+    }
+
     #[test]
     fn embed_produces_a_unit_norm_384_dim_vector() {
+        warm_embedding_model_cache();
         let embedder = match Embedder::load() {
             Ok(embedder) => embedder,
             Err(err) => {

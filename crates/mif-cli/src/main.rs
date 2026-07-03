@@ -10,7 +10,6 @@
 //! [`mif_problem::OutputFormat::select`]).
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
-use std::hash::{Hash, Hasher};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -237,7 +236,7 @@ fn main() -> ExitCode {
         },
         Err(error) => {
             eprintln!("{}", error.render(format));
-            ExitCode::FAILURE
+            ExitCode::from(error.to_problem().exit_code.unwrap_or(1))
         },
     }
 }
@@ -303,7 +302,7 @@ fn resolve(id: &str, ontologies_dir: &Path) -> Result<String, CliError> {
 /// Projects `contents` to a JSON-LD document and proves the markdown <->
 /// JSON-LD round trip is lossless, dispatching on whether `contents` is
 /// markdown-with-frontmatter (starts with `---`) or already JSON-LD.
-fn project_to_jsonld(contents: &str) -> Result<serde_json::Value, CliError> {
+fn project_to_jsonld(path: &Path, contents: &str) -> Result<serde_json::Value, CliError> {
     if contents.trim_start().starts_with("---") {
         mif_frontmatter::roundtrip_lossless(contents)?;
         let (frontmatter, body) = mif_frontmatter::parse_markdown(contents)?;
@@ -311,7 +310,7 @@ fn project_to_jsonld(contents: &str) -> Result<serde_json::Value, CliError> {
     } else {
         let jsonld: serde_json::Value =
             serde_json::from_str(contents).map_err(|source| CliError::Json {
-                path: "<ingest input>".to_string(),
+                path: path.display().to_string(),
                 source,
             })?;
         let (frontmatter, body) =
@@ -323,11 +322,19 @@ fn project_to_jsonld(contents: &str) -> Result<serde_json::Value, CliError> {
 }
 
 /// A stable, non-cryptographic hash of `contents`, used only to detect
-/// whether a document's content changed since it was last ingested.
+/// whether a document's content changed since it was last ingested. FNV-1a
+/// is used rather than `std`'s `DefaultHasher`, whose algorithm is
+/// explicitly documented as unstable across Rust versions and would make
+/// this "stable" claim false for a value that outlives a single build.
 fn content_hash(contents: &str) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    contents.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in contents.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")
 }
 
 /// Runs the full ingestion pipeline for one MIF document: validate (lint),
@@ -344,7 +351,7 @@ fn ingest(file: &Path, db_path: Option<&Path>) -> Result<String, CliError> {
         source,
     })?;
 
-    let jsonld = project_to_jsonld(&contents)?;
+    let jsonld = project_to_jsonld(file, &contents)?;
     mif_schema::validate_document(&jsonld)?;
 
     let id = jsonld
@@ -449,7 +456,10 @@ mod tests {
 
     use mif_problem::{OutputFormat, ToProblem};
 
-    use super::{corpus_stats, find_similar, ingest, resolve, search, validate};
+    use super::{
+        CliError, Command, OntologyCommand, corpus_stats, find_similar, ingest, resolve, run,
+        search, validate,
+    };
 
     fn write_temp_file(contents: &str) -> tempfile::NamedTempFile {
         let file = tempfile::NamedTempFile::new().unwrap();
@@ -740,6 +750,139 @@ No type field.
             value["type"],
             "https://mif-spec.dev/errors/invalid-document/v1"
         );
+    }
+
+    #[test]
+    fn ingest_missing_file_classifies_as_a_404_maybe_incorrect_problem() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("vectors.db");
+        let error = ingest(
+            std::path::Path::new("/nonexistent/mif-cli-fixture.json"),
+            Some(&db_path),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_problem().status, 404);
+    }
+
+    #[test]
+    fn ingest_reports_an_io_error_when_the_db_parent_directory_cannot_be_created() {
+        warm_embedding_model_cache();
+        let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
+        // `blocker` exists as a plain file, so `create_dir_all` on a path
+        // that treats it as an intermediate directory component must fail.
+        let parent_dir = tempfile::tempdir().unwrap();
+        let blocker = parent_dir.path().join("blocker");
+        fs::write(&blocker, "not a directory").unwrap();
+        let db_path = blocker.join("subdir").join("vectors.db");
+
+        let error = ingest(file.path(), Some(&db_path)).unwrap_err();
+        assert_eq!(error.to_problem().status, 500);
+    }
+
+    #[test]
+    fn ingest_reports_the_real_file_path_on_a_json_ld_parse_error() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("vectors.db");
+        let file = write_temp_file("not valid json");
+
+        let error = ingest(file.path(), Some(&db_path)).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains(&file.path().display().to_string()),
+            "expected the real file path in {message:?}, not the ingest-input placeholder"
+        );
+    }
+
+    #[test]
+    fn exit_code_reflects_the_mapped_problem_type_not_a_flat_failure() {
+        let io_error = CliError::Io {
+            path: "x".to_string(),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        };
+        assert_eq!(io_error.to_problem().exit_code, Some(1));
+
+        let json_error = CliError::Json {
+            path: "x".to_string(),
+            source: serde_json::from_str::<serde_json::Value>("not json").unwrap_err(),
+        };
+        assert_eq!(json_error.to_problem().exit_code, Some(2));
+
+        let not_found = CliError::DocumentNotFound("urn:mif:memory:missing".to_string());
+        assert_eq!(not_found.to_problem().exit_code, Some(3));
+    }
+
+    #[test]
+    fn delegated_error_variants_render_a_sane_problem_if_ever_directly_matched() {
+        // `meta()`'s Schema/Ontology/Frontmatter/Embed/Store arm is dead in
+        // practice — `to_problem()` always delegates to the inner error
+        // instead of calling `meta()` for these variants — but it exists as
+        // a defensive fallback. Exercise it directly so that fallback stays
+        // provably sane (500, non-panicking) rather than untested.
+        for error in [
+            CliError::Frontmatter(mif_frontmatter::FrontmatterError::MissingFrontmatter),
+            CliError::Embed(mif_embed::EmbedError::NoCacheDir { model: "test" }),
+            CliError::Store(mif_store::StoreError::MissingParentDir {
+                path: "test".to_string(),
+            }),
+        ] {
+            let problem = error.to_problem();
+            assert!(problem.status >= 400, "status was {}", problem.status);
+            // `to_problem()` never actually calls `meta()` for these
+            // variants (it delegates to the inner error instead), so
+            // `meta()`'s own fallback arm needs a direct call to cover.
+            let meta = error.meta();
+            assert_eq!(meta.status, 500);
+        }
+    }
+
+    #[test]
+    fn run_dispatches_every_subcommand_to_its_handler() {
+        let ontologies_dir = tempfile::tempdir().unwrap();
+        fs::write(
+            ontologies_dir.path().join("base.yaml"),
+            "ontology:\n  id: base\n  version: 1.0.0\n",
+        )
+        .unwrap();
+        let resolve_result = run(&Command::Ontology {
+            command: OntologyCommand::Resolve {
+                id: "base".to_string(),
+                ontologies_dir: ontologies_dir.path().to_path_buf(),
+            },
+        });
+        assert!(resolve_result.is_ok());
+
+        let missing_file = tempfile::tempdir().unwrap().path().join("missing.json");
+        let validate_result = run(&Command::Validate { file: missing_file });
+        assert!(validate_result.is_err());
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("vectors.db");
+        warm_embedding_model_cache();
+        let doc_file = write_temp_file(VALID_MARKDOWN_FIXTURE);
+        let ingest_result = run(&Command::Ingest {
+            file: doc_file.path().to_path_buf(),
+            db_path: Some(db_path.clone()),
+        });
+        assert!(ingest_result.is_ok());
+
+        let search_result = run(&Command::Search {
+            query: "test content".to_string(),
+            db_path: Some(db_path.clone()),
+            limit: 5,
+        });
+        assert!(search_result.is_ok());
+
+        let find_similar_result = run(&Command::FindSimilar {
+            id: "urn:mif:memory:test-001".to_string(),
+            db_path: Some(db_path.clone()),
+            limit: 5,
+        });
+        assert!(find_similar_result.is_ok());
+
+        let corpus_stats_result = run(&Command::CorpusStats {
+            db_path: Some(db_path),
+        });
+        assert!(corpus_stats_result.is_ok());
     }
 
     fn ingest_fixture(db_path: &std::path::Path, id: &str, content: &str) {

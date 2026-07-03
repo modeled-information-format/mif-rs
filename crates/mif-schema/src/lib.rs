@@ -243,6 +243,20 @@ mod tests {
     }
 
     #[test]
+    fn messages_reports_the_invalid_variant_and_is_empty_for_schema_compilation() {
+        let mut instance = minimal_valid_document();
+        instance.as_object_mut().unwrap().remove("conceptType");
+        let error = validate_document(&instance).unwrap_err();
+        assert!(matches!(error, MifSchemaError::Invalid(_)));
+        assert!(!error.messages().is_empty());
+
+        let compilation_error = MifSchemaError::SchemaCompilation(SchemaCompilationSource(
+            "synthetic failure for coverage".to_string(),
+        ));
+        assert!(compilation_error.messages().is_empty());
+    }
+
+    #[test]
     fn document_with_bad_id_pattern_fails() {
         let mut instance = minimal_valid_document();
         instance["@id"] = json!("not-a-urn");

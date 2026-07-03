@@ -676,4 +676,140 @@ mod tests {
         );
         assert_ne!(missing.problem_type, too_large.problem_type);
     }
+
+    #[test]
+    fn open_returns_missing_parent_dir_when_the_parent_directory_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no-such-subdir").join("vectors.db");
+
+        let error = VectorStore::open(&path).unwrap_err();
+        assert!(matches!(
+            error,
+            StoreError::MissingParentDir { ref path } if path.ends_with("no-such-subdir")
+        ));
+    }
+
+    #[test]
+    fn open_reports_an_open_failure_when_the_path_is_an_existing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        // dir.path() itself exists and is a directory (its own parent exists,
+        // so this reaches Connection::open rather than the MissingParentDir
+        // check); SQLite cannot open a directory as a database file.
+        let error = VectorStore::open(dir.path()).unwrap_err();
+        assert!(matches!(error, StoreError::Open { .. }));
+    }
+
+    #[test]
+    fn open_reports_an_open_failure_when_schema_initialization_fails_on_a_corrupt_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("corrupt.db");
+        // A non-empty file that is not a valid SQLite database. `Connection::open`
+        // succeeds (SQLite defers header validation), so this exercises the
+        // schema-initialization error path rather than the open path.
+        std::fs::write(
+            &path,
+            b"not a valid sqlite database file, just garbage bytes",
+        )
+        .unwrap();
+
+        let error = VectorStore::open(&path).unwrap_err();
+        assert!(matches!(error, StoreError::Open { .. }));
+    }
+
+    #[test]
+    fn top_k_similar_reports_vector_blob_mismatch_instead_of_silently_skipping_corrupt_rows() {
+        let (_dir, store) = open_temp_store();
+
+        let mut malformed_blob = encode_vector(&[1.0_f32, 2.0, 3.0]);
+        malformed_blob.push(0xFF);
+        store
+            .conn
+            .execute(
+                "INSERT INTO embeddings (id, dim, vector, content_hash, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    "corrupt-1",
+                    4_i64,
+                    malformed_blob,
+                    "hash-1",
+                    "2026-07-02T00:00:00Z"
+                ],
+            )
+            .unwrap();
+
+        let error = store.top_k_similar(&[1.0, 2.0, 3.0, 4.0], 10).unwrap_err();
+        assert!(matches!(
+            error,
+            StoreError::VectorBlobMismatch { ref id, expected_dim: 4, actual_len: 3 }
+                if id == "corrupt-1"
+        ));
+    }
+
+    #[test]
+    fn top_k_similar_scores_a_zero_vector_row_as_zero_similarity() {
+        let (_dir, store) = open_temp_store();
+        store.upsert("zero", &[0.0, 0.0], "h", "t").unwrap();
+        store.upsert("nonzero", &[1.0, 0.0], "h", "t").unwrap();
+
+        let matches = store.top_k_similar(&[1.0, 0.0], 10).unwrap();
+        let zero_match = matches.iter().find(|m| m.id == "zero").unwrap();
+        assert!((zero_match.score - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn open_query_corrupt_dimension_and_vector_blob_mismatch_share_the_same_problem_fix() {
+        let bogus_error = || {
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            conn.execute("SELECT * FROM no_such_table_at_all", [])
+                .unwrap_err()
+        };
+
+        let open_problem = StoreError::Open {
+            path: "/does/not/matter.db".to_string(),
+            source: bogus_error(),
+        }
+        .to_problem();
+        let query_problem = StoreError::Query {
+            source: bogus_error(),
+        }
+        .to_problem();
+        let corrupt_problem = StoreError::CorruptDimension { value: -1 }.to_problem();
+        let mismatch_problem = StoreError::VectorBlobMismatch {
+            id: "doc-1".to_string(),
+            expected_dim: 4,
+            actual_len: 3,
+        }
+        .to_problem();
+
+        assert_eq!(
+            open_problem.problem_type,
+            "https://mif-spec.dev/errors/open-database-failure/v1"
+        );
+        assert_eq!(open_problem.status, 500);
+        assert_eq!(
+            query_problem.problem_type,
+            "https://mif-spec.dev/errors/sqlite-query-failure/v1"
+        );
+        assert_eq!(query_problem.status, 500);
+        assert_eq!(
+            corrupt_problem.problem_type,
+            "https://mif-spec.dev/errors/corrupt-dimension/v1"
+        );
+        assert_eq!(
+            mismatch_problem.problem_type,
+            "https://mif-spec.dev/errors/vector-blob-mismatch/v1"
+        );
+
+        for problem in [
+            &open_problem,
+            &query_problem,
+            &corrupt_problem,
+            &mismatch_problem,
+        ] {
+            assert_eq!(
+                problem.suggested_fix.as_ref().unwrap().applicability,
+                mif_problem::Applicability::Unspecified
+            );
+        }
+    }
 }

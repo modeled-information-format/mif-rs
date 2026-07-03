@@ -330,10 +330,26 @@ fn resolve_into<S: BuildHasher>(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use mif_problem::ToProblem;
 
-    use super::{OntologyError, OntologyMetadata, parse_definition, resolve_chain};
+    use super::{
+        OntologyError, OntologyMetadata, load_corpus_from_dir, parse_definition, resolve_chain,
+    };
+
+    /// Builds a fresh, non-colliding scratch directory path under the OS temp
+    /// dir for a single test's filesystem fixtures. Does not create it.
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "mif-ontology-test-{}-{label}-{id}",
+            std::process::id()
+        ))
+    }
 
     fn metadata(id: &str, extends: &[&str]) -> OntologyMetadata {
         OntologyMetadata {
@@ -459,5 +475,106 @@ mod tests {
             generic_fault.suggested_fix.unwrap().applicability,
             mif_problem::Applicability::Unspecified
         );
+    }
+
+    #[test]
+    fn malformed_yaml_syntax_returns_yaml_error_that_maps_to_422_problem() {
+        let error = parse_definition("{", "broken.yaml").unwrap_err();
+        assert!(matches!(error, OntologyError::Yaml { .. }));
+
+        let problem = error.to_problem();
+        assert_eq!(problem.status, 422);
+        assert_eq!(
+            problem.problem_type,
+            "https://mif-spec.dev/errors/invalid-yaml/v1"
+        );
+        assert_eq!(
+            problem.suggested_fix.unwrap().applicability,
+            mif_problem::Applicability::MaybeIncorrect
+        );
+    }
+
+    #[test]
+    fn invalid_definition_error_to_problem_reports_422_and_maybe_incorrect_fix() {
+        let yaml = "ontology:\n  id: Not_Valid\n  version: 1.0.0\n";
+        let error = parse_definition(yaml, "bad.yaml").unwrap_err();
+        assert!(matches!(error, OntologyError::Invalid { .. }));
+
+        let problem = error.to_problem();
+        assert_eq!(problem.status, 422);
+        assert_eq!(
+            problem.problem_type,
+            "https://mif-spec.dev/errors/invalid-ontology-definition/v1"
+        );
+        assert_eq!(
+            problem.suggested_fix.unwrap().applicability,
+            mif_problem::Applicability::MaybeIncorrect
+        );
+    }
+
+    #[test]
+    fn definition_missing_ontology_key_returns_deserialize_error_that_maps_to_500_problem() {
+        // The ontology schema does not mark the top-level `ontology` key as
+        // required, so this document passes schema validation but then fails
+        // to deserialize into `OntologyDefinitionFile`, exercising the
+        // "schema/struct gap" defensive branch.
+        let error = parse_definition("{}\n", "empty.yaml").unwrap_err();
+        assert!(matches!(error, OntologyError::Deserialize { .. }));
+
+        let problem = error.to_problem();
+        assert_eq!(problem.status, 500);
+        assert_eq!(
+            problem.problem_type,
+            "https://mif-spec.dev/errors/ontology-metadata-mismatch/v1"
+        );
+        assert_eq!(
+            problem.suggested_fix.unwrap().applicability,
+            mif_problem::Applicability::Unspecified
+        );
+    }
+
+    #[test]
+    fn load_corpus_from_dir_reports_io_error_for_missing_directory() {
+        let missing = unique_temp_dir("missing-dir");
+        assert!(matches!(
+            load_corpus_from_dir(&missing),
+            Err(OntologyError::Io { .. })
+        ));
+    }
+
+    #[test]
+    fn load_corpus_from_dir_skips_non_yaml_files_and_loads_yaml_files() {
+        let dir = unique_temp_dir("skip-non-yaml");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("readme.txt"), b"not an ontology file").unwrap();
+        fs::write(
+            dir.join("mif-base.yaml"),
+            b"ontology:\n  id: mif-base\n  version: 1.0.0\n",
+        )
+        .unwrap();
+
+        let corpus = load_corpus_from_dir(&dir).unwrap();
+        assert_eq!(corpus.len(), 1);
+        assert!(corpus.contains_key("mif-base"));
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_corpus_from_dir_reports_io_error_when_yaml_entry_is_unreadable() {
+        let dir = unique_temp_dir("unreadable-yaml");
+        fs::create_dir_all(&dir).unwrap();
+        // A directory whose name ends in .yaml passes the extension filter
+        // but cannot be read as file contents, exercising the
+        // fs::read_to_string IO-error path (distinct from the read_dir
+        // IO-error path already covered above).
+        fs::create_dir_all(dir.join("looks-like-a-file.yaml")).unwrap();
+
+        assert!(matches!(
+            load_corpus_from_dir(&dir),
+            Err(OntologyError::Io { .. })
+        ));
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -12,7 +12,6 @@
 //! `application/problem+json` envelope via [`mif_problem`] rather than plain
 //! text — see [`McpError::to_problem`].
 
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use mif_problem::{ProblemMeta, ToProblem};
@@ -284,7 +283,7 @@ fn resolve_ontology_reference_inner(id: &str, ontologies_dir: &Path) -> Result<S
 /// Projects `contents` to a JSON-LD document and proves the markdown <->
 /// JSON-LD round trip is lossless, dispatching on whether `contents` is
 /// markdown-with-frontmatter (starts with `---`) or already JSON-LD.
-fn project_to_jsonld(contents: &str) -> Result<serde_json::Value, McpError> {
+fn project_to_jsonld(path: &Path, contents: &str) -> Result<serde_json::Value, McpError> {
     if contents.trim_start().starts_with("---") {
         mif_frontmatter::roundtrip_lossless(contents)?;
         let (frontmatter, body) = mif_frontmatter::parse_markdown(contents)?;
@@ -292,7 +291,7 @@ fn project_to_jsonld(contents: &str) -> Result<serde_json::Value, McpError> {
     } else {
         let jsonld: serde_json::Value =
             serde_json::from_str(contents).map_err(|source| McpError::Json {
-                path: "<ingest input>".to_string(),
+                path: path.display().to_string(),
                 source,
             })?;
         let (frontmatter, body) =
@@ -304,11 +303,19 @@ fn project_to_jsonld(contents: &str) -> Result<serde_json::Value, McpError> {
 }
 
 /// A stable, non-cryptographic hash of `contents`, used only to detect
-/// whether a document's content changed since it was last ingested.
+/// whether a document's content changed since it was last ingested. FNV-1a
+/// is used rather than `std`'s `DefaultHasher`, whose algorithm is
+/// explicitly documented as unstable across Rust versions and would make
+/// this "stable" claim false for a value that outlives a single build.
 fn content_hash(contents: &str) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    contents.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in contents.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")
 }
 
 /// Runs the full ingestion pipeline for one MIF document: validate (lint),
@@ -322,7 +329,7 @@ fn ingest_mif_document_inner(
         source,
     })?;
 
-    let jsonld = project_to_jsonld(&contents)?;
+    let jsonld = project_to_jsonld(file, &contents)?;
     mif_schema::validate_document(&jsonld)?;
 
     let id = jsonld
@@ -368,13 +375,18 @@ fn resolve_db_path(db_path: Option<&Path>) -> PathBuf {
 }
 
 /// Converts `mif-store`'s similarity matches into this tool's result shape.
+///
+/// A non-finite score (NaN/±inf, only reachable from a corrupt or
+/// zero-magnitude stored vector) is clamped to `0.0` — `serde_json` cannot
+/// represent non-finite floats, and letting one through would fail the
+/// whole tool call's JSON serialization instead of just that one match.
 fn to_search_result(matches: Vec<mif_store::SimilarityMatch>) -> SearchResult {
     SearchResult {
         matches: matches
             .into_iter()
             .map(|m| MatchEntry {
                 id: m.id,
-                score: m.score,
+                score: if m.score.is_finite() { m.score } else { 0.0 },
             })
             .collect(),
     }
@@ -534,9 +546,11 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use std::fs;
 
+    use mif_problem::ToProblem;
+
     use super::{
-        CorpusStatsParams, FindSimilarParams, IngestParams, Mif, Parameters, ResolveParams,
-        SearchParams, ValidateParams,
+        CorpusStatsParams, FindSimilarParams, IngestParams, McpError, Mif, Parameters,
+        ResolveParams, SearchParams, ValidateParams, ingest_mif_document_inner, to_search_result,
     };
 
     fn write_temp_file(contents: &str) -> tempfile::NamedTempFile {
@@ -732,6 +746,108 @@ No type field.
 
         let store = mif_store::VectorStore::open(&db_path).unwrap();
         assert_eq!(store.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn ingest_reports_the_real_file_path_on_a_json_ld_parse_error() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("vectors.db");
+        let file = write_temp_file("not valid json");
+
+        let error = ingest_mif_document_inner(file.path(), Some(&db_path)).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains(&file.path().display().to_string()),
+            "expected the real file path in {message:?}, not the ingest-input placeholder"
+        );
+    }
+
+    #[test]
+    fn delegated_error_variants_render_a_sane_problem_if_ever_directly_matched() {
+        // See the identical rationale in mif-cli's test module: `meta()`'s
+        // Schema/Ontology/Frontmatter/Embed/Store arm is dead in practice
+        // but exists as a defensive fallback — exercise it directly.
+        for error in [
+            McpError::Frontmatter(mif_frontmatter::FrontmatterError::MissingFrontmatter),
+            McpError::Embed(mif_embed::EmbedError::NoCacheDir { model: "test" }),
+            McpError::Store(mif_store::StoreError::MissingParentDir {
+                path: "test".to_string(),
+            }),
+        ] {
+            let problem = error.to_problem();
+            assert!(problem.status >= 400, "status was {}", problem.status);
+            // `to_problem()` never actually calls `meta()` for these
+            // variants (it delegates to the inner error instead), so
+            // `meta()`'s own fallback arm needs a direct call to cover.
+            let meta = error.meta();
+            assert_eq!(meta.status, 500);
+        }
+    }
+
+    #[test]
+    fn ingest_tool_missing_file_reports_a_404_problem() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("vectors.db");
+        let error = ingest_mif_document_inner(
+            std::path::Path::new("/nonexistent/mif-mcp-fixture.json"),
+            Some(&db_path),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_problem().status, 404);
+    }
+
+    #[test]
+    fn ingest_tool_reports_an_io_error_when_the_db_parent_directory_cannot_be_created() {
+        warm_embedding_model_cache();
+        let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
+        let parent_dir = tempfile::tempdir().unwrap();
+        let blocker = parent_dir.path().join("blocker");
+        fs::write(&blocker, "not a directory").unwrap();
+        let db_path = blocker.join("subdir").join("vectors.db");
+
+        let error = ingest_mif_document_inner(file.path(), Some(&db_path)).unwrap_err();
+        assert_eq!(error.to_problem().status, 500);
+    }
+
+    #[test]
+    fn search_tool_reports_a_problem_when_the_store_cannot_be_opened() {
+        // A directory can't be opened as a SQLite database file.
+        let db_dir = tempfile::tempdir().unwrap();
+        let result = Mif.search_documents(Parameters(SearchParams {
+            query: "anything".to_string(),
+            db_path: Some(db_dir.path().to_path_buf()),
+            limit: None,
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(value.get("status").is_some());
+    }
+
+    #[test]
+    fn corpus_stats_tool_reports_a_problem_when_the_store_cannot_be_opened() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let result = Mif.corpus_stats(Parameters(CorpusStatsParams {
+            db_path: Some(db_dir.path().to_path_buf()),
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(value.get("status").is_some());
+    }
+
+    #[test]
+    fn to_search_result_clamps_a_non_finite_score_to_zero() {
+        let result = to_search_result(vec![
+            mif_store::SimilarityMatch {
+                id: "urn:mif:memory:a".to_string(),
+                score: f32::NAN,
+            },
+            mif_store::SimilarityMatch {
+                id: "urn:mif:memory:b".to_string(),
+                score: f32::INFINITY,
+            },
+        ]);
+        // A non-finite score would otherwise fail serde_json::to_string
+        // for the whole result; assert it serializes cleanly at 0.0.
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"score\":0.0"));
     }
 
     fn ingest_fixture(db_path: &std::path::Path, id: &str, content: &str) {

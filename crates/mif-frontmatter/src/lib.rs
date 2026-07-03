@@ -609,18 +609,23 @@ pub fn jsonld_to_md(
 }
 
 /// Verifies that `md_text` survives a `markdown -> json-ld -> markdown`
-/// round trip byte-for-byte, mirroring `mif_convert.py`'s `roundtrip_file`.
+/// round trip losslessly, mirroring `mif_convert.py`'s `roundtrip_file`.
 ///
-/// The JSON-LD projection is serialized to a JSON string and re-parsed
-/// before recovering markdown from it, to simulate an on-disk projection
-/// round trip rather than comparing in-memory values directly.
+/// "Losslessly" means the recovered markdown matches the *canonical*
+/// serialization of the original frontmatter + body (via
+/// [`serialize_markdown`]), not `md_text`'s literal bytes — the same
+/// comparison [`FrontmatterError::RoundTripDrift`]'s `expected`/`recovered`
+/// fields document. The JSON-LD projection is serialized to a JSON string
+/// and re-parsed before recovering markdown from it, to simulate an
+/// on-disk projection round trip rather than comparing in-memory values
+/// directly.
 ///
 /// # Errors
 ///
 /// Returns any error from [`parse_markdown`], [`md_to_jsonld`],
 /// [`jsonld_to_md`], or [`serialize_markdown`] along the way, or
 /// [`FrontmatterError::RoundTripDrift`] if the recovered markdown differs
-/// from the original.
+/// from the canonical serialization of the original.
 ///
 /// # Examples
 ///
@@ -1090,5 +1095,177 @@ This exec-summary synthesis covers example findings.
         let jsonld = md_to_jsonld(&frontmatter, &body).unwrap();
         assert_eq!(jsonld["timestamp"], "2026-01-01T00:00:00Z");
         assert_eq!(jsonld["description"], "A summary.");
+    }
+
+    #[test]
+    fn parse_markdown_rejects_invalid_yaml_syntax_and_maps_to_a_problem() {
+        let err = parse_markdown("---\n[1, 2\n---\n\nBody.\n").unwrap_err();
+        assert!(matches!(err, FrontmatterError::Yaml { .. }));
+        let problem = err.to_problem();
+        assert_eq!(
+            problem.problem_type,
+            "https://mif-spec.dev/errors/invalid-frontmatter-yaml/v1"
+        );
+        assert_eq!(problem.status, 422);
+        assert!(problem.suggested_fix.is_some());
+    }
+
+    #[test]
+    fn parse_markdown_rejects_sequence_frontmatter_as_not_a_mapping_and_maps_to_a_problem() {
+        let err = parse_markdown("---\n- a\n- b\n---\n\nBody.\n").unwrap_err();
+        assert!(matches!(err, FrontmatterError::NotAMapping));
+        let problem = err.to_problem();
+        assert_eq!(
+            problem.problem_type,
+            "https://mif-spec.dev/errors/frontmatter-not-a-mapping/v1"
+        );
+        assert_eq!(problem.status, 422);
+        assert!(problem.suggested_fix.is_some());
+    }
+
+    #[test]
+    fn md_to_jsonld_omits_id_when_frontmatter_has_none() {
+        // Exercises the `if let Some(id_value) = frontmatter.get("id")`
+        // branch's "absent" path — every other test in this suite supplies
+        // an `id`, so the no-id case was otherwise never taken.
+        let (frontmatter, body) = parse_markdown("---\ntype: semantic\n---\n\nBody.\n").unwrap();
+        let jsonld = md_to_jsonld(&frontmatter, &body).unwrap();
+        assert!(jsonld.get("@id").is_none());
+        assert_eq!(jsonld["conceptType"], "semantic");
+    }
+
+    #[test]
+    fn jsonld_to_md_omits_id_when_jsonld_has_none() {
+        // Mirror of the test above, on the jsonld_to_md side: the
+        // "@id absent" path of its own `if let Some(id_value)` branch.
+        let jsonld = serde_json::json!({"conceptType": "semantic", "content": "Body."});
+        let (frontmatter, body) = jsonld_to_md(&jsonld, FrontmatterShape::V1Canonical).unwrap();
+        assert!(frontmatter.get("id").is_none());
+        assert_eq!(body, "Body.");
+    }
+
+    #[test]
+    fn jsonld_to_md_rejects_non_string_id_and_maps_to_a_problem() {
+        let jsonld = serde_json::json!({"@id": 42, "content": ""});
+        let err = jsonld_to_md(&jsonld, FrontmatterShape::V1Canonical).unwrap_err();
+        assert!(matches!(err, FrontmatterError::FieldNotAString { ref field } if field == "@id"));
+        let problem = err.to_problem();
+        assert_eq!(
+            problem.problem_type,
+            "https://mif-spec.dev/errors/field-not-a-string/v1"
+        );
+        assert_eq!(problem.status, 422);
+    }
+
+    #[test]
+    fn jsonld_to_md_rejects_non_object_input_and_maps_to_a_problem() {
+        let err = jsonld_to_md(
+            &serde_json::json!(["not", "an", "object"]),
+            FrontmatterShape::V1Canonical,
+        )
+        .unwrap_err();
+        assert!(matches!(err, FrontmatterError::JsonNotAnObject));
+        let problem = err.to_problem();
+        assert_eq!(
+            problem.problem_type,
+            "https://mif-spec.dev/errors/jsonld-not-an-object/v1"
+        );
+        assert_eq!(problem.status, 422);
+    }
+
+    #[test]
+    fn non_string_top_level_frontmatter_key_is_dropped_and_causes_roundtrip_drift() {
+        // A bare numeric key (`123: ...`) resolves to a non-string YAML
+        // scalar; md_to_jsonld's generic pass-through loop can only key a
+        // JSON object by a Rust &str, so it silently `continue`s past any
+        // frontmatter key that isn't a string (see the `key.as_str()` else
+        // branch). That silent drop is exactly what turns a real
+        // roundtrip_lossless call into genuine RoundTripDrift, not just a
+        // hand-constructed FrontmatterError::RoundTripDrift value.
+        let md = "---\nid: x\ntype: semantic\n123: orphaned-value\n---\n\nBody.\n";
+
+        let (frontmatter, body) = parse_markdown(md).unwrap();
+        let jsonld = md_to_jsonld(&frontmatter, &body).unwrap();
+        assert!(jsonld.get("123").is_none());
+
+        let err = roundtrip_lossless(md).unwrap_err();
+        assert!(matches!(err, FrontmatterError::RoundTripDrift { .. }));
+    }
+
+    #[test]
+    fn a_complex_yaml_mapping_key_nested_in_a_field_fails_json_conversion() {
+        // Real, spec-legal YAML (the explicit `? ... : ...` complex-key
+        // form) that JSON's data model cannot represent: a mapping keyed by
+        // a sequence. Unlike a non-string *top-level* frontmatter key (which
+        // md_to_jsonld silently skips, see the test above), this key is
+        // buried inside a field's *value*, so yaml_value_to_json actually
+        // attempts — and fails — to convert it, hitting its JsonConversion
+        // error path for real rather than by hand-constructing the variant.
+        let md = "---\nid: x\ntype: semantic\nproperties:\n  ? [1, 2]\n  : value\n---\n\nBody.\n";
+        let (frontmatter, body) = parse_markdown(md).unwrap();
+        let err = md_to_jsonld(&frontmatter, &body).unwrap_err();
+        assert!(
+            matches!(err, FrontmatterError::JsonConversion { ref field, .. } if field == "properties")
+        );
+        let problem = err.to_problem();
+        assert_eq!(
+            problem.problem_type,
+            "https://mif-spec.dev/errors/field-json-conversion-failure/v1"
+        );
+        assert_eq!(problem.status, 422);
+    }
+
+    #[test]
+    fn yaml_serialize_yaml_conversion_and_json_roundtrip_variants_map_to_expected_problems() {
+        // These three variants' own error-construction call sites
+        // (`YamlSerialize`/`YamlConversion`'s serde_norway failure and
+        // `JsonRoundTrip`'s serde_json failure) are not reachable through
+        // this crate's public functions with a legitimately constructed
+        // input — see the module-level note on json_value_to_yaml's mirror
+        // branch. Constructed directly here (each `#[source]` obtained from
+        // a real, independently forced parse failure) purely to prove the
+        // `meta()`/`to_problem()` mapping for each variant, per the two
+        // "internal bug" arms of `FrontmatterError::to_problem`.
+        let forced_yaml_error =
+            || serde_norway::from_str::<serde_norway::Value>("[1, 2").unwrap_err();
+        let forced_json_error =
+            || serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
+
+        let yaml_serialize = FrontmatterError::YamlSerialize {
+            source: forced_yaml_error(),
+        };
+        let problem = yaml_serialize.to_problem();
+        assert_eq!(
+            problem.problem_type,
+            "https://mif-spec.dev/errors/yaml-serialization-failure/v1"
+        );
+        assert_eq!(problem.status, 500);
+        assert_eq!(problem.exit_code, Some(1));
+        assert!(problem.suggested_fix.is_some());
+        assert!(!problem.code_actions.is_empty());
+
+        let yaml_conversion = FrontmatterError::YamlConversion {
+            field: "some_field".to_string(),
+            source: forced_yaml_error(),
+        };
+        let problem = yaml_conversion.to_problem();
+        assert_eq!(
+            problem.problem_type,
+            "https://mif-spec.dev/errors/field-yaml-conversion-failure/v1"
+        );
+        assert_eq!(problem.status, 422);
+
+        let json_roundtrip = FrontmatterError::JsonRoundTrip {
+            source: forced_json_error(),
+        };
+        let problem = json_roundtrip.to_problem();
+        assert_eq!(
+            problem.problem_type,
+            "https://mif-spec.dev/errors/json-roundtrip-failure/v1"
+        );
+        assert_eq!(problem.status, 500);
+        assert_eq!(problem.exit_code, Some(1));
+        assert!(problem.suggested_fix.is_some());
+        assert!(!problem.code_actions.is_empty());
     }
 }
