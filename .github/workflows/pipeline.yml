@@ -229,7 +229,7 @@ jobs:
   # fixed constants ("container-scan-sarif" / "trivy-image.sarif"), not
   # per-call-unique — a second matrix cell calling it in the same run would
   # collide on that artifact name (upload-artifact rejects a duplicate name
-  # within one run). Both images share the same base (distroless/cc-debian12)
+  # within one run). Both images share the same base (chainguard/glibc-dynamic)
   # and dependency tree (the Dockerfile COPYs and builds from the same
   # workspace checkout), so a Trivy scan of one is representative of the
   # other for base-image/dependency CVEs — scan the first resolved bin.

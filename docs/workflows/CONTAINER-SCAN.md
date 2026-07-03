@@ -124,7 +124,7 @@ binary to containerize, and vice versa.
 `mif-cli` and `mif-mcp` — `reusable-trivy.yml` uploads its SARIF under a
 fixed artifact name (`container-scan-sarif`), so a second matrix cell
 calling it in the same run would collide on that name. Both images share the
-same base image (`distroless/cc-debian12`) and the same dependency tree (the
+same base image (`chainguard/glibc-dynamic`) and the same dependency tree (the
 Dockerfile builds from one workspace checkout), so scanning one is
 representative of the other for base-image/dependency CVEs. The filesystem
 scan (`trivy` job in `quality-gates.yml`) is unaffected by any of this and
