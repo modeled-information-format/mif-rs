@@ -28,17 +28,21 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release --locked -p "${BIN}" --bin "${BIN}"
 
-# Runtime stage - use distroless/cc for minimal attack surface while keeping
-# glibc + CA certificates (unlike distroless/static or scratch, which have
-# neither — needed for any future HTTPS/TLS use, not just today's offline
-# validation logic).
+# Runtime stage - use Chainguard's glibc-dynamic for minimal attack surface
+# while keeping glibc + CA certificates (unlike distroless/static or scratch,
+# which have neither — needed for any future HTTPS/TLS use, not just today's
+# offline validation logic). Chainguard rebuilds from source continuously
+# (Wolfi), unlike Debian-based distroless images which inherit whatever CVEs
+# sit unpatched in Debian's stable branch (bookworm carried 14 CVEs Debian
+# had explicitly marked <no-dsa> — will never fix — with no way to resolve
+# them by bumping the base image; glibc-dynamic currently scans clean).
 # Pinned by digest (no :latest) to satisfy Scorecard Pinned-Dependencies and
 # Trivy DS-0001; Dependabot's docker ecosystem keeps the digest fresh.
-FROM gcr.io/distroless/cc-debian12@sha256:d703b626ba455c4e6c6fbe5f36e6f427c85d51445598d564652a2f334179f96e
+FROM cgr.dev/chainguard/glibc-dynamic@sha256:ea9eab0adc5716fb9937ab60155a31bce9cbc8b56e6f2e21fb9af9218be195b7
 
 ARG BIN
 
-# Copy binary from builder. distroless has no shell, so BIN can't be
+# Copy binary from builder. glibc-dynamic has no shell, so BIN can't be
 # interpolated in COPY/ENTRYPOINT here — the calling workflow builds one
 # image per bin and passes a matching, bin-specific final image tag.
 COPY --from=builder /app/target/release/${BIN} /usr/local/bin/app

@@ -48,7 +48,7 @@ One container image per binary crate, built and pushed by
 | Image (mif-cli) | `ghcr.io/modeled-information-format/mif-rs/mif-cli` |
 | Image (mif-mcp) | `ghcr.io/modeled-information-format/mif-rs/mif-mcp` |
 | Platforms | `linux/amd64`, `linux/arm64` |
-| Base image | `gcr.io/distroless/cc-debian12` (pinned by digest) |
+| Base image | `cgr.dev/chainguard/glibc-dynamic` (pinned by digest) |
 
 ## Tags
 

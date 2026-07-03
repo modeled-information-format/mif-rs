@@ -393,7 +393,7 @@ Conventional commit prefixes map onto changelog sections:
 
 - **Registry:** `ghcr.io/modeled-information-format/mif-rs`
 - **Platforms:** linux/amd64, linux/arm64
-- **Base image:** `distroless/cc-debian12` (minimal attack surface)
+- **Base image:** `chainguard/glibc-dynamic` (minimal attack surface, rebuilt from source continuously)
 - **User:** `nonroot:nonroot` (unprivileged)
 - **Tags:** `vX.Y.Z`, `X.Y`, `X`, `latest`, `sha-<commit>`
 
