@@ -33,7 +33,8 @@ entity:
 # How to Release mif-rs
 
 Create, monitor, and — if needed — roll back a release of the `mif-rs`
-workspace: 5 crates (`mif-core`, `mif-schema`, `mif-ontology`, `mif-cli`,
+workspace: 9 crates (`mif-core`, `mif-problem`, `mif-schema`,
+`mif-frontmatter`, `mif-ontology`, `mif-embed`, `mif-store`, `mif-cli`,
 `mif-mcp`) published independently to crates.io, plus attested binaries for
 the two binary crates (`mif-cli`, `mif-mcp`) and a container image.
 
@@ -45,7 +46,7 @@ the two binary crates (`mif-cli`, `mif-mcp`) and a container image.
 
 ## Version Numbering (SemVer)
 
-All 5 crates share one workspace version (`version.workspace = true` in
+All 9 crates share one workspace version (`version.workspace = true` in
 every crate's `Cargo.toml`, set once in `[workspace.package]`). This project
 follows [Semantic Versioning 2.0.0](https://semver.org/):
 
@@ -65,15 +66,27 @@ in the body.
 
 ### Publication gate
 
-Every crate currently ships with `publish = false` in its `[package]`
-section — releasing requires deleting that line from each crate's
-`Cargo.toml` before the first real release. Check the current state:
+All 9 crates are already published on crates.io at `0.1.0` — none carries a
+`publish = false` line, so `publish.yml`'s guard job (which reads
+`.packages[] | select(.publish != [])` from `cargo metadata`, not a
+hardcoded crate list) treats every workspace member as publishable already.
+There is no publish-gate flag to flip.
+
+What republishing the next release actually requires is a **version bump**:
+`mif-cli`, `mif-mcp`, `mif-schema`, and `mif-ontology` are live at `0.1.0`
+from an earlier release and need their `Cargo.toml`-inherited workspace
+version bumped before they can ship their new functionality (the
+ingest/search/embed/store pipeline); `mif-problem`, `mif-frontmatter`,
+`mif-embed`, and `mif-store` were published fresh at `0.1.0` alongside them.
+Bump `[workspace.package].version` in the root `Cargo.toml` (see
+[Pre-Release Checklist](#pre-release-checklist) below) and the dynamic
+publish gate picks up every publishable crate at the new version — no
+per-crate `Cargo.toml` edits needed. Confirm the current published state
+before releasing:
 
 ```bash
 cargo metadata --no-deps --locked --format-version 1 \
-  | jq -r '.packages[] | select(.publish != null) | .name' \
-  | { grep -q . && echo "publish-disabled crates:" && cargo metadata --no-deps --locked --format-version 1 \
-      | jq -r '.packages[] | select(.publish != null) | .name'; } || echo "all crates publishable"
+  | jq -r '.packages[] | select(.publish != []) | "\(.name) \(.version)"'
 ```
 
 ### Required Secrets and Setup
@@ -83,7 +96,7 @@ Secrets and variables > Actions**):
 
 | Item | Purpose | How to set up |
 |---|---|---|
-| crates.io Trusted Publishing (one-time, **per crate**) | Publish via OIDC — no long-lived token | On crates.io, for each of the 5 crates: crate **Settings > Trusted Publishing** > add repo `modeled-information-format/mif-rs`, workflow `publish.yml`, environment `release` |
+| crates.io Trusted Publishing (one-time, **per crate**) | Publish via OIDC — no long-lived token | On crates.io, for each of the 9 crates: crate **Settings > Trusted Publishing** > add repo `modeled-information-format/mif-rs`, workflow `publish.yml`, environment `release` |
 | `HOMEBREW_TAP_TOKEN` (secret, optional) | Push formula updates to the Homebrew tap | Fine-grained PAT with write access to `{owner}/homebrew-tap` |
 | `HOMEBREW_TAP_REPO` (variable, optional) | Override the tap repo name (default `homebrew-tap`) | **Settings > Secrets and variables > Actions > Variables** |
 | `GITHUB_TOKEN` | Provided automatically | No setup needed |
@@ -163,7 +176,7 @@ Pushing a `v*.*.*` tag triggers these workflows in parallel:
 | Workflow | File | What it does |
 |---|---|---|
 | **Release** | `release.yml` | Builds `mif-cli` and `mif-mcp` across 5 platforms each (`{bin}-{version}-{platform}`) with SLSA build provenance, generates + attests a CycloneDX SBOM, verifies every attestation **fail-closed**, then creates the GitHub Release with auto-generated notes |
-| **Publish** | `publish.yml` | Publishes `mif-core`, `mif-schema`, `mif-ontology`, `mif-cli`, and `mif-mcp` to crates.io independently, in dependency order, each via its own crates.io Trusted Publishing (OIDC) config — then downloads each registry-served `.crate`, byte-compares it, and attests it |
+| **Publish** | `publish.yml` | Publishes every publishable workspace member (all 9 crates: `mif-core`, `mif-problem`, `mif-schema`, `mif-frontmatter`, `mif-ontology`, `mif-embed`, `mif-store`, `mif-cli`, `mif-mcp`) to crates.io independently, in dependency order, each via its own crates.io Trusted Publishing (OIDC) config — then downloads each registry-served `.crate`, byte-compares it, and attests it |
 | **Pipeline (container)** | `pipeline.yml` | Builds and pushes the multi-platform container image (linux/amd64, linux/arm64) to `ghcr.io/modeled-information-format/mif-rs`, signed/attested by the central signer workflow and verified fail-closed |
 
 After the Release workflow completes, `package-homebrew.yml` fires via
@@ -199,7 +212,7 @@ gh run view <run-id> --log-failed
 | SBOM (generate + attest) | ~1 min | Attestation permissions (`id-token`, `attestations`) |
 | Verify Attestations | &lt;1 min | Fail-closed gate: any missing/unverifiable attestation blocks the release |
 | Create Release | ~1 min | Only runs on tags, after verify passes |
-| Publish (crates.io, 5 crates) | ~5 min | Trusted Publishing not configured for one of the 5 crates; dependency-order failure blocking a downstream crate |
+| Publish (crates.io, 9 crates) | ~5 min | Trusted Publishing not configured for one of the 9 crates; dependency-order failure blocking a downstream crate |
 | Docker chain (pipeline) | ~5-10 min | Buildx multi-platform, central signer/verify |
 | Homebrew (after Release) | ~2 min | `workflow_run` trigger, tap token |
 
@@ -239,10 +252,10 @@ Run through this after all workflows complete.
   docker pull ghcr.io/modeled-information-format/mif-rs:vX.Y.Z
   docker pull ghcr.io/modeled-information-format/mif-rs:latest
   ```
-- [ ] **crates.io** — each of the 5 crates is updated, and each served
+- [ ] **crates.io** — each of the 9 crates is updated, and each served
       `.crate` attestation verifies:
   ```bash
-  for NAME in mif-core mif-schema mif-ontology mif-cli mif-mcp; do
+  for NAME in mif-core mif-problem mif-schema mif-frontmatter mif-ontology mif-embed mif-store mif-cli mif-mcp; do
     curl -fsSL -A 'release-check' \
       -O "https://static.crates.io/crates/${NAME}/${NAME}-X.Y.Z.crate"
     gh attestation verify "${NAME}-X.Y.Z.crate" \
@@ -344,14 +357,14 @@ git push origin vX.Y.(Z+1)
 # Yank the bad version from each affected crate
 cargo yank --version X.Y.Z -p <crate-name>
 # The hotfix tag push triggers an automatic re-publish of X.Y.(Z+1) for
-# every crate, not just the one that changed — all 5 share one version.
+# every crate, not just the one that changed — all 9 share one version.
 ```
 
 ---
 
 ## Changelog and Release Notes
 
-`CHANGELOG.md` (workspace root, covering all 5 crates under the shared
+`CHANGELOG.md` (workspace root, covering all 9 crates under the shared
 version) is maintained by hand (Keep a Changelog format) and updated
 **before** tagging: the release-prep step moves the `## [Unreleased]`
 entries under a new `## [X.Y.Z] - <date>` heading and updates the compare
@@ -399,11 +412,12 @@ Conventional commit prefixes map onto changelog sections:
 
 ### crates.io
 
-- **Packages:** `mif-core`, `mif-schema`, `mif-ontology`, `mif-cli`,
-  `mif-mcp` — each published independently, each requiring its own one-time
-  Trusted Publishing setup (see Prerequisites above). A failure on one crate
-  does not block the others' channels, but does block anything published
-  after it in the dependency order.
+- **Packages:** `mif-core`, `mif-problem`, `mif-schema`, `mif-frontmatter`,
+  `mif-ontology`, `mif-embed`, `mif-store`, `mif-cli`, `mif-mcp` — each
+  published independently, each requiring its own one-time Trusted
+  Publishing setup (see Prerequisites above). A failure on one crate does
+  not block the others' channels, but does block anything published after
+  it in the dependency order.
 
 ### Homebrew Tap
 

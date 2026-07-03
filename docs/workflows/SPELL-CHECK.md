@@ -86,7 +86,7 @@ on:
 | Step | Action | Pin | `with:` |
 | --- | --- | --- | --- |
 | Checkout repository | `actions/checkout` | `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0` (v7.0.0) | — |
-| Check spelling with typos | `crate-ci/typos` | `37bb98842b0d8c4ffebdb75301a13db0267cef89` (master, latest) | `files: .`, `config: .typos.toml`; step has `continue-on-error: true` |
+| Check spelling with typos | `crate-ci/typos` | `bee27e3a4fd1ea2111cf90ab89cd076c870fce14` (master, latest) | `files: .`, `config: .typos.toml`; step has `continue-on-error: true` |
 
 ## Failure behavior
 

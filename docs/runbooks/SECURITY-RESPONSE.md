@@ -70,7 +70,8 @@ Use a simplified severity scale to set the response deadline:
 Determine scope:
 
 - [ ] Is the vulnerability in this workspace's own code (`mif-core`,
-      `mif-schema`, `mif-ontology`, `mif-cli`, `mif-mcp`), or in a dependency?
+      `mif-schema`, `mif-ontology`, `mif-problem`, `mif-frontmatter`,
+      `mif-embed`, `mif-store`, `mif-cli`, `mif-mcp`), or in a dependency?
 - [ ] Which published versions are affected?
 - [ ] What's the attack vector — network, local, physical?
 - [ ] Any evidence of exploitation in the wild?

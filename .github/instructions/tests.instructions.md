@@ -1,10 +1,13 @@
 ---
-applyTo: "tests/**/*.rs"
+applyTo: "crates/**/tests/**/*.rs,crates/**/src/**/*.rs"
 ---
 
 # Test Instructions
 
-When generating or modifying test files in `tests/`:
+When generating or modifying test files — integration tests under
+`crates/<name>/tests/` (e.g. `crates/mif-cli/tests/exit_codes.rs`, the only
+one that exists today) or `#[cfg(test)] mod tests` blocks inside
+`crates/**/src/**/*.rs` (the dominant test location in this workspace):
 
 ## Test Structure
 
@@ -15,7 +18,9 @@ When generating or modifying test files in `tests/`:
 
 ## Property-Based Testing
 
-Use `proptest` for property-based tests:
+`proptest` is not currently a workspace dependency. If a test genuinely
+warrants property-based testing, add `proptest` to the relevant crate's
+`Cargo.toml` first, then:
 
 ```rust
 use proptest::prelude::*;
@@ -30,9 +35,9 @@ proptest! {
 
 ## Test Helpers
 
-- Place shared test utilities in `tests/common/mod.rs`
+- Integration tests live per-crate at `crates/<name>/tests/`, not a shared
+  top-level `tests/` directory
 - Use `#[cfg(test)]` for unit test modules inside source files
-- Use `test-case` crate for parameterized tests when available
 
 ## Assertions
 

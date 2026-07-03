@@ -14,15 +14,19 @@ Instructions for AI coding agents working on this Rust project.
 
 ## File Structure
 
-Virtual Cargo workspace, 5 members under `crates/`:
+Virtual Cargo workspace, 9 members under `crates/`:
 
 ```
 crates/
-  mif-core/src/      # Shared types: OntologyReference, EntityReference, EntityData, ConceptType
-  mif-schema/src/    # JSON Schema validation (vendored schemas under src/schemas/)
-  mif-ontology/src/  # Three-tier ontology extends-chain resolution
-  mif-cli/src/       # CLI binary (validate, ontology resolve)
-  mif-mcp/src/       # MCP server binary (same two operations as tools)
+  mif-core/src/         # Shared types: OntologyReference, EntityReference, EntityData, ConceptType
+  mif-schema/src/       # JSON Schema validation (vendored schemas under src/schemas/)
+  mif-ontology/src/     # Three-tier ontology extends-chain resolution
+  mif-problem/src/      # RFC 9457 Problem Details error envelopes
+  mif-frontmatter/src/  # Markdown frontmatter <-> JSON-LD lossless round-trip
+  mif-embed/src/        # Local sentence-embedding inference
+  mif-store/src/        # SQLite vector store for document embeddings
+  mif-cli/src/          # CLI binary (validate, ontology resolve, ingest, search, find-similar, corpus-stats)
+  mif-mcp/src/          # MCP server binary (same six operations as tools)
 ```
 
 ## Build and Test Commands

@@ -34,11 +34,12 @@ entity:
 # How to Deploy a mif-rs Release
 
 Cut a tagged release of `mif-rs` and confirm it landed on every armed
-distribution channel: GitHub Releases (multi-platform binaries), crates.io,
-and — once a crate's `publish = false` is lifted — the container image on
-GHCR. For the full pre-release checklist, monitoring detail, rollback, and
-hotfix procedures, see [`RELEASING.md`](runbooks/RELEASING.md); this guide
-covers the direct path from a version bump to a verified, live release.
+distribution channel: GitHub Releases (multi-platform binaries for
+`mif-cli`/`mif-mcp`), crates.io (all 9 workspace crates — none carries
+`publish = false`), and the container image on GHCR. For the full
+pre-release checklist, monitoring detail, rollback, and hotfix procedures,
+see [`RELEASING.md`](runbooks/RELEASING.md); this guide covers the direct
+path from a version bump to a verified, live release.
 
 ## Prerequisites
 
@@ -97,9 +98,9 @@ git push origin v0.1.1
 ```
 
 The tag push triggers `release.yml` (binaries + SBOM + attestations + the
-GitHub Release), `publish.yml` (crates.io, for any crate with `publish =
-false` removed), and — on a non-PR push once armed — `pipeline.yml`'s
-container chain. `package-homebrew.yml` follows automatically once
+GitHub Release), `publish.yml` (crates.io, for all 9 publishable workspace
+members), and — on a non-PR push — `pipeline.yml`'s container chain.
+`package-homebrew.yml` follows automatically once
 `release.yml` completes. See
 [`ATTESTED-DELIVERY.md`](security/ATTESTED-DELIVERY.md) for why the pipeline
 is shaped this way, and [`SIGNED-RELEASES.md`](security/SIGNED-RELEASES.md)
@@ -120,18 +121,18 @@ created — that job runs fail-closed, before the GitHub Release exists.
 
 ```bash
 gh release download v0.1.1 --repo modeled-information-format/mif-rs \
-  --pattern 'mif_core-0.1.1-linux-amd64'
-gh attestation verify mif_core-0.1.1-linux-amd64 \
+  --pattern 'mif-cli-0.1.1-linux-amd64'
+gh attestation verify mif-cli-0.1.1-linux-amd64 \
   --repo modeled-information-format/mif-rs
 ```
 
-**crates.io** (if that crate's `publish = false` is lifted):
+**crates.io**:
 
 ```bash
-cargo search mif_core
+cargo search mif-cli
 ```
 
-**Docker/GHCR** (if armed):
+**Docker/GHCR**:
 
 ```bash
 docker pull ghcr.io/modeled-information-format/mif-rs:v0.1.1

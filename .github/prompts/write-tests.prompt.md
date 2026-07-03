@@ -22,7 +22,11 @@ Generate comprehensive tests for a module or function.
    - Roundtrip properties (encode/decode, serialize/deserialize)
    - Invariant properties (output always satisfies condition)
    - Commutativity or associativity where relevant
+   - Note: `proptest` is not currently a workspace dependency — add it to the
+     target crate's `Cargo.toml` first if a property test is warranted
 4. Place unit tests in `#[cfg(test)] mod tests` inside the source file
-5. Place integration tests in `tests/` if they test cross-module behavior
+5. Place integration tests in `crates/<name>/tests/` (per-crate) if they test
+   cross-module behavior — this workspace has no shared top-level `tests/`
+   directory
 6. Use descriptive names: `test_<function>_<scenario>_<expected>`
 7. Run `cargo test --all-features` to verify all tests pass

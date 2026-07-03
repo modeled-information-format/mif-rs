@@ -41,6 +41,14 @@ types, which crates get workspace-level lint tables — need a durable record, o
 the reasoning behind them is lost the moment the PR that made them is no longer
 top-of-mind.
 
+> **Editorial note (2026-07-03):** the "5-crate" count above reflects the
+> workspace's state when this ADR was written (2026-07-02). The workspace has
+> since grown to 9 members (`mif-core`, `mif-problem`, `mif-schema`,
+> `mif-frontmatter`, `mif-ontology`, `mif-embed`, `mif-store`, `mif-cli`,
+> `mif-mcp`) — see the root `Cargo.toml`. This note corrects the stale crate
+> count for readers; it does not amend the decision or its rationale, which
+> stand as originally recorded above.
+
 ### Current Limitations
 
 1. **No durable decision record**: rationale currently lives only in commit

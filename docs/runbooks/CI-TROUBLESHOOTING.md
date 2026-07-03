@@ -292,8 +292,11 @@ calling org reusables). Required check contexts: `pin-check / pin-check` and
 **Workflow:** `pipeline.yml` (`docker` job, needs `ci` + `gate`, calls
 `release-docker.yml`). Runs on every push to `main`/`master` and on tags;
 on a PR it builds without pushing (`push: ${{ github.event_name !=
-'pull_request' }}`). The whole job is skipped while every crate's
-`Cargo.toml` still has `publish = false` (the current state — see
+'pull_request' }}`). The job itself is gated on `needs.gate.outputs.has-bin-target
+== 'true'` (dynamically resolved from `cargo metadata`, not hardcoded) —
+true from day one here, since `mif-cli` and `mif-mcp` both carry `[[bin]]`
+targets — so the docker job always runs; it is not tied to any crate's
+publish status (all 9 crates are already published — see
 [RELEASING.md](RELEASING.md)).
 
 | Error | Cause | Fix |
@@ -328,7 +331,8 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 **Workflow:** `release.yml`, **Trigger:** push of a `v*.*.*` tag.
 
 The release matrix builds both `mif-cli` and `mif-mcp` across 5 platforms and
-publishes all 5 crates (`mif-core`, `mif-schema`, `mif-ontology`, `mif-cli`,
+publishes all 9 crates (`mif-core`, `mif-problem`, `mif-schema`,
+`mif-frontmatter`, `mif-ontology`, `mif-embed`, `mif-store`, `mif-cli`,
 `mif-mcp`) independently to crates.io. See
 [RELEASING.md](RELEASING.md) for the full chain and monitoring steps; the
 common failure points are:

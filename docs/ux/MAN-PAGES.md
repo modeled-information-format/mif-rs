@@ -34,9 +34,10 @@ binary's `clap` definition, for local installation or downstream packaging
 ## Prerequisites
 
 - The `mif-rs` workspace checked out, with `cargo build -p mif-cli` working.
-- `crates/mif-cli/src/main.rs` defines `Cli` (via `clap::Parser`) with the
-  `Command` enum (`Validate`, `Ontology { command: OntologyCommand }`) and
-  `OntologyCommand::Resolve`.
+- `crates/mif-cli/src/main.rs` defines `Cli` (via `clap::Parser`, with a
+  global `--format pretty|json` flag) and the `Command` enum (`Validate`,
+  `Ontology { command: OntologyCommand }`, `Ingest`, `Search`, `FindSimilar`,
+  `CorpusStats`) plus `OntologyCommand::Resolve`.
 
 ## Step 1 — Extract the CLI definition into its own module
 
@@ -57,6 +58,10 @@ use clap::{Parser, Subcommand};
     about = "CLI for the MIF (Modeled Information Format) ecosystem"
 )]
 pub struct Cli {
+    /// Error rendering format. Defaults to `pretty` on a terminal and `json`
+    /// otherwise.
+    #[arg(long, global = true, value_parser = ["pretty", "json"])]
+    pub format: Option<String>,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -72,6 +77,50 @@ pub enum Command {
     Ontology {
         #[command(subcommand)]
         command: OntologyCommand,
+    },
+    /// Lint, validate, prove a lossless round trip, compute an embedding,
+    /// and store the embedding vector for one MIF document.
+    Ingest {
+        /// Path to the MIF document (markdown with frontmatter, or a
+        /// JSON-LD projection) to ingest.
+        file: PathBuf,
+        /// Path to the SQLite vector store database. Defaults to
+        /// `.mif/vectors.db`, created (along with its parent directory) if
+        /// absent.
+        #[arg(long)]
+        db_path: Option<PathBuf>,
+    },
+    /// Free-text semantic search over previously ingested documents.
+    Search {
+        /// The query text to embed and rank stored documents against.
+        query: String,
+        /// Path to the SQLite vector store database. Defaults to
+        /// `.mif/vectors.db`.
+        #[arg(long)]
+        db_path: Option<PathBuf>,
+        /// Maximum number of ranked results to return.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+    /// Find previously ingested documents similar to an already-ingested one.
+    FindSimilar {
+        /// The id of an already-ingested document (as reported by `ingest`).
+        id: String,
+        /// Path to the SQLite vector store database. Defaults to
+        /// `.mif/vectors.db`.
+        #[arg(long)]
+        db_path: Option<PathBuf>,
+        /// Maximum number of ranked results to return (excluding `id`
+        /// itself).
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+    /// Summary statistics over the vector store.
+    CorpusStats {
+        /// Path to the SQLite vector store database. Defaults to
+        /// `.mif/vectors.db`.
+        #[arg(long)]
+        db_path: Option<PathBuf>,
     },
 }
 
@@ -153,7 +202,12 @@ cargo build -p mif-cli
 find target/debug/build/mif-cli-*/out/man -name '*.1'
 ```
 
-This lists `mif-cli.1`, `mif-cli-validate.1`, and `mif-cli-ontology.1`.
+This lists `mif-cli.1`, `mif-cli-validate.1`, `mif-cli-ontology.1`,
+`mif-cli-ingest.1`, `mif-cli-search.1`, `mif-cli-find-similar.1`, and
+`mif-cli-corpus-stats.1` — one page per top-level subcommand, plus the root
+page. `build.rs`'s `cmd.get_subcommands()` only descends one level, so it
+does not render a separate page for `ontology`'s own `resolve` subcommand;
+that subcommand's help is documented within `mif-cli-ontology.1` instead.
 
 ## Step 5 — View a generated page
 
@@ -161,6 +215,7 @@ This lists `mif-cli.1`, `mif-cli-validate.1`, and `mif-cli-ontology.1`.
 man target/debug/build/mif-cli-*/out/man/mif-cli.1
 ```
 
-The rendered page shows `mif-cli`'s `NAME`, `SYNOPSIS`, and the `validate` and
-`ontology` subcommands, generated directly from the `clap` definition in
+The rendered page shows `mif-cli`'s `NAME`, `SYNOPSIS`, and the `validate`,
+`ontology`, `ingest`, `search`, `find-similar`, and `corpus-stats`
+subcommands, generated directly from the `clap` definition in
 `crates/mif-cli/src/cli.rs`.

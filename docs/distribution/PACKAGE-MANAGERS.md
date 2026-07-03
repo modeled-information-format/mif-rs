@@ -43,7 +43,7 @@ its release pipeline publishes to.
 ## Install the libraries
 
 ```bash
-cargo add mif-core mif-schema mif-ontology
+cargo add mif-core mif-schema mif-ontology mif-problem mif-frontmatter mif-embed mif-store
 ```
 
 ## Install the binaries
@@ -102,7 +102,7 @@ gh workflow run publish.yml
 Complete the one-time setup per crate: crates.io crate Settings > Trusted
 Publishing > add this repo, workflow `publish.yml`, environment `release`
 (not `copilot` — that was the upstream template's environment name before
-this repo renamed it). Each of the 5 crates needs this linkage
+this repo renamed it). Each of the 9 crates needs this linkage
 independently.
 
 ### crates.io publish fails with "crate already exists"

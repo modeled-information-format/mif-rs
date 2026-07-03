@@ -6,9 +6,10 @@ name: Publish to crates.io
 #
 # One-time setup per crate: crates.io -> crate Settings -> Trusted
 # Publishing -> add this GitHub repo, workflow `publish.yml`,
-# environment `release`. This workspace publishes 5 crates independently
-# (mif-core, mif-schema, mif-ontology, mif-cli, mif-mcp) — repeat the
-# Trusted Publishing linkage once per crate.
+# environment `release`. This workspace publishes 9 crates independently
+# (mif-core, mif-problem, mif-schema, mif-frontmatter, mif-ontology,
+# mif-embed, mif-store, mif-cli, mif-mcp) — repeat the Trusted Publishing
+# linkage once per crate.
 
 "on":
   push:
@@ -26,8 +27,12 @@ jobs:
   # A workspace member with `publish = false` is excluded from
   # `cargo publish --workspace`; a member with no `publish` line, or
   # `publish = true`, is included. This gate looks at every member, not
-  # just .packages[0] — mif-core/mif-schema/mif-ontology/mif-cli/mif-mcp
-  # are armed independently (see Cargo.toml's per-crate `publish` line).
+  # just .packages[0] — every workspace member (mif-core, mif-problem,
+  # mif-schema, mif-frontmatter, mif-ontology, mif-embed, mif-store,
+  # mif-cli, mif-mcp) is checked independently. None sets an explicit
+  # `publish` line today, so all are publishable by Cargo's default; a
+  # future crate that needs restricting would add its own `publish` line
+  # in its Cargo.toml, and this gate picks it up with no workflow change.
   guard:
     name: Publish Gate
     runs-on: ubuntu-latest

@@ -106,7 +106,8 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 1. Add the variant to the relevant crate's error enum (`mif_schema::MifSchemaError`, `mif_ontology::OntologyError`), derived with `thiserror::Error`.
 2. Include a `#[error("...")]` format string with meaningful context.
 3. Prefer structured variants (named fields, e.g. `{ path: String, source: ... }`) over tuple variants when there are multiple pieces of context.
-4. Add a test exercising the new failure path.
+4. If the crate's error enum implements `ToProblem` (`mif-schema`, `mif-ontology`, `mif-frontmatter`, `mif-embed`, `mif-store`, `mif-cli`'s `CliError`, and `mif-mcp`'s `McpError` all do), you must also add a corresponding match arm in `to_problem()` (and typically `meta()`) for the new variant — the match is exhaustive, so omitting this fails to compile.
+5. Add a test exercising the new failure path.
 
 ---
 
