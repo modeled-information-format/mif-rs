@@ -4,6 +4,10 @@ members = [
     "crates/mif-core",
     "crates/mif-schema",
     "crates/mif-ontology",
+    "crates/mif-problem",
+    "crates/mif-frontmatter",
+    "crates/mif-embed",
+    "crates/mif-store",
     "crates/mif-cli",
     "crates/mif-mcp",
 ]
@@ -19,11 +23,24 @@ homepage = "https://mif-spec.dev"
 [workspace.dependencies]
 thiserror = "2.0.18"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
+serde_json = { version = "1.0.150", features = ["preserve_order"] }
 jsonschema = { version = "0.46.9", default-features = false }
 clap = { version = "4.6.1", features = ["derive"] }
 rmcp = "2.1.0"
 tempfile = "3.27.0"
+serde_norway = "0.9.42"
+candle-core = "0.11.0"
+candle-nn = "0.11.0"
+candle-transformers = "0.11.0"
+tokenizers = { version = "0.23.1", default-features = false, features = ["progressbar", "fancy-regex"] }
+hf-hub = { version = "0.5.0", default-features = false, features = ["ureq"] }
+dirs = "6.0.0"
+# Pinned below 0.40: rusqlite >=0.40 pulls libsqlite3-sys >=0.38.0, whose
+# build.rs uses the unstable `cfg_select!` macro (stabilizes after this
+# workspace's MSRV of 1.92) and fails the MSRV Check CI job. 0.39.0 pulls
+# libsqlite3-sys ^0.37.0, which predates cfg_select! in its build script.
+rusqlite = { version = "=0.39.0", features = ["bundled"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
 [workspace.dependencies.mif-core]
 path = "crates/mif-core"
@@ -35,6 +52,22 @@ version = "0.1.0"
 
 [workspace.dependencies.mif-ontology]
 path = "crates/mif-ontology"
+version = "0.1.0"
+
+[workspace.dependencies.mif-problem]
+path = "crates/mif-problem"
+version = "0.1.0"
+
+[workspace.dependencies.mif-frontmatter]
+path = "crates/mif-frontmatter"
+version = "0.1.0"
+
+[workspace.dependencies.mif-embed]
+path = "crates/mif-embed"
+version = "0.1.0"
+
+[workspace.dependencies.mif-store]
+path = "crates/mif-store"
 version = "0.1.0"
 
 [profile.dev]

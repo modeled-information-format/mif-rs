@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 mif-core.workspace = true
+mif-problem.workspace = true
 jsonschema.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

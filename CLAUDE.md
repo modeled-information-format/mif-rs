@@ -6,15 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `mif-rs` is a Cargo **workspace** implementing the [MIF (Modeled Information
 Format)](https://mif-spec.dev) specification in Rust (edition 2024, MSRV
-1.92). Five members, in dependency order:
+1.92). Nine members, in dependency order:
 
 | Crate | Kind | Purpose |
 |---|---|---|
 | `mif-core` | library | Shared types: `OntologyReference`, `EntityReference`, `EntityData`, `ConceptType` |
+| `mif-problem` | library | Shared RFC 9457 Problem Details envelope (`ProblemDetails`, `ToProblem` trait, `OutputFormat`) every other crate's error enum maps into |
 | `mif-schema` | library | JSON Schema validation of MIF documents/citations/ontology definitions |
 | `mif-ontology` | library | Three-tier ontology `extends` chain resolution |
-| `mif-cli` | binary | CLI: `mif-cli validate <file>`, `mif-cli ontology resolve <id> --ontologies-dir <dir>` |
-| `mif-mcp` | binary | MCP server exposing the same two operations as tools |
+| `mif-frontmatter` | library | Markdown-frontmatter <-> JSON-LD projection and lossless round-trip proof, ported from the `MIF` repo's `mif_convert.py`, generalized beyond it (see "Why Generic Frontmatter Pass-Through" below) |
+| `mif-embed` | library | Local (offline-after-first-fetch) sentence embeddings via `candle`, `sentence-transformers/all-MiniLM-L6-v2` |
+| `mif-store` | library | `SQLite`-backed vector store for document embeddings (`rusqlite`, bundled), with brute-force cosine-similarity ranking (`top_k_similar`) |
+| `mif-cli` | binary | CLI: `mif-cli validate <file>`, `mif-cli ontology resolve <id> --ontologies-dir <dir>`, `mif-cli ingest <file> [--db-path <path>]`, `mif-cli search <query>`, `mif-cli find-similar <id>`, `mif-cli corpus-stats` |
+| `mif-mcp` | binary | MCP server exposing `validate_mif_document`, `resolve_ontology_reference`, `ingest_mif_document`, `search_documents`, `find_similar_documents`, and `corpus_stats` as tools |
 
 Source for each crate lives at `crates/<name>/src/`. This is a **virtual
 workspace** (the root `Cargo.toml` has no `[package]` section) — shared
@@ -118,6 +122,10 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 | `crates/mif-schema/src/lib.rs` | Vendored-schema validators (`validate_document`, `validate_citation`, `validate_ontology_definition`) |
 | `crates/mif-schema/src/schemas/` | Vendored copies of `mif.schema.json`, `citation.schema.json`, `ontology.schema.json`, `definitions/entity-reference.schema.json`, synced from the `MIF` repo's `schema/` |
 | `crates/mif-ontology/src/lib.rs` | `OntologyMetadata`, `parse_definition`, `load_corpus_from_dir`, `resolve_chain` |
+| `crates/mif-problem/src/lib.rs` | `ProblemDetails`, `Applicability`, `SuggestedFix`, `CodeAction`, `ProblemMeta`, `OutputFormat`, the `ToProblem` trait |
+| `crates/mif-frontmatter/src/lib.rs` | `parse_markdown`, `serialize_markdown`, `md_to_jsonld`, `jsonld_to_md`, `roundtrip_lossless` |
+| `crates/mif-embed/src/lib.rs` | `Embedder` (`load`, `embed`), `EMBEDDING_DIM` |
+| `crates/mif-store/src/lib.rs` | `VectorStore` (`open`, `upsert`, `get`, `count`), `StoredVector` |
 | `crates/mif-cli/src/main.rs`, `crates/mif-mcp/src/main.rs` | Thin binaries calling straight into the library crates' public functions |
 | `clippy.toml` | Clippy thresholds and test-mode exemptions (workspace-root, applies to all members) |
 | `rustfmt.toml` | Formatter settings (workspace-root) |
@@ -126,10 +134,11 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 
 ### Error Handling
 
-- Each library crate owns its own error enum, derived with `thiserror::Error` (`MifSchemaError`, `OntologyError`). No shared top-level error type across the workspace — each crate's errors are scoped to what it actually does.
-- **Propagation**: use `?`. Never `unwrap()`, `expect()`, or `panic!()` in library code (`crates/mif-core`, `mif-schema`, `mif-ontology`) — all three are `deny`d workspace-wide via `[workspace.lints.clippy]`.
-- **`mif-cli`**: `main()` returns `ExitCode`, renders errors as plain text to stdout/stderr, and exempts itself from `print_stdout`/`print_stderr` via `#![allow(...)]` at the crate root (a CLI naturally needs to print — see "Lint Configuration" below).
-- **`mif-mcp`**: `main()` returns `anyhow::Result<()>`, but its `#[tool]` methods return `String` values through the MCP protocol rather than printing — it needs no `print_stdout`/`print_stderr` allow, since it never calls `println!`/`eprintln!`.
+- Each library crate owns its own error enum, derived with `thiserror::Error` (`MifSchemaError`, `OntologyError`, `FrontmatterError`, `EmbedError`, `StoreError`). No shared top-level error type across the workspace — each crate's errors are scoped to what it actually does.
+- **Propagation**: use `?`. Never `unwrap()`, `expect()`, or `panic!()` in library code (`crates/mif-core`, `mif-schema`, `mif-ontology`, `mif-problem`, `mif-frontmatter`, `mif-embed`, `mif-store`) — all are `deny`d workspace-wide via `[workspace.lints.clippy]`.
+- **RFC 9457 Problem Details**: every library error enum implements `mif_problem::ToProblem` (`to_problem(&self) -> ProblemDetails`), mapping each variant to a stable, versioned problem-type URI via a per-variant `ProblemMeta` (see `mif-problem`'s doc comments for the pattern). `mif-cli`'s and `mif-mcp`'s own error enums (`CliError`, `McpError`) delegate to the wrapped library error's `to_problem()` for variants that wrap one, and define their own `ProblemMeta` only for binary-local variants (`Io`, `Json`).
+- **`mif-cli`**: `main()` returns `ExitCode`, selects `mif_problem::OutputFormat` via an explicit `--format pretty|json` flag (falling back to stderr TTY detection), and renders errors with `error.render(format)` — pretty text or a compact `application/problem+json` envelope. Exempts itself from `print_stdout`/`print_stderr` via `#![allow(...)]` at the crate root (a CLI naturally needs to print — see "Lint Configuration" below).
+- **`mif-mcp`**: `main()` returns `anyhow::Result<()>`, but its `#[tool]` methods return `String` values through the MCP protocol rather than printing. An MCP client is inherently a machine consumer, so every tool failure always renders as `error.to_problem().to_json()` (no pretty/JSON format choice) — it needs no `print_stdout`/`print_stderr` allow, since it never calls `println!`/`eprintln!`.
 
 ### Ownership and Borrowing
 
@@ -308,11 +317,11 @@ Set once at the workspace root (`[profile.*]` — not member-level; profiles are
 
 ### Why a Virtual Workspace, Not a Root Package
 
-Five crates share a strict dependency chain (`mif-core` -> `mif-schema` -> `mif-ontology` -> `{mif-cli, mif-mcp}`) and are versioned/released together. A workspace gives real path dependencies during development, one shared `Cargo.lock`, and CI that catches a breaking `mif-core` change in the same PR that introduces it. The root manifest has no `[package]` section (a *virtual* workspace) since no code lives at the workspace root itself — every crate is a real member under `crates/`.
+Nine crates share a dependency chain rooted at `mif-core` and fanning out through `mif-schema`, `mif-ontology`, `mif-problem`, `mif-frontmatter`, `mif-embed`, and `mif-store` to `{mif-cli, mif-mcp}`, and are versioned/released together. A workspace gives real path dependencies during development, one shared `Cargo.lock`, and CI that catches a breaking `mif-core` change in the same PR that introduces it. The root manifest has no `[package]` section (a *virtual* workspace) since no code lives at the workspace root itself — every crate is a real member under `crates/`.
 
 ### Why the Libraries Don't Depend on the Binaries
 
-`mif-cli` and `mif-mcp` are thin consumers of `mif-core`/`mif-schema`/`mif-ontology`'s public APIs, not the other way around. The three libraries are published independently and meant to be genuinely reusable by third parties who have no interest in a CLI or an MCP server — CLI/MCP-specific concerns (argument parsing, tool-schema derivation) stay out of the library layer entirely.
+`mif-cli` and `mif-mcp` are thin consumers of the seven library crates' (`mif-core`, `mif-schema`, `mif-ontology`, `mif-problem`, `mif-frontmatter`, `mif-embed`, `mif-store`) public APIs, not the other way around. The libraries are published independently and meant to be genuinely reusable by third parties who have no interest in a CLI or an MCP server — CLI/MCP-specific concerns (argument parsing, tool-schema derivation) stay out of the library layer entirely.
 
 ### Why `thiserror` for Errors
 
@@ -321,6 +330,12 @@ Five crates share a strict dependency chain (`mif-core` -> `mif-schema` -> `mif-
 ### Why Vendor the JSON Schema Instead of Fetching at Validate Time
 
 A library doing an HTTP fetch on every validation call is non-deterministic and breaks offline/sandboxed CI. `mif-schema` embeds `mif.schema.json`, `citation.schema.json`, `ontology.schema.json`, and `definitions/entity-reference.schema.json` via `include_str!` and resolves `$ref`s through a custom `jsonschema::Registry` keyed by each file's own `$id` — no network access happens at validation time, and `jsonschema`'s default HTTP/file-resolver features are explicitly disabled.
+
+### Why Generic Frontmatter Pass-Through, Not a Curated Field List
+
+`mif_convert.py` (the canonical `MIF` repo's Python reference converter this crate ports) only recovers a fixed list of passthrough fields when projecting JSON-LD back to markdown, silently dropping any other frontmatter key on the full `md -> json-ld -> md` pipeline. `mif-frontmatter` deliberately does not reproduce that limitation: `md_to_jsonld`/`jsonld_to_md` pass every frontmatter/JSON-LD key through generically (`FRONTMATTER_ORDER` governs serialization *order* only, not which keys survive), since `mif.schema.json`'s root object doesn't set `additionalProperties: false` — unrecognized top-level keys are already spec-legal, so dropping them was a bug in the reference converter, not a behavior worth preserving. This was verified against real documents: `research-harness-template`'s own findings and Level-3 reports carry fields (`slug`, `version`, harness-specific `extensions.harness` data) the fixed Python list never anticipated, and previously failed `roundtrip_lossless` with `RoundTripDrift` until this crate stopped curating.
+
+A second, genuinely irreducible ambiguity this surfaced: a document's `@id`/`conceptType` identity can be expressed either as MIF v1.0's `id`/`type` shorthand (projects to `@id: urn:mif:{id}`) or already-projected literal `@context`/`@type`/`@id`/`conceptType` frontmatter keys (e.g. `research-harness-template`'s reports) — both produce an identical `@id` string in JSON-LD, so there is no way to tell them apart from the JSON-LD value alone on the reverse trip. `mif_frontmatter::FrontmatterShape` (`V1Canonical` | `PreProjected`) makes this explicit: `md_to_jsonld` auto-detects it from the frontmatter it's given (a literal `@id` key present means `PreProjected`), while `jsonld_to_md` requires the caller to state it, since it has no frontmatter to inspect. `roundtrip_lossless` detects and threads it through internally; external callers converting standalone JSON-LD (no originating markdown) default to `V1Canonical`, the MIF v1.0 authoring convention.
 
 ### Why Hand-Written Types, Not Schema-to-Rust Codegen
 

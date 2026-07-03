@@ -21,6 +21,12 @@ workspace = true
 [dependencies]
 mif-schema.workspace = true
 mif-ontology.workspace = true
+mif-problem.workspace = true
+mif-frontmatter.workspace = true
+mif-embed.workspace = true
+mif-store.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
 rmcp = { version = "2.1.0", features = ["server", "transport-io"] }
 serde.workspace = true
 serde_json.workspace = true

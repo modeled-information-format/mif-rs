@@ -9,6 +9,9 @@
 use std::sync::OnceLock;
 
 use jsonschema::{Registry, Validator};
+use mif_problem::{
+    Applicability, CodeAction, ProblemDetails, ProblemMeta, SuggestedFix, ToProblem,
+};
 use serde_json::Value;
 
 const MIF_SCHEMA: &str = include_str!("schemas/mif.schema.json");
@@ -19,16 +22,37 @@ const ENTITY_REFERENCE_SCHEMA: &str =
 const ENTITY_REFERENCE_SCHEMA_ID: &str =
     "https://mif-spec.dev/schema/definitions/entity-reference.schema.json";
 
+/// The original `serde_json`/`jsonschema` error message behind a
+/// [`MifSchemaError::SchemaCompilation`] failure.
+///
+/// `serde_json::Error` and `jsonschema`'s build/registry errors are
+/// stringified before being cached (see `build_registry`/`build_validator`),
+/// so this wrapper is what `#[source]` actually points at: it preserves the
+/// original error's message so `std::error::Error::source()` on
+/// `SchemaCompilation` yields a real hop in the chain instead of `None`.
+/// This wrapper's own `source()` returns `None` — the original typed error
+/// itself could not be preserved through the cache.
+#[derive(Debug)]
+pub struct SchemaCompilationSource(String);
+
+impl std::fmt::Display for SchemaCompilationSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for SchemaCompilationSource {}
+
 /// Error validating a MIF document or citation against the canonical schema.
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum MifSchemaError {
     /// The vendored schema itself failed to compile. Indicates a bug in
     /// this crate's vendored schema files, not a problem with the instance
     /// being validated.
     #[error("internal error: vendored MIF schema failed to compile: {0}")]
-    SchemaCompilation(String),
+    SchemaCompilation(#[source] SchemaCompilationSource),
     /// The instance failed schema validation.
-    #[error("MIF document failed schema validation ({} error(s))", .0.len())]
+    #[error("MIF document failed schema validation: {}", .0.join("; "))]
     Invalid(Vec<String>),
 }
 
@@ -41,6 +65,60 @@ impl MifSchemaError {
             Self::Invalid(errors) => errors,
             Self::SchemaCompilation(_) => &[],
         }
+    }
+
+    const fn meta(&self) -> ProblemMeta {
+        match self {
+            Self::SchemaCompilation(_) => ProblemMeta {
+                slug: "schema-compilation",
+                version: "v1",
+                title: "Internal schema compilation error",
+                status: 500,
+                exit_code: 1,
+            },
+            Self::Invalid(_) => ProblemMeta {
+                slug: "invalid-document",
+                version: "v1",
+                title: "Document failed schema validation",
+                status: 422,
+                exit_code: 2,
+            },
+        }
+    }
+}
+
+impl ToProblem for MifSchemaError {
+    fn to_problem(&self) -> ProblemDetails {
+        let (fix, action) = match self {
+            Self::SchemaCompilation(_) => (
+                SuggestedFix::new(
+                    "This indicates a bug in mif-schema's vendored schema files, not the \
+                     instance being validated. Report it upstream.",
+                    Applicability::Unspecified,
+                ),
+                CodeAction::new(
+                    "File a bug against mif-schema's vendored schemas",
+                    "quickfix",
+                    Applicability::Unspecified,
+                ),
+            ),
+            Self::Invalid(_) => (
+                SuggestedFix::new(
+                    "Correct the document so it conforms to the canonical MIF JSON Schema, \
+                     then retry.",
+                    Applicability::MaybeIncorrect,
+                ),
+                CodeAction::new(
+                    "Fix the reported schema violations",
+                    "quickfix",
+                    Applicability::MaybeIncorrect,
+                ),
+            ),
+        };
+        self.meta()
+            .into_details(env!("CARGO_PKG_NAME"), self.to_string())
+            .with_suggested_fix(fix)
+            .with_code_action(action)
     }
 }
 
@@ -68,7 +146,7 @@ fn document_validator() -> Result<&'static Validator, MifSchemaError> {
     VALIDATOR
         .get_or_init(|| build_validator(MIF_SCHEMA))
         .as_ref()
-        .map_err(|e| MifSchemaError::SchemaCompilation(e.clone()))
+        .map_err(|e| MifSchemaError::SchemaCompilation(SchemaCompilationSource(e.clone())))
 }
 
 fn citation_validator() -> Result<&'static Validator, MifSchemaError> {
@@ -76,7 +154,7 @@ fn citation_validator() -> Result<&'static Validator, MifSchemaError> {
     VALIDATOR
         .get_or_init(|| build_validator(CITATION_SCHEMA))
         .as_ref()
-        .map_err(|e| MifSchemaError::SchemaCompilation(e.clone()))
+        .map_err(|e| MifSchemaError::SchemaCompilation(SchemaCompilationSource(e.clone())))
 }
 
 fn ontology_validator() -> Result<&'static Validator, MifSchemaError> {
@@ -84,7 +162,7 @@ fn ontology_validator() -> Result<&'static Validator, MifSchemaError> {
     VALIDATOR
         .get_or_init(|| build_validator(ONTOLOGY_SCHEMA))
         .as_ref()
-        .map_err(|e| MifSchemaError::SchemaCompilation(e.clone()))
+        .map_err(|e| MifSchemaError::SchemaCompilation(SchemaCompilationSource(e.clone())))
 }
 
 fn validate(validator: &Validator, instance: &Value) -> Result<(), MifSchemaError> {
@@ -132,9 +210,13 @@ pub fn validate_ontology_definition(instance: &Value) -> Result<(), MifSchemaErr
 
 #[cfg(test)]
 mod tests {
+    use mif_problem::ToProblem;
     use serde_json::json;
 
-    use super::{validate_citation, validate_document, validate_ontology_definition};
+    use super::{
+        MifSchemaError, SchemaCompilationSource, validate_citation, validate_document,
+        validate_ontology_definition,
+    };
 
     fn minimal_valid_document() -> serde_json::Value {
         json!({
@@ -158,6 +240,20 @@ mod tests {
         instance.as_object_mut().unwrap().remove("conceptType");
         let result = validate_document(&instance);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn messages_reports_the_invalid_variant_and_is_empty_for_schema_compilation() {
+        let mut instance = minimal_valid_document();
+        instance.as_object_mut().unwrap().remove("conceptType");
+        let error = validate_document(&instance).unwrap_err();
+        assert!(matches!(error, MifSchemaError::Invalid(_)));
+        assert!(!error.messages().is_empty());
+
+        let compilation_error = MifSchemaError::SchemaCompilation(SchemaCompilationSource(
+            "synthetic failure for coverage".to_string(),
+        ));
+        assert!(compilation_error.messages().is_empty());
     }
 
     #[test]
@@ -231,5 +327,44 @@ mod tests {
             "title": "MIF Specification",
         });
         assert!(validate_citation(&citation).is_err());
+    }
+
+    #[test]
+    fn invalid_document_maps_to_versioned_problem_details() {
+        let mut instance = minimal_valid_document();
+        instance.as_object_mut().unwrap().remove("conceptType");
+        let error = validate_document(&instance).unwrap_err();
+        let problem = error.to_problem();
+
+        assert_eq!(
+            problem.problem_type,
+            "https://mif-spec.dev/errors/invalid-document/v1"
+        );
+        assert_eq!(problem.status, 422);
+        assert_eq!(problem.exit_code, Some(2));
+        assert!(problem.suggested_fix.is_some());
+        assert_eq!(problem.code_actions.len(), 1);
+        assert!(problem.detail.contains("schema validation"));
+    }
+
+    #[test]
+    fn schema_compilation_error_maps_to_distinct_problem_type() {
+        let error = MifSchemaError::SchemaCompilation(SchemaCompilationSource("boom".to_string()));
+        let problem = error.to_problem();
+
+        assert_eq!(
+            problem.problem_type,
+            "https://mif-spec.dev/errors/schema-compilation/v1"
+        );
+        assert_eq!(problem.status, 500);
+        assert_eq!(problem.exit_code, Some(1));
+    }
+
+    #[test]
+    fn schema_compilation_error_source_preserves_the_underlying_cause() {
+        let error = MifSchemaError::SchemaCompilation(SchemaCompilationSource("boom".to_string()));
+
+        let source = std::error::Error::source(&error).expect("source should not be None");
+        assert_eq!(source.to_string(), "boom");
     }
 }

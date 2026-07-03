@@ -1,0 +1,32 @@
+[package]
+name = "mif-frontmatter"
+description = "Markdown frontmatter <-> JSON-LD lossless round-trip for the MIF (Modeled Information Format) ecosystem"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["mif", "markdown", "frontmatter"]
+categories = ["data-structures"]
+
+[lints]
+workspace = true
+
+[dependencies]
+mif-problem.workspace = true
+serde.workspace = true
+# preserve_order: JSON-LD objects must retain source key order through the
+# md -> json-ld -> md round trip (nested frontmatter mappings, e.g. each
+# `relationships` entry's type/target/strength keys) to match the Python
+# reference tool, whose dicts and `json` module both preserve insertion
+# order. Without this, serde_json::Value::Object is BTreeMap-backed and
+# silently alphabetizes nested keys, which is a real (verified) source of
+# round-trip drift, not a cosmetic difference.
+serde_json = { workspace = true, features = ["preserve_order"] }
+serde_norway.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+mif-schema.workspace = true
