@@ -599,7 +599,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
             value["type"],
-            "https://mif-spec.dev/errors/invalid-document/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/invalid-document/v1"
         );
         assert_eq!(value["status"], 422);
     }
@@ -610,7 +610,10 @@ mod tests {
             file: "/nonexistent/mif-mcp-test-fixture.json".into(),
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(value["type"], "https://mif-spec.dev/errors/io/v1");
+        assert_eq!(
+            value["type"],
+            "https://modeled-information-format.github.io/mif-rs/references/errors/io/v1"
+        );
         assert_eq!(value["status"], 404);
         assert_eq!(value["suggested_fix"]["applicability"], "maybe_incorrect");
     }
@@ -631,7 +634,10 @@ mod tests {
             file: dir.path().to_path_buf(),
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(value["type"], "https://mif-spec.dev/errors/io/v1");
+        assert_eq!(
+            value["type"],
+            "https://modeled-information-format.github.io/mif-rs/references/errors/io/v1"
+        );
         #[cfg(not(windows))]
         {
             assert_eq!(value["status"], 500);
@@ -651,7 +657,10 @@ mod tests {
             file: file.path().to_path_buf(),
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(value["type"], "https://mif-spec.dev/errors/invalid-json/v1");
+        assert_eq!(
+            value["type"],
+            "https://modeled-information-format.github.io/mif-rs/references/errors/invalid-json/v1"
+        );
     }
 
     #[test]
@@ -684,7 +693,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
             value["type"],
-            "https://mif-spec.dev/errors/ontology-not-found/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/ontology-not-found/v1"
         );
         assert_eq!(value["status"], 404);
     }
@@ -741,7 +750,7 @@ No type field.
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
             value["type"],
-            "https://mif-spec.dev/errors/invalid-document/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/invalid-document/v1"
         );
 
         let store = mif_store::VectorStore::open(&db_path).unwrap();
@@ -918,7 +927,7 @@ No type field.
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
             value["type"],
-            "https://mif-spec.dev/errors/document-not-found/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/document-not-found/v1"
         );
         assert_eq!(value["status"], 404);
     }

@@ -30,11 +30,15 @@ use serde::{Deserialize, Serialize};
 ///
 /// Every implementer's `type` URI is derived as
 /// `{ERROR_TYPE_BASE_URI}/{slug}/{version}` (e.g.
-/// `https://mif-spec.dev/errors/invalid-input/v1`). This is an identifier
-/// namespace, not a claim that a reference page is published at that path
-/// today — whether to publish live problem-type documentation there is a
-/// separate, later decision.
-pub const ERROR_TYPE_BASE_URI: &str = "https://mif-spec.dev/errors";
+/// `https://modeled-information-format.github.io/mif-rs/references/errors/invalid-input/v1`),
+/// and is dereferenceable: `docs/references/errors/{slug}/{version}.md`
+/// publishes a real reference page at that path via this repo's GitHub
+/// Pages site. `mif-spec.dev` is reserved for the normative MIF
+/// specification itself, not this implementation's own tooling/error
+/// reference — hence the repo-scoped Pages URL rather than the spec
+/// domain.
+pub const ERROR_TYPE_BASE_URI: &str =
+    "https://modeled-information-format.github.io/mif-rs/references/errors";
 
 /// How confidently an agent may apply a [`SuggestedFix`] or [`CodeAction`].
 ///
@@ -208,7 +212,7 @@ pub fn classify_io_error(error: &std::io::Error) -> (u16, SuggestedFix, CodeActi
 /// use mif_problem::{Applicability, ProblemDetails, SuggestedFix};
 ///
 /// let problem = ProblemDetails::new(
-///     "https://mif-spec.dev/errors/invalid-input/v1",
+///     "https://modeled-information-format.github.io/mif-rs/references/errors/invalid-input/v1",
 ///     "Invalid input",
 ///     400,
 ///     "the supplied file was not valid JSON",
@@ -593,7 +597,7 @@ mod tests {
 
         assert_eq!(
             invalid.problem_type,
-            "https://mif-spec.dev/errors/invalid-input/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/invalid-input/v1"
         );
         assert_eq!(invalid.status, 400);
         assert_eq!(invalid.detail, "invalid input: bad");
@@ -603,7 +607,7 @@ mod tests {
 
         assert_eq!(
             failed.problem_type,
-            "https://mif-spec.dev/errors/operation-failed/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/operation-failed/v1"
         );
         assert_eq!(failed.status, 500);
         assert_eq!(failed.exit_code, Some(1));

@@ -436,14 +436,14 @@ mod tests {
 
         assert_eq!(
             not_found.problem_type,
-            "https://mif-spec.dev/errors/ontology-not-found/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/ontology-not-found/v1"
         );
         assert_eq!(not_found.status, 404);
         assert_eq!(not_found.exit_code, Some(3));
 
         assert_eq!(
             cycle.problem_type,
-            "https://mif-spec.dev/errors/ontology-extends-cycle/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/ontology-extends-cycle/v1"
         );
         assert_eq!(cycle.status, 422);
         assert_eq!(cycle.exit_code, Some(4));
@@ -486,7 +486,7 @@ mod tests {
         assert_eq!(problem.status, 422);
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/invalid-yaml/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/invalid-yaml/v1"
         );
         assert_eq!(
             problem.suggested_fix.unwrap().applicability,
@@ -504,7 +504,7 @@ mod tests {
         assert_eq!(problem.status, 422);
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/invalid-ontology-definition/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/invalid-ontology-definition/v1"
         );
         assert_eq!(
             problem.suggested_fix.unwrap().applicability,
@@ -525,7 +525,7 @@ mod tests {
         assert_eq!(problem.status, 500);
         assert_eq!(
             problem.problem_type,
-            "https://mif-spec.dev/errors/ontology-metadata-mismatch/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/ontology-metadata-mismatch/v1"
         );
         assert_eq!(
             problem.suggested_fix.unwrap().applicability,
