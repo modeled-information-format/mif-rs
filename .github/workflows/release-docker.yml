@@ -141,6 +141,15 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.bin }}
           build-args: |
             BIN=${{ matrix.bin }}
+          # BuildKit >=0.11 generates a provenance attestation (and its own
+          # multi-manifest OCI index) by default on every registry push, even
+          # though nothing here requests one. Pushing that extra attestation
+          # manifest is what 403s against GHCR for a package that has never
+          # been created yet (a documented BuildKit/GHCR interaction, not an
+          # auth misconfiguration) — and it's redundant anyway: this pipeline
+          # already generates real SLSA Build L3 provenance for the pushed
+          # digest via the centralized docker-sign job (sign-and-attest.yml).
+          provenance: false
 
       # A matrix job's `outputs` only exposes its LAST completed cell's
       # value in GitHub Actions — write this cell's digest to a file and
