@@ -1,0 +1,51 @@
+# Lefthook — local git hooks mirroring this repo's own CI parity (see
+# CLAUDE.md's "Full CI check (run before pushing)" sequence and the
+# `justfile`'s `check` recipe). Bypass in an emergency with
+# `git commit --no-verify` / `git push --no-verify`.
+#
+# Team setup after cloning: `lefthook install` (idempotent; safe to re-run).
+
+pre-commit:
+  commands:
+    fmt-check:
+      run: cargo fmt --all -- --check
+      fail_text: |
+        Formatting check failed. Run `cargo fmt --all` to fix, then re-stage
+        and commit again.
+
+pre-push:
+  commands:
+    fmt-check:
+      run: cargo fmt --all -- --check
+      fail_text: |
+        Formatting check failed. Run `cargo fmt --all` to fix.
+    clippy:
+      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      fail_text: |
+        Clippy found warnings (denied as errors, matching CI). Fix the
+        reported lints, or run `cargo clippy --workspace --all-targets
+        --all-features --fix` for auto-fixable ones.
+    test:
+      run: cargo test --workspace --all-features --verbose
+      env:
+        # Matches CI's workflow-level RUSTFLAGS (ci-checks.yml) — without
+        # it, a plain rustc warning that isn't also a clippy lint could
+        # pass here and still fail CI.
+        RUSTFLAGS: "-D warnings"
+      fail_text: |
+        A test failed. Run `cargo test --workspace --all-features` locally
+        to see the failure, and do not push until it passes.
+    doc:
+      run: cargo doc --workspace --no-deps --all-features
+      env:
+        # Matches CI's doc job (ci-checks.yml) — without it, a broken
+        # intra-doc link or bad doc-example could pass here silently.
+        RUSTDOCFLAGS: "-D warnings"
+      fail_text: |
+        `cargo doc` failed to build. This usually means a broken doc-link
+        or an invalid doc-example; fix it before pushing.
+    deny:
+      run: cargo deny check
+      fail_text: |
+        `cargo deny check` found a supply-chain policy violation (license,
+        advisory, banned crate, or untrusted source) — see deny.toml.
