@@ -88,8 +88,8 @@ on:
 | Step | Action | Pin | Command / effect |
 | --- | --- | --- | --- |
 | Checkout repository | `actions/checkout` | `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0` (v7.0.0) | Fetch source |
-| Install Rust toolchain | `dtolnay/rust-toolchain` | `67ef31d5b988238dd797d409d6f9574278e20537` | Install `stable` toolchain |
-| Install analysis tools | `taiki-e/install-action` | `9bcaee1dcae34154180f412e2fa69355a7cda9f6` (v2.67.18) | Install `cargo-geiger`, `cargo-bloat` |
+| Install Rust toolchain | `dtolnay/rust-toolchain` | `fa04a1451ff1842e2626ccb99004d0195b455a88` | Install `stable` toolchain |
+| Install analysis tools | `taiki-e/install-action` | `16b05812d776ae1dfaabc8277e421fb6d2506419` (v2.67.18) | Install `cargo-geiger`, `cargo-bloat` |
 | Cache cargo registry | `actions/cache` | `55cc8345863c7cc4c66a329aec7e433d2d1c52a9` (v5.0.3) | Cache `~/.cargo/registry`, `~/.cargo/git`, `target`, keyed on `hashFiles('**/Cargo.lock')` |
 | Scan for unsafe code | (inline `run`) | — | `cargo geiger --all-features`, appended under `## Unsafe Code Analysis` |
 | Analyze binary size | (inline `run`) | — | `cargo build --release` then `cargo bloat --release --crates`, appended under `## Binary Size Analysis` |

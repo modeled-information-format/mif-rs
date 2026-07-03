@@ -52,8 +52,9 @@ entity:
 verification logic — it calls central reusables pinned to a full commit SHA, and
 each gate's verdict normalizes on SARIF. This document explains *why* the pipeline
 is shaped the way it is: why evidence gets produced at two separate points rather
-than one, why a `publish = false` switch exists per crate, and why a tag publishes
-nothing that hasn't already been verified. For the verification commands
+than one, why the release machinery is built to honor a per-crate `publish =
+false` switch even though none of the 9 crates currently sets one, and why a tag
+publishes nothing that hasn't already been verified. For the verification commands
 themselves, see [`SIGNED-RELEASES.md`](./SIGNED-RELEASES.md) and `SECURITY.md` §
 Verifying Release Artifacts; for the operational sequence of cutting a release,
 see [`RELEASING.md`](../runbooks/RELEASING.md).
@@ -95,31 +96,38 @@ earlier, unrelated commit was once scanned clean. Supply-chain posture (Scorecar
 stays merge-time only, because it characterizes the *repository* as an ongoing
 concern, not a single artifact.
 
-## Why a `publish = false` switch, and why it lives per crate
+## Why the machinery honors a `publish = false` switch that nothing currently sets
 
-Each of the five workspace members — `mif-core`, `mif-schema`, `mif-ontology`,
-`mif-cli`, `mif-mcp` — carries `publish = false` in its own `crates/<name>/Cargo.toml`.
-This is a deliberate holdover from the template this repository was forked from
-(`attested-delivery/rust-template`), and it exists to decouple *build and attest*
-from *publish externally*. The distinction matters because a GitHub Release is a
-tag primitive, not an external publish: a pushed `v*.*.*` tag always produces an
+None of the 9 workspace members — `mif-core`, `mif-problem`, `mif-schema`,
+`mif-frontmatter`, `mif-ontology`, `mif-embed`, `mif-store`, `mif-cli`, `mif-mcp`
+— carries `publish = false` in its `crates/<name>/Cargo.toml` today; all 9 are
+already live on crates.io at `0.1.0`. But `publish.yml` and
+`package-homebrew.yml` both still resolve a `publishable` boolean from `cargo
+metadata` (`select(.publish != [])`) at runtime rather than hardcoding a crate
+list, precisely so a *future* workspace member could ship `publish = false` and
+be built and attested without also being pushed to an external registry. The
+distinction that machinery exists to preserve is that a GitHub Release is a tag
+primitive, not an external publish: a pushed `v*.*.*` tag always produces an
 attested GitHub Release — binaries, SBOM, and a source snapshot, each carrying
-signed provenance — provided the fail-closed `verify` job passes, *regardless* of
-whether any crate is publishable. What `publish = false` withholds is specifically
-the **external distribution channels**: crates.io (`publish.yml`), the container
-registry (`pipeline.yml`'s `docker` chain), and the Homebrew tap
-(`package-homebrew.yml`). All three resolve `publishable` from `cargo metadata` at
-runtime, so arming a channel is a one-line deletion in the relevant crate's
-manifest rather than a workflow edit.
+signed provenance — provided the fail-closed `verify` job passes, *regardless*
+of whether any crate is publishable. What a per-crate `publish = false` would
+withhold is specifically the **external distribution channels**: crates.io
+(`publish.yml`) and the Homebrew tap (`package-homebrew.yml`). The container
+registry (`pipeline.yml`'s `docker` chain) is gated on a separate boolean,
+`has-bin-target` — whether any workspace member has a `[[bin]]` target — not on
+crate publish status; `mif-cli` and `mif-mcp` have carried `[[bin]]` targets
+since day one, so the docker chain has always run.
 
-The rationale for keeping the evidence chain unconditional while gating
-distribution is that attestation and distribution are separable concerns.
-Verifiable provenance is worth generating on every tagged build — it costs a few
-CI minutes and produces something auditable even for a crate nobody has decided to
-ship publicly yet. Distribution, by contrast, is often irreversible (crates.io
-cannot be unpublished; a container tag pushed to a public registry is effectively
-permanent) and should require a conscious decision, not an accidental side effect
-of tagging.
+The rationale for keeping the evidence chain unconditional while the *option* to
+gate distribution exists per crate is that attestation and distribution are
+separable concerns. Verifiable provenance is worth generating on every tagged
+build — it costs a few CI minutes and produces something auditable even for a
+crate nobody has decided to ship publicly yet. Distribution, by contrast, is
+often irreversible (crates.io cannot be unpublished; a container tag pushed to a
+public registry is effectively permanent) and should require a conscious
+decision, not an accidental side effect of tagging — which is why the dynamic
+`cargo metadata` resolution stays in place even though every current crate
+already opts in.
 
 ## Why quality-gate verdicts get re-signed at release time
 
@@ -161,9 +169,10 @@ workflow file could forge them. Routing signing through an isolated, centrally
 owned workflow means the attestation asserts two independent things at once:
 *where* the build ran (this repo, via `--repo`) and *who* signed it (the central
 workflow, via `--signer-workflow`) — and a verifier has to check both, because
-`--repo` alone is insufficient to catch a spoofed signer. The container path is
-currently dormant: it only runs once a crate's `publish = false` is lifted, per
-the switch described above.
+`--repo` alone is insufficient to catch a spoofed signer. The container path
+runs on every push to `main`/`master` and every tag (building without pushing on
+a PR); it is gated on `has-bin-target`, not on any crate's publish status — see
+above.
 
 ## Why crates.io publishing uses OIDC, not a stored token
 
@@ -195,27 +204,26 @@ to describe the artifact that was actually released, not the latest state of
 that produces no diff is a no-op — since `workflow_run` and `release` firing
 together for the same event is expected, not a bug to guard against.
 
-## Where this doesn't yet match the surrounding docs
+## Two details that are already in place
 
-Two details worth naming honestly, since an explanation that hides its own edges
-isn't doing its job. First, the environment gate on `publish.yml`, `release.yml`,
-and `package-homebrew.yml` is still named `copilot` — inherited verbatim from the
-upstream template — rather than something specific to this repository; renaming
-it to something like `release` and configuring real protection rules on it is
-tracked as follow-on work, not yet done. Second, `release.yml`'s metadata
-resolution step currently reads a single `[[bin]]` target from the first package
-`cargo metadata` returns; extending it to build every binary crate in this
-workspace (`mif-cli` and `mif-mcp`) is a separate, not-yet-landed change. Neither
-gap affects the *shape* of the attestation architecture described above — it
-affects how many binaries flow through it.
+The environment gate on `publish.yml`, `release.yml`, and `package-homebrew.yml`
+is named `release`, not the upstream template's `copilot` — this repository
+renamed it, so protection rules configured under **Settings > Environments >
+release** apply to all three gated workflows. Separately, `release.yml`'s
+metadata-resolution `meta` job reads *every* `[[bin]]` target workspace-wide via
+`cargo metadata`'s `.packages[].targets[]`, never `.packages[0]` — it already
+builds both binary crates in this workspace (`mif-cli` and `mif-mcp`) across
+every platform, and a future third binary crate would need zero workflow
+changes to join them.
 
 ## In short
 
 The pipeline splits evidence production into a cheap, repeated merge-time pass and
 a rarer, digest-bound deploy-time pass because those two passes answer different
-questions to different audiences. `publish = false` per crate keeps attestation
-unconditional while making external distribution a deliberate, reversible-until-
-irreversible decision. Re-signing gate verdicts over a published source snapshot,
+questions to different audiences. The dynamic, per-crate `publish = false` check
+keeps attestation unconditional while leaving external distribution a
+deliberate, reversible-until-irreversible decision — even though, today, all 9
+crates opt into distribution. Re-signing gate verdicts over a published source snapshot,
 verifying fail-closed before the release exists, authenticating to crates.io via
 OIDC instead of a stored secret, and re-attesting the registry-served `.crate`
 rather than a local build are all instances of the same underlying discipline:

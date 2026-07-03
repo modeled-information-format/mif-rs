@@ -17,13 +17,20 @@ Thank you for your interest in contributing to mif-rs!
    cd mif-rs
    ```
 
-3. Create a feature branch:
+3. Install the git hooks (mirrors this repo's own CI checks locally, via
+   [Lefthook](https://github.com/evilmartians/lefthook)):
+
+   ```bash
+   lefthook install
+   ```
+
+4. Create a feature branch:
 
    ```bash
    git checkout -b feat/your-feature
    ```
 
-4. Make your changes and verify:
+5. Make your changes and verify:
 
    ```bash
    cargo fmt -- --check
@@ -97,6 +104,8 @@ Before submitting a PR, ensure:
 - [ ] No `unwrap()`, `expect()`, or `panic!()` in library code
 - [ ] Error types use `thiserror`
 - [ ] Commits are signed (see [Commit Signing](#commit-signing))
+- [ ] `lefthook install` has been run, so the pre-commit/pre-push hooks caught
+      the above locally before pushing
 
 ## Code Style
 

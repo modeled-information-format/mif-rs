@@ -37,8 +37,11 @@ We follow responsible disclosure practices:
 
 ### Scope
 
-This policy applies to the mif_core crate and its published artifacts. Third-party dependencies
-are managed via `cargo-deny` and audited regularly through our CI pipeline.
+This policy applies to all 9 published `mif-rs` workspace crates (`mif-core`,
+`mif-problem`, `mif-schema`, `mif-frontmatter`, `mif-ontology`, `mif-embed`,
+`mif-store`, `mif-cli`, `mif-mcp`) and their published artifacts. Third-party
+dependencies are managed via `cargo-deny` and audited regularly through our CI
+pipeline.
 
 ## Security Measures
 
@@ -102,16 +105,17 @@ cosign verify-attestation "ghcr.io/modeled-information-format/mif-rs@${DIGEST}" 
 Binaries attached to a GitHub Release carry SLSA build provenance and a
 CycloneDX SBOM attestation, both attested by this repository's own
 release workflow (no `--signer-workflow` needed). Artifact names embed
-the version: `mif_core-<version>-<platform>`.
+the version: `<bin>-<version>-<platform>`, for each of the two binary
+crates (`mif-cli`, `mif-mcp`).
 
 ```bash
 gh release download v<X.Y.Z> --repo modeled-information-format/mif-rs
-gh attestation verify mif_core-<X.Y.Z>-linux-amd64 \
+gh attestation verify mif-cli-<X.Y.Z>-linux-amd64 \
   --repo modeled-information-format/mif-rs
-gh attestation verify mif_core-<X.Y.Z>-linux-amd64 \
+gh attestation verify mif-cli-<X.Y.Z>-linux-amd64 \
   --repo modeled-information-format/mif-rs \
   --predicate-type https://cyclonedx.org/bom
-shasum -a 256 -c mif_core-<X.Y.Z>-checksums.txt
+shasum -a 256 -c mif-rs-<X.Y.Z>-checksums.txt
 ```
 
 A passing `gh attestation verify` is the contract: it confirms the artifact's
@@ -129,7 +133,7 @@ returned attestation may surface the `-dev` subject. To pin the release-specific
 one, filter by the tag ref:
 
 ```bash
-gh attestation verify mif_core-<X.Y.Z>-linux-amd64 \
+gh attestation verify mif-cli-<X.Y.Z>-linux-amd64 \
   --repo modeled-information-format/mif-rs --format json \
 | jq -r '.[] | select(.verificationResult.signature.certificate.buildSignerURI
         | endswith("release.yml@refs/tags/v<X.Y.Z>"))
@@ -148,7 +152,7 @@ insufficient. Verify one signer/predicate per command:
 ```bash
 # SAST (CodeQL), SCA (OSV), IaC/license (Trivy) verdicts over the source snapshot.
 # gh release download v<X.Y.Z> --repo modeled-information-format/mif-rs first.
-SUBJECT=mif_core-<X.Y.Z>-source.tar.gz
+SUBJECT=mif-rs-<X.Y.Z>-source.tar.gz
 for PT in sast sca iac-license; do
   gh attestation verify "$SUBJECT" --owner modeled-information-format \
     --signer-workflow modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml \
@@ -178,10 +182,11 @@ passed).
 The `.crate` archive served by crates.io is downloaded back from the
 registry after publish, byte-compared against the locally packaged
 archive, and attested — the attestation covers the bytes the registry
-actually serves:
+actually serves. This runs for every one of the 9 published crates; the
+example below uses `mif-cli`:
 
 ```bash
 curl -fsSL -A 'release-check' \
-  -O https://static.crates.io/crates/mif_core/mif_core-<X.Y.Z>.crate
-gh attestation verify mif_core-<X.Y.Z>.crate --repo modeled-information-format/mif-rs
+  -O https://static.crates.io/crates/mif-cli/mif-cli-<X.Y.Z>.crate
+gh attestation verify mif-cli-<X.Y.Z>.crate --repo modeled-information-format/mif-rs
 ```

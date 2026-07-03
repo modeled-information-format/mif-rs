@@ -27,12 +27,13 @@ entity:
 
 # How to Publish an mif-rs Crate to an Alternative Cargo Registry
 
-Publish one of the workspace's library crates (`mif-core`, `mif-schema`, or
-`mif-ontology`) to a private or internal sparse-index registry instead of, or
-in addition to, crates.io — for example, when running an internal fork that
-cannot depend on the public registry. This guide uses `mif-core` and a
-registry named `internal` as the concrete example; substitute your own crate
-and registry name throughout.
+Publish one of the workspace's library crates (`mif-core`, `mif-schema`,
+`mif-ontology`, `mif-problem`, `mif-frontmatter`, `mif-embed`, or `mif-store`)
+to a private or internal sparse-index registry instead of, or in addition to,
+crates.io — for example, when running an internal fork that cannot depend on
+the public registry. This guide uses `mif-core` and a registry named
+`internal` as the concrete example; substitute your own crate and registry
+name throughout.
 
 ## Prerequisites
 
@@ -61,18 +62,34 @@ cargo login --registry internal
 This stores the token from your registry's credential page in Cargo's
 credential store; it is never checked into `Cargo.toml`.
 
-## Step 3 — Allow the crate to publish there
+## Step 3 — (Optional) Restrict which registries the crate may publish to
 
-Workspace crates currently ship `publish = false` in their `[package]`
-table, which blocks publishing to any registry. Replace it with an explicit
-allow-list naming the registries this crate may publish to:
+None of the workspace's crates set a `publish` field in their `[package]`
+table today — all 9 have already published to crates.io at version 0.1.0.
+With `publish` unset, Cargo's default (`publish = true`) leaves every crate
+free to publish to any registry, including `internal`, with no `Cargo.toml`
+change required — skip straight to Step 4.
+
+Only add an explicit allow-list if you want to *restrict* a crate to a
+specific set of registries (for example, to prevent an internal-only crate
+from ever being published to crates.io). Note that naming an allow-list
+excludes crates.io unless you include it explicitly — since this workspace's
+crates are already public on crates.io, adding one here would need to
+include `"crates-io"` to avoid blocking future public releases:
 
 ```toml
 # crates/mif-core/Cargo.toml
 [package]
-# publish = false
-publish = ["internal"]
+publish = ["crates-io", "internal"]
 ```
+
+**Note on republishing to crates.io itself:** crates.io versions are
+immutable — `mif-cli`, `mif-mcp`, `mif-schema`, and `mif-ontology` have each
+gained functionality since their initial 0.1.0 publish (new CLI subcommands
+and MCP tools, for example). Getting that new functionality onto crates.io is
+not a `publish`-field change at all; it requires bumping `version` in the
+workspace's `Cargo.toml` and running the normal release/publish pipeline (see
+[RELEASING.md](../runbooks/RELEASING.md)) — a new version, not a new flag.
 
 ## Step 4 — Publish
 

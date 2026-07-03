@@ -41,7 +41,8 @@ when an individual is officially representing the community in public spaces.
 ## Enforcement
 
 Instances of unacceptable behavior may be reported to the project maintainers
-at **[INSERT CONTACT METHOD]**.
+via [GitHub Security Advisories](https://github.com/modeled-information-format/mif-rs/security/advisories/new),
+which provides a private reporting channel visible only to maintainers.
 
 All complaints will be reviewed and investigated promptly and fairly.
 

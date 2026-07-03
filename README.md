@@ -18,13 +18,17 @@ Rust implementation of the [MIF (Modeled Information Format)](https://mif-spec.d
 | [`mif-core`](crates/mif-core) | library | Shared types: `OntologyReference`, `EntityReference`, `EntityData`, `ConceptType` |
 | [`mif-schema`](crates/mif-schema) | library | JSON Schema validation of MIF documents, citations, and ontology definitions |
 | [`mif-ontology`](crates/mif-ontology) | library | Three-tier ontology `extends` chain resolution |
-| [`mif-cli`](crates/mif-cli) | binary | Command-line interface (`validate`, `ontology resolve`) |
-| [`mif-mcp`](crates/mif-mcp) | binary | MCP server exposing the same operations as tools |
+| [`mif-problem`](crates/mif-problem) | library | RFC 9457 Problem Details error envelopes |
+| [`mif-frontmatter`](crates/mif-frontmatter) | library | Markdown frontmatter <-> JSON-LD lossless round-trip |
+| [`mif-embed`](crates/mif-embed) | library | Local sentence-embedding inference |
+| [`mif-store`](crates/mif-store) | library | `SQLite` vector store for document embeddings |
+| [`mif-cli`](crates/mif-cli) | binary | Command-line interface (`validate`, `ontology resolve`, `ingest`, `search`, `find-similar`, `corpus-stats`) |
+| [`mif-mcp`](crates/mif-mcp) | binary | MCP server exposing the same six operations as tools |
 
 ## Installation
 
 ```bash
-cargo add mif-core mif-schema mif-ontology   # libraries
+cargo add mif-core mif-schema mif-ontology mif-problem mif-frontmatter mif-embed mif-store   # libraries
 cargo install mif-cli mif-mcp                 # binaries
 ```
 
@@ -33,6 +37,7 @@ cargo install mif-cli mif-mcp                 # binaries
 ```bash
 mif-cli validate document.json
 mif-cli ontology resolve grazing-plan --ontologies-dir ./ontologies
+mif-cli ingest document.md --db-path .mif/vectors.db
 ```
 
 ```rust
@@ -43,6 +48,8 @@ mif_schema::validate_document(&document)?;
 ## Development
 
 [`just`](https://github.com/casey/just) is the local task runner. Run `just` to list all recipes.
+Run `lefthook install` once after cloning to set up local git hooks mirroring
+CI (`fmt`/`clippy`/`test` on commit/push).
 
 ```bash
 just check            # Full CI check (fmt + clippy + test + doc + deny)

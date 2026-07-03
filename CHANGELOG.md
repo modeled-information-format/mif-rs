@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ingest**: MIF document ingestion, embedding, and semantic search pipeline
+  (#6), spanning four new crates:
+  - `mif-problem`: shared RFC 9457 Problem Details envelope (`ProblemDetails`,
+    `ToProblem` trait, `OutputFormat`), adopted workspace-wide across every
+    crate's error enum — `--format pretty|json` on `mif-cli`, always-JSON on
+    `mif-mcp`
+  - `mif-frontmatter`: markdown-frontmatter <-> JSON-LD projection, generalized
+    to a full generic field pass-through (`FrontmatterShape` distinguishes the
+    v1.0 `id`/`type` shorthand from already-`@id`-shaped frontmatter)
+  - `mif-embed`: local, offline-after-first-fetch sentence embeddings via
+    `candle` (`sentence-transformers/all-MiniLM-L6-v2`)
+  - `mif-store`: SQLite vector store (`rusqlite`, bundled) with
+    brute-force cosine-similarity ranking
+- **cli**: `mif-cli` gains `ingest`, `search`, `find-similar`, and
+  `corpus-stats` subcommands
+- **mcp**: `mif-mcp` gains matching `ingest_mif_document`, `search_documents`,
+  `find_similar_documents`, and `corpus_stats` tools
+- **hooks**: Add `lefthook.yml` git hooks mirroring this repo's own CI (#9) —
+  pre-commit runs `cargo fmt --all -- --check`; pre-push runs the full CI
+  parity sequence (fmt, clippy `-D warnings`, test, doc, `cargo deny check`).
+  Run `lefthook install` after cloning.
+
+### Fixed
+
+- **ci**: Bump the `reusable-trivy.yml` pin to pick up a Trivy CLI version fix
+  (v0.72.0) after Trivy 0.70.0 crashed scanning a malformed CVE-2026-6791
+  record in the live `trivy-db` (#7)
+- **trivy**: Add a `.trivyignore` entry for CVE-2026-6791, an unfixed glibc
+  vulnerability in the Chainguard `glibc-dynamic` base image with no available
+  fixed build yet, verified against the real published image (#8)
+
 ## [0.1.2] - 2026-06-24
 
 ### Added

@@ -8,16 +8,43 @@
 
 Download pre-built binaries for your platform:
 
-- **Linux (x86_64)**: `mif_core-linux-amd64`
-- **Linux (ARM64)**: `mif_core-linux-arm64`
-- **macOS (x86_64)**: `mif_core-macos-amd64`
-- **macOS (ARM64)**: `mif_core-macos-arm64`
-- **Windows (x86_64)**: `mif_core-windows-amd64.exe`
+**mif-cli**
+
+- **Linux (x86_64)**: `mif-cli-VERSION-linux-amd64`
+- **Linux (ARM64)**: `mif-cli-VERSION-linux-arm64`
+- **macOS (x86_64)**: `mif-cli-VERSION-macos-amd64`
+- **macOS (ARM64)**: `mif-cli-VERSION-macos-arm64`
+- **Windows (x86_64)**: `mif-cli-VERSION-windows-amd64.exe`
+
+**mif-mcp**
+
+- **Linux (x86_64)**: `mif-mcp-VERSION-linux-amd64`
+- **Linux (ARM64)**: `mif-mcp-VERSION-linux-arm64`
+- **macOS (x86_64)**: `mif-mcp-VERSION-macos-amd64`
+- **macOS (ARM64)**: `mif-mcp-VERSION-macos-arm64`
+- **Windows (x86_64)**: `mif-mcp-VERSION-windows-amd64.exe`
 
 ### Cargo
 
 ```bash
-cargo install mif_core@VERSION
+cargo install mif-cli@VERSION
+cargo install mif-mcp@VERSION
+```
+
+### crates.io Libraries
+
+All 9 workspace crates are published independently at the same version.
+These are the 7 library crates (`mif-cli` and `mif-mcp` are binaries —
+install those via `cargo install` above):
+
+```bash
+cargo add mif-core@VERSION
+cargo add mif-problem@VERSION
+cargo add mif-schema@VERSION
+cargo add mif-frontmatter@VERSION
+cargo add mif-ontology@VERSION
+cargo add mif-embed@VERSION
+cargo add mif-store@VERSION
 ```
 
 ### Docker

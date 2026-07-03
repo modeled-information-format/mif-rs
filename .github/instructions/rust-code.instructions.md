@@ -12,6 +12,7 @@ When generating or modifying Rust source files in `crates/`:
 - Use `thiserror` for custom error types with `#[error(...)]` attributes
 - Propagate errors with `?` operator
 - Never use `unwrap()`, `expect()`, or `panic!()` in library code
+- Most crates' error enums implement `mif_problem::ToProblem`, mapping each variant to an RFC 9457 `ProblemDetails` envelope via a per-variant `ProblemMeta` — the `to_problem()` match is exhaustive, so a new variant on one of these enums needs a corresponding match arm there too, or the crate fails to compile
 
 ## Ownership and Borrowing
 

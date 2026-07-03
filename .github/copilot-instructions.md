@@ -4,13 +4,14 @@ This document provides context for GitHub Copilot when working with this Rust pr
 
 ## Project Context
 
-This is a Rust crate using modern tooling:
+This is a Rust Cargo workspace using modern tooling:
 - **Rust**: 1.92+ (2024 edition)
-- **Build System**: Cargo
-- **Linting**: clippy with pedantic and nursery lints
+- **Build System**: Cargo (virtual workspace, `crates/*` members)
+- **Linting**: clippy with the pedantic, nursery, and cargo lint groups; `unsafe_code = "forbid"` workspace-wide
 - **Formatting**: rustfmt
-- **Testing**: Built-in test framework + proptest
+- **Testing**: Built-in test framework (unit tests + doc tests); `proptest` is not currently a workspace dependency
 - **Supply Chain Security**: cargo-deny
+- **Error reporting**: RFC 9457 Problem Details via the shared `mif-problem` crate — see "Error Handling" below
 
 ## Code Generation Guidelines
 
@@ -47,6 +48,14 @@ pub enum AppError {
     Io(#[from] std::io::Error),
 }
 ```
+
+Most crates' error enums additionally implement `mif_problem::ToProblem`, mapping
+each variant to an RFC 9457 `application/problem+json` envelope (`ProblemDetails`)
+via a per-variant `ProblemMeta`. This match is exhaustive — adding a new error
+variant to one of these enums (`mif-schema`, `mif-ontology`, `mif-frontmatter`,
+`mif-embed`, `mif-store`, `mif-cli`'s `CliError`, `mif-mcp`'s `McpError`) requires
+adding a corresponding arm in `to_problem()` (and typically `meta()`), or the
+crate fails to compile with a non-exhaustive-match error.
 
 ### Type Annotations
 
@@ -183,30 +192,18 @@ mod tests {
 }
 ```
 
-Use proptest for property-based testing:
-
-```rust
-use proptest::prelude::*;
-
-proptest! {
-    #[test]
-    fn add_is_commutative(a in any::<i64>(), b in any::<i64>()) {
-        prop_assert_eq!(add(a, b), add(b, a));
-    }
-}
-```
+`proptest` is not currently a workspace dependency — do not add property-based
+tests without first adding `proptest` as an explicit dependency for the crate
+that needs it.
 
 ### Async Code
 
-Use async/await with tokio:
-
-```rust
-pub async fn fetch_data(url: &str) -> Result<Data> {
-    let response = reqwest::get(url).await?;
-    let data = response.json().await?;
-    Ok(data)
-}
-```
+Only `mif-mcp` uses async Rust, for its MCP server (`rmcp` with the
+`transport-io` feature) over stdio — via `tokio` (`rt-multi-thread`, `macros`,
+`io-std` features). There is no outbound async HTTP client (`reqwest` is not a
+workspace dependency); don't introduce one without an explicit reason. The
+library crates (`mif-core`, `mif-schema`, `mif-ontology`, `mif-problem`,
+`mif-frontmatter`, `mif-embed`, `mif-store`) and `mif-cli` are synchronous.
 
 ## Common Patterns
 
@@ -251,11 +248,12 @@ pub const fn new() -> Self {
 
 ## File Locations
 
-- Source code: `crates/`
-- Library entry: `crates/lib.rs`
-- Binary entry: `crates/main.rs`
-- Integration tests: `tests/`
-- Benchmarks: `benches/` (with criterion)
+- Source code: `crates/<crate-name>/src/`
+- Library entry: `crates/<crate-name>/src/lib.rs`
+- Binary entry: `crates/<crate-name>/src/main.rs`
+- Integration tests: `crates/<crate-name>/tests/` (e.g. `crates/mif-cli/tests/`)
+- Unit and doc tests: `#[cfg(test)] mod tests` in each source file, and `///` doc examples
+- No `benches/` directory or `criterion` dependency currently exists in this workspace
 
 ## Commands
 

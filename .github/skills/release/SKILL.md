@@ -24,14 +24,16 @@ either an explicit version (`/release v1.4.0`) or a bump type
 current `[workspace.package].version`. Every phase below ends with a
 verification; do not proceed past a failure — fix it or stop and report.
 
-This is a **5-crate workspace** — `mif-core`, `mif-schema`, `mif-ontology`
-(libraries), `mif-cli`, `mif-mcp` (binaries) — with **one shared version**
-(`version.workspace = true` on every member). A release ships all 5
-crates and both binaries together, at the same version number; there is
+This is a **9-crate workspace** — `mif-core`, `mif-problem`, `mif-schema`,
+`mif-frontmatter`, `mif-ontology`, `mif-embed`, `mif-store` (libraries),
+`mif-cli`, `mif-mcp` (binaries) — with **one shared version**
+(`version.workspace = true` on every member). A release ships every
+publishable crate together, at the same version number; there is
 no per-crate version skew. Names are never hardcoded: resolve the full
 package list from `cargo metadata --no-deps --format-version 1` (every
 `.packages[]`, never `.packages[0]`) and the `owner/repo` from
-`gh repo view --json nameWithOwner` at the start.
+`gh repo view --json nameWithOwner` at the start — this is what keeps the
+crate count in this skill from going stale the next time a crate is added.
 
 The pipeline this skill drives (all already wired in `.github/workflows/`):
 
@@ -66,7 +68,7 @@ WHAT IT DOES
     prep PR (version locations) -> required-checks green -> squash merge
     -> annotated tag -> monitors: attested binaries (mif-cli, mif-mcp x 5
     platforms) + SBOM + fail-closed verify -> GitHub Release; crates.io
-    Trusted Publishing + .crate attestation for all 5 crates; attested
+    Trusted Publishing + .crate attestation for every publishable crate; attested
     container images x2; Homebrew auto-update x2 -> independent
     workstation verification of every artifact.
 
@@ -79,11 +81,16 @@ NOTES
 ## Phase 0 — Preflight
 
 0. **Publication gate** — this project ships from `mif-rs`, where each
-   of the 5 crates' publication is controlled independently by its own
+   of the 9 crates' publication is controlled independently by its own
    `publish` line in `crates/<name>/Cargo.toml` (the workflows read this
    via `cargo metadata`; a crate with `publish = false` is excluded from
-   `cargo publish --workspace`, from the release-binary matrix's `has-bin-target`
-   gate, and from Homebrew updates). Check the current state:
+   `cargo publish --workspace` and from Homebrew updates). This is
+   separate from `pipeline.yml`'s `has-bin-target` gate, which is a single
+   workspace-wide boolean — true whenever *any* member has a `[[bin]]`
+   target — and controls whether the container chain runs at all; it does
+   not exclude individual crates by their publish status, and a bin
+   crate's GitHub-release binary is built regardless of that crate's
+   `publish` line. Check the current publish state:
    ```bash
    cargo metadata --no-deps --format-version 1 \
      | jq -c '[.packages[] | {name, publishable: (.publish != [])}]'
@@ -121,7 +128,7 @@ locations (missing one ships inconsistent metadata):
 
 | File | What to change |
 | --- | --- |
-| `Cargo.toml` | `[workspace.package].version = "<X.Y.Z>"` — one line arms all 5 crates, since every member uses `version.workspace = true` |
+| `Cargo.toml` | `[workspace.package].version = "<X.Y.Z>"` — one line arms every crate, since every member uses `version.workspace = true` |
 | `Cargo.lock` | run `cargo check --workspace` after the Toml edit — never hand-edit |
 | `CHANGELOG.md` | insert `## [<X.Y.Z>] - <today>` under `## [Unreleased]`; update the `[Unreleased]:` compare link and add the new version's compare link at the bottom |
 | `SECURITY.md` | any `<bin>-<version>-<platform>` example versions, for both `mif-cli` and `mif-mcp` |
@@ -184,7 +191,7 @@ multiple conditions — report each as it lands):
    binary), Verify Attestations, Create Release — all success.
 2. **Publish run** (`publish.yml`). Expect: pre-publish checks, Trusted
    Publishing auth, a "Resolve unpublished members" step naming which of
-   the 5 crates are actually being published this run (already-live
+   the 9 crates are actually being published this run (already-live
    versions are skipped, not an error), `cargo publish`, then the
    crate-attestation steps ("Download published crates from registry"
    and "Attest crate provenance" — both now loop over every publishable
@@ -243,8 +250,10 @@ done
 shasum -a 256 -c mif-rs-<X.Y.Z>-checksums.txt
 
 # crates.io: needs a User-Agent or the API/CDN rejects silently — check
-# every one of the 5 crates that was armed for this release
-for NAME in mif-core mif-schema mif-ontology mif-cli mif-mcp; do
+# every publishable crate armed for this release (resolved dynamically, not
+# hardcoded, so a newly added crate is covered without editing this skill)
+for NAME in $(cargo metadata --no-deps --format-version 1 \
+  | jq -r '.packages[] | select(.publish != []) | .name'); do
   curl -fsSL -A 'release-check' \
     -O "https://static.crates.io/crates/${NAME}/${NAME}-<X.Y.Z>.crate"
   gh attestation verify "${NAME}-<X.Y.Z>.crate" --repo <owner>/<repo>
@@ -272,7 +281,7 @@ need `--signer-workflow`: they are signed by the central workflow.
 ## Final report
 
 Summarize for the user: version, merge commit, tag; per-channel status
-(GitHub Release / crates.io **per crate**, all 5 / container images
+(GitHub Release / crates.io **per crate**, every publishable crate / container images
 **per bin**, both / Homebrew **per bin**, both); workstation verification
 results; and anything from the failure playbook that fired. If any
 channel is incomplete, say exactly what is pending, which specific
