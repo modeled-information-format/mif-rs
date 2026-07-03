@@ -126,7 +126,7 @@ Add `use clap::CommandFactory;` alongside the existing `clap` import, then
 handle `Command::Completions` in `run` alongside the six existing arms:
 
 ```rust
-fn run(command: &Command) -> Result<(), String> {
+fn run(command: &Command) -> Result<String, CliError> {
     match command {
         Command::Validate { file } => validate(file),
         Command::Ontology { command } => match command {
@@ -138,7 +138,7 @@ fn run(command: &Command) -> Result<(), String> {
         Command::CorpusStats { db_path } => corpus_stats(db_path.as_deref()),
         Command::Completions { shell } => {
             clap_complete::generate(*shell, &mut Cli::command(), "mif-cli", &mut std::io::stdout());
-            Ok(())
+            Ok(String::new())
         },
     }
 }

@@ -81,10 +81,13 @@ NOTES
 ## Phase 0 — Preflight
 
 0. **Publication gate** — this project ships from `mif-rs`, where each
-   of the 9 crates' publication is controlled independently by its own
-   `publish` line in `crates/<name>/Cargo.toml` (the workflows read this
-   via `cargo metadata`; a crate with `publish = false` is excluded from
-   `cargo publish --workspace` and from Homebrew updates). This is
+   of the 9 crates' publication is controlled independently via an
+   optional `publish` line in `crates/<name>/Cargo.toml` (the workflows
+   read this via `cargo metadata`; a crate with `publish = false` is
+   excluded from `cargo publish --workspace` and from Homebrew updates).
+   None of the 9 crates sets this line today, so all are publishable by
+   Cargo's default — a crate would only gain one if it needed
+   restricting. This is
    separate from `pipeline.yml`'s `has-bin-target` gate, which is a single
    workspace-wide boolean — true whenever *any* member has a `[[bin]]`
    target — and controls whether the container chain runs at all; it does
