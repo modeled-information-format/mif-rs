@@ -317,11 +317,11 @@ Set once at the workspace root (`[profile.*]` — not member-level; profiles are
 
 ### Why a Virtual Workspace, Not a Root Package
 
-Five crates share a strict dependency chain (`mif-core` -> `mif-schema` -> `mif-ontology` -> `{mif-cli, mif-mcp}`) and are versioned/released together. A workspace gives real path dependencies during development, one shared `Cargo.lock`, and CI that catches a breaking `mif-core` change in the same PR that introduces it. The root manifest has no `[package]` section (a *virtual* workspace) since no code lives at the workspace root itself — every crate is a real member under `crates/`.
+Nine crates share a dependency chain rooted at `mif-core` and fanning out through `mif-schema`, `mif-ontology`, `mif-problem`, `mif-frontmatter`, `mif-embed`, and `mif-store` to `{mif-cli, mif-mcp}`, and are versioned/released together. A workspace gives real path dependencies during development, one shared `Cargo.lock`, and CI that catches a breaking `mif-core` change in the same PR that introduces it. The root manifest has no `[package]` section (a *virtual* workspace) since no code lives at the workspace root itself — every crate is a real member under `crates/`.
 
 ### Why the Libraries Don't Depend on the Binaries
 
-`mif-cli` and `mif-mcp` are thin consumers of `mif-core`/`mif-schema`/`mif-ontology`'s public APIs, not the other way around. The three libraries are published independently and meant to be genuinely reusable by third parties who have no interest in a CLI or an MCP server — CLI/MCP-specific concerns (argument parsing, tool-schema derivation) stay out of the library layer entirely.
+`mif-cli` and `mif-mcp` are thin consumers of the seven library crates' (`mif-core`, `mif-schema`, `mif-ontology`, `mif-problem`, `mif-frontmatter`, `mif-embed`, `mif-store`) public APIs, not the other way around. The libraries are published independently and meant to be genuinely reusable by third parties who have no interest in a CLI or an MCP server — CLI/MCP-specific concerns (argument parsing, tool-schema derivation) stay out of the library layer entirely.
 
 ### Why `thiserror` for Errors
 

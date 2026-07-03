@@ -395,11 +395,14 @@ const JSONLD_SPECIAL_KEYS: &[&str] = &[
 
 /// JSON-LD keys excluded from the generic pass-through in [`jsonld_to_md`]
 /// under [`FrontmatterShape::PreProjected`]: only `content` (consumed into
-/// the body) and the derived-only `timestamp`/`description` mirrors are
-/// excluded — `@context`/`@type`/`@id`/`conceptType` pass through as literal
+/// the body). `@context`/`@type`/`@id`/`conceptType` pass through as literal
 /// frontmatter keys, since this shape's frontmatter already carries them
-/// directly.
-const PRE_PROJECTED_EXCLUDED_KEYS: &[&str] = &["content", "timestamp", "description"];
+/// directly. Unlike [`FrontmatterShape::V1Canonical`], `md_to_jsonld` never
+/// synthesizes `timestamp`/`description` mirrors for this shape (see its
+/// doc comment), so if they appear in `jsonld` here they are genuine
+/// pass-through fields, not derived-only ones, and must round-trip like any
+/// other key.
+const PRE_PROJECTED_EXCLUDED_KEYS: &[&str] = &["content"];
 
 /// Which convention a document's frontmatter uses to express its `@id`/
 /// `@type`/`conceptType` identity.
@@ -494,21 +497,31 @@ pub fn md_to_jsonld(
         jsonld.insert(key_str.to_string(), yaml_value_to_json(key_str, value)?);
     }
 
-    let timestamp = frontmatter
-        .get("modified")
-        .or_else(|| frontmatter.get("created"));
-    jsonld.insert(
-        "timestamp".to_string(),
-        match timestamp {
-            Some(value) => yaml_value_to_json("timestamp", value)?,
-            None => serde_json::Value::Null,
-        },
-    );
-    if let Some(summary) = frontmatter.get("summary") {
+    // The `timestamp`/`description` OKF-recommended mirror fields are
+    // synthesized only for V1Canonical: that shape's frontmatter never
+    // authors them directly (they aren't in FRONTMATTER_ORDER), so deriving
+    // them from created/modified/summary is safe. Synthesizing them
+    // unconditionally for PreProjected would silently clobber a literal
+    // `timestamp`/`description` frontmatter key that shape's generic
+    // pass-through already carried into `jsonld` above — PreProjected's
+    // whole design is "pass everything through, derive nothing."
+    if shape == FrontmatterShape::V1Canonical {
+        let timestamp = frontmatter
+            .get("modified")
+            .or_else(|| frontmatter.get("created"));
         jsonld.insert(
-            "description".to_string(),
-            yaml_value_to_json("summary", summary)?,
+            "timestamp".to_string(),
+            match timestamp {
+                Some(value) => yaml_value_to_json("timestamp", value)?,
+                None => serde_json::Value::Null,
+            },
         );
+        if let Some(summary) = frontmatter.get("summary") {
+            jsonld.insert(
+                "description".to_string(),
+                yaml_value_to_json("summary", summary)?,
+            );
+        }
     }
 
     jsonld.insert("content".to_string(), serde_json::json!(body.trim()));
@@ -1039,5 +1052,43 @@ provenance:
 This exec-summary synthesis covers example findings.
 "#;
         roundtrip_lossless(md).unwrap();
+    }
+
+    #[test]
+    fn pre_projected_shape_does_not_synthesize_timestamp_when_absent() {
+        // Regression test: md_to_jsonld must not unconditionally overwrite
+        // `timestamp`/`description` for PreProjected documents just because
+        // it does for V1Canonical ones.
+        let md = "---\n'@id': urn:mif:x\nconceptType: semantic\ncreated: 2026-01-01T00:00:00Z\n---\n\nBody.\n";
+        let (frontmatter, body) = parse_markdown(md).unwrap();
+        let jsonld = md_to_jsonld(&frontmatter, &body).unwrap();
+        assert!(jsonld.get("timestamp").is_none());
+        assert!(jsonld.get("description").is_none());
+    }
+
+    #[test]
+    fn pre_projected_shape_preserves_a_literal_timestamp_field_losslessly() {
+        // The exact collision review-bugscan flagged: a PreProjected
+        // document with its own literal `timestamp` field (not a
+        // created/modified mirror) must not have that value clobbered or
+        // dropped on round trip.
+        let md = "---\n'@id': urn:mif:x\nconceptType: semantic\ncreated: 2026-01-01T00:00:00Z\ntimestamp: a-custom-literal-value\ndescription: a custom literal description\n---\n\nBody.\n";
+        roundtrip_lossless(md).unwrap();
+
+        let (frontmatter, body) = parse_markdown(md).unwrap();
+        let jsonld = md_to_jsonld(&frontmatter, &body).unwrap();
+        assert_eq!(jsonld["timestamp"], "a-custom-literal-value");
+        assert_eq!(jsonld["description"], "a custom literal description");
+    }
+
+    #[test]
+    fn v1_canonical_shape_still_synthesizes_timestamp_and_description() {
+        // Confirms the fix above didn't regress V1Canonical's existing,
+        // intentional derived-mirror behavior.
+        let md = "---\nid: x\ntype: semantic\ncreated: 2026-01-01T00:00:00Z\nsummary: A summary.\n---\n\nBody.\n";
+        let (frontmatter, body) = parse_markdown(md).unwrap();
+        let jsonld = md_to_jsonld(&frontmatter, &body).unwrap();
+        assert_eq!(jsonld["timestamp"], "2026-01-01T00:00:00Z");
+        assert_eq!(jsonld["description"], "A summary.");
     }
 }

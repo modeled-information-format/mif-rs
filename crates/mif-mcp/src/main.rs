@@ -410,9 +410,12 @@ fn find_similar_documents_inner(
         .ok_or_else(|| McpError::DocumentNotFound(id.to_string()))?;
 
     // Request one extra match so excluding the anchor document itself still
-    // leaves up to `limit` genuinely-similar results.
+    // leaves up to `limit` genuinely-similar results. `saturating_add` avoids
+    // an overflow panic (debug builds) / silent wraparound (release builds)
+    // if a caller passes `limit = usize::MAX` (MCP `limit` deserializes
+    // straight from an untrusted tool call with no bounds check).
     let matches: Vec<_> = store
-        .top_k_similar(&anchor.vector, limit + 1)?
+        .top_k_similar(&anchor.vector, limit.saturating_add(1))?
         .into_iter()
         .filter(|m| m.id != id)
         .take(limit)
