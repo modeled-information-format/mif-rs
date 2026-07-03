@@ -1,0 +1,28 @@
+[package]
+name = "mif-embed"
+description = "Local sentence-embedding inference for the MIF (Modeled Information Format) ecosystem"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["mif", "embeddings", "candle"]
+categories = ["data-structures"]
+
+[lints]
+workspace = true
+
+[dependencies]
+mif-problem.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+candle-core.workspace = true
+candle-nn.workspace = true
+candle-transformers.workspace = true
+tokenizers.workspace = true
+hf-hub.workspace = true
+dirs.workspace = true
+
+[dev-dependencies]

@@ -14,6 +14,9 @@ use std::fs;
 use std::hash::BuildHasher;
 use std::path::Path;
 
+use mif_problem::{
+    Applicability, CodeAction, ProblemDetails, ProblemMeta, SuggestedFix, ToProblem,
+};
 use serde::Deserialize;
 
 /// Metadata for one ontology definition: identifier, version, and the
@@ -90,6 +93,129 @@ pub enum OntologyError {
     /// The `extends` graph contains a cycle.
     #[error("ontology '{0}' is part of an extends cycle")]
     Cycle(String),
+}
+
+impl OntologyError {
+    const fn meta(&self) -> ProblemMeta {
+        match self {
+            Self::Io { .. } => ProblemMeta {
+                slug: "io",
+                version: "v1",
+                title: "Failed to read an ontology definition file",
+                status: 500,
+                exit_code: 1,
+            },
+            Self::Yaml { .. } => ProblemMeta {
+                slug: "invalid-yaml",
+                version: "v1",
+                title: "Malformed ontology definition YAML",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::Invalid { .. } => ProblemMeta {
+                slug: "invalid-ontology-definition",
+                version: "v1",
+                title: "Ontology definition failed schema validation",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::Deserialize { .. } => ProblemMeta {
+                slug: "ontology-metadata-mismatch",
+                version: "v1",
+                title: "Internal error extracting ontology metadata",
+                status: 500,
+                exit_code: 1,
+            },
+            Self::NotFound(_) => ProblemMeta {
+                slug: "ontology-not-found",
+                version: "v1",
+                title: "Ontology not found in the supplied corpus",
+                status: 404,
+                exit_code: 3,
+            },
+            Self::Cycle(_) => ProblemMeta {
+                slug: "ontology-extends-cycle",
+                version: "v1",
+                title: "Ontology extends graph contains a cycle",
+                status: 422,
+                exit_code: 4,
+            },
+        }
+    }
+}
+
+impl ToProblem for OntologyError {
+    fn to_problem(&self) -> ProblemDetails {
+        let mut problem = self
+            .meta()
+            .into_details(env!("CARGO_PKG_NAME"), self.to_string());
+        let (fix, action) = match self {
+            Self::Io { source, .. } => {
+                let (status, fix, action) = mif_problem::classify_io_error(source);
+                problem.status = status;
+                (fix, action)
+            },
+            Self::Yaml { .. } => (
+                SuggestedFix::new(
+                    "Fix the YAML syntax error in the ontology definition file, then retry.",
+                    Applicability::MaybeIncorrect,
+                ),
+                CodeAction::new(
+                    "Fix the malformed YAML",
+                    "quickfix",
+                    Applicability::MaybeIncorrect,
+                ),
+            ),
+            Self::Invalid { .. } => (
+                SuggestedFix::new(
+                    "Correct the ontology definition so it conforms to ontology.schema.json, then retry.",
+                    Applicability::MaybeIncorrect,
+                ),
+                CodeAction::new(
+                    "Fix the reported schema violations",
+                    "quickfix",
+                    Applicability::MaybeIncorrect,
+                ),
+            ),
+            Self::Deserialize { .. } => (
+                SuggestedFix::new(
+                    "This indicates a bug in mif-ontology (a gap between ontology.schema.json \
+                     and OntologyMetadata). Report it upstream.",
+                    Applicability::Unspecified,
+                ),
+                CodeAction::new(
+                    "File a bug against mif-ontology",
+                    "quickfix",
+                    Applicability::Unspecified,
+                ),
+            ),
+            Self::NotFound(_) => (
+                SuggestedFix::new(
+                    "Add the missing ontology definition to the supplied corpus directory, or \
+                     correct the requested ontology ID, then retry.",
+                    Applicability::MaybeIncorrect,
+                ),
+                CodeAction::new(
+                    "Supply the missing ontology definition",
+                    "quickfix",
+                    Applicability::MaybeIncorrect,
+                ),
+            ),
+            Self::Cycle(_) => (
+                SuggestedFix::new(
+                    "Break the extends cycle by removing or redirecting one of the offending \
+                     ontology definitions' extends entries.",
+                    Applicability::MaybeIncorrect,
+                ),
+                CodeAction::new(
+                    "Remove the cyclic extends reference",
+                    "quickfix",
+                    Applicability::MaybeIncorrect,
+                ),
+            ),
+        };
+        problem.with_suggested_fix(fix).with_code_action(action)
+    }
 }
 
 /// Parses and validates one ontology definition document (already-loaded
@@ -205,6 +331,8 @@ fn resolve_into<S: BuildHasher>(
 mod tests {
     use std::collections::HashMap;
 
+    use mif_problem::ToProblem;
+
     use super::{OntologyError, OntologyMetadata, parse_definition, resolve_chain};
 
     fn metadata(id: &str, extends: &[&str]) -> OntologyMetadata {
@@ -283,5 +411,53 @@ mod tests {
             resolve_chain("a", &corpus),
             Err(OntologyError::Cycle(_))
         ));
+    }
+
+    #[test]
+    fn not_found_and_cycle_map_to_distinct_problem_types() {
+        let not_found = OntologyError::NotFound("missing".to_string()).to_problem();
+        let cycle = OntologyError::Cycle("a".to_string()).to_problem();
+
+        assert_eq!(
+            not_found.problem_type,
+            "https://mif-spec.dev/errors/ontology-not-found/v1"
+        );
+        assert_eq!(not_found.status, 404);
+        assert_eq!(not_found.exit_code, Some(3));
+
+        assert_eq!(
+            cycle.problem_type,
+            "https://mif-spec.dev/errors/ontology-extends-cycle/v1"
+        );
+        assert_eq!(cycle.status, 422);
+        assert_eq!(cycle.exit_code, Some(4));
+        assert_ne!(not_found.problem_type, cycle.problem_type);
+        assert!(not_found.suggested_fix.is_some());
+        assert!(cycle.suggested_fix.is_some());
+    }
+
+    #[test]
+    fn io_error_status_is_classified_by_the_underlying_error_kind() {
+        let not_found = OntologyError::Io {
+            path: "/nonexistent/ontologies".to_string(),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        }
+        .to_problem();
+        assert_eq!(not_found.status, 404);
+        assert_eq!(
+            not_found.suggested_fix.unwrap().applicability,
+            mif_problem::Applicability::MaybeIncorrect
+        );
+
+        let generic_fault = OntologyError::Io {
+            path: "/ontologies".to_string(),
+            source: std::io::Error::from(std::io::ErrorKind::Other),
+        }
+        .to_problem();
+        assert_eq!(generic_fault.status, 500);
+        assert_eq!(
+            generic_fault.suggested_fix.unwrap().applicability,
+            mif_problem::Applicability::Unspecified
+        );
     }
 }

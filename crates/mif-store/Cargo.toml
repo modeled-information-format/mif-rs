@@ -1,6 +1,6 @@
 [package]
-name = "mif-ontology"
-description = "Ontology resolution for the MIF (Modeled Information Format) ecosystem"
+name = "mif-store"
+description = "SQLite vector store for document embeddings in the MIF (Modeled Information Format) ecosystem"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,17 +8,16 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 readme = "README.md"
-keywords = ["mif", "ontology"]
+keywords = ["mif", "sqlite", "vector-store"]
 categories = ["data-structures"]
 
 [lints]
 workspace = true
 
 [dependencies]
-mif-core.workspace = true
-mif-schema.workspace = true
 mif-problem.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
-serde_norway = "0.9.42"
+rusqlite.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
