@@ -37,4 +37,8 @@ jobs:
           tool: cargo-audit
 
       - name: Run security audit
-        run: cargo audit --deny warnings
+        # RUSTSEC-2024-0436 (unmaintained `paste`, transitive via candle-core
+        # -> gemm, no upgrade path) is ignored the same as in deny.toml.
+        # cargo-audit 0.22.x has no config-file auto-discovery (verified
+        # empirically); --ignore is the only supported suppression mechanism.
+        run: cargo audit --deny warnings --ignore RUSTSEC-2024-0436

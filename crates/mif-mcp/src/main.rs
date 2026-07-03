@@ -545,6 +545,19 @@ mod tests {
         file
     }
 
+    // See the identical helper in mif-cli's test module: cargo test runs
+    // tests in parallel, and every test below that ingests or searches
+    // loads the embedding model. On a cold cache each load races the others
+    // to download and lock the same model blob, which is not reliably
+    // concurrent across platforms. Warming the cache once, serialized
+    // through `Once`, avoids the race entirely.
+    fn warm_embedding_model_cache() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let _ = mif_embed::Embedder::load();
+        });
+    }
+
     #[test]
     fn validate_tool_accepts_a_conformant_document() {
         let file = write_temp_file(
@@ -659,6 +672,7 @@ Test content via MCP.
 
     #[test]
     fn ingest_tool_accepts_a_conformant_document_and_stores_it() {
+        warm_embedding_model_cache();
         let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("vectors.db");
@@ -707,6 +721,7 @@ No type field.
     }
 
     fn ingest_fixture(db_path: &std::path::Path, id: &str, content: &str) {
+        warm_embedding_model_cache();
         let file = write_temp_file(&format!(
             "---\nid: {id}\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\n---\n\n{content}\n"
         ));

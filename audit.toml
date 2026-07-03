@@ -1,9 +1,0 @@
-[advisories]
-ignore = [
-    # unmaintained transitive dependency of `gemm` (candle-core's matmul
-    # backend); gemm 0.19.0 is its latest release and still depends on it, so
-    # there is no upgrade path from within this workspace. Same advisory
-    # already ignored in deny.toml for cargo-deny; cargo-audit reads its own
-    # config file separately.
-    "RUSTSEC-2024-0436",
-]

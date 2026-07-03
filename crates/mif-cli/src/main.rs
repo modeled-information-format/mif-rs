@@ -457,6 +457,21 @@ mod tests {
         file
     }
 
+    // `cargo test` runs tests in parallel threads within one process. Every
+    // test below that ingests or searches loads the embedding model, and on
+    // a cold cache each load races the others to download and lock the same
+    // model blob — `hf-hub`'s lock acquisition is not reliably concurrent
+    // across platforms (observed failing on macOS/Windows CI, passing on
+    // Linux). Warming the cache once, serialized through `Once`, means every
+    // real `Embedder::load()` call below hits an already-populated cache and
+    // never contends on the download lock.
+    fn warm_embedding_model_cache() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let _ = mif_embed::Embedder::load();
+        });
+    }
+
     #[test]
     fn validate_accepts_a_conformant_document() {
         let file = write_temp_file(
@@ -559,16 +574,33 @@ mod tests {
     #[test]
     fn directory_io_error_classifies_as_a_500_unspecified_problem() {
         // Reading a directory as if it were a file is a genuine I/O fault,
-        // not a mistaken path — it must stay at 500, not be misclassified
-        // as the same 4xx "wrong path" case as a missing file.
+        // not a mistaken path — on Unix this must stay at 500, not be
+        // misclassified as the same 4xx "wrong path" case as a missing
+        // file. Windows genuinely reports this differently: opening a
+        // directory for read access fails at the OS level with "access
+        // denied", which `std::io` surfaces as `ErrorKind::PermissionDenied`
+        // — the same kind a real permissions fault would produce — so
+        // `classify_io_error` cannot tell the two apart there and correctly
+        // classifies it as the 403 "maybe incorrect" case instead.
         let dir = tempfile::tempdir().unwrap();
         let error = validate(dir.path()).unwrap_err();
         let problem = error.to_problem();
-        assert_eq!(problem.status, 500);
-        assert_eq!(
-            problem.suggested_fix.unwrap().applicability,
-            mif_problem::Applicability::Unspecified
-        );
+        #[cfg(not(windows))]
+        {
+            assert_eq!(problem.status, 500);
+            assert_eq!(
+                problem.suggested_fix.unwrap().applicability,
+                mif_problem::Applicability::Unspecified
+            );
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(problem.status, 403);
+            assert_eq!(
+                problem.suggested_fix.unwrap().applicability,
+                mif_problem::Applicability::MaybeIncorrect
+            );
+        }
     }
 
     #[test]
@@ -604,6 +636,7 @@ Test content.
 
     #[test]
     fn ingest_accepts_a_conformant_markdown_document_and_stores_it() {
+        warm_embedding_model_cache();
         let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("vectors.db");
@@ -623,6 +656,7 @@ Test content.
 
     #[test]
     fn ingest_accepts_a_conformant_jsonld_document() {
+        warm_embedding_model_cache();
         let file = write_temp_file(
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
@@ -645,6 +679,7 @@ Test content.
 
     #[test]
     fn ingest_rejects_invalid_document_and_writes_no_row() {
+        warm_embedding_model_cache();
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("vectors.db");
 
@@ -708,6 +743,7 @@ No type field.
     }
 
     fn ingest_fixture(db_path: &std::path::Path, id: &str, content: &str) {
+        warm_embedding_model_cache();
         let file = write_temp_file(&format!(
             "---\nid: {id}\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\n---\n\n{content}\n"
         ));
@@ -736,6 +772,7 @@ No type field.
 
     #[test]
     fn search_reports_no_matches_on_an_empty_store() {
+        warm_embedding_model_cache();
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("vectors.db");
         mif_store::VectorStore::open(&db_path).unwrap();
