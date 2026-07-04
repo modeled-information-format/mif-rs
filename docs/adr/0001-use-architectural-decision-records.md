@@ -203,6 +203,11 @@ machine-readable decision trail — measured by: every architecturally
 significant decision in `mif-rs` from this point forward has a corresponding
 ADR under `docs/adr/`, reviewed via PR.
 
+## Related Decisions
+
+None — this is the first ADR in this repository; it establishes the practice
+every subsequent ADR follows.
+
 ## Links
 
 - [Structured MADR specification](https://github.com/modeled-information-format/structured-madr)
