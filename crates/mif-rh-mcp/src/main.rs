@@ -421,7 +421,6 @@ impl MifRh {
 
 #[tool_handler(
     name = "mif-rh-mcp",
-    version = "0.1.0",
     instructions = "Search, suggest entity types for, and find similar research-harness-template \
                     findings. Read-only: never writes to reports/"
 )]

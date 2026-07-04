@@ -529,7 +529,6 @@ impl Mif {
 
 #[tool_handler(
     name = "mif-mcp",
-    version = "0.1.0",
     instructions = "Validate, ingest, and semantically search MIF documents, and resolve MIF \
                     ontology references"
 )]
