@@ -151,6 +151,15 @@ fn fixture_is_well_formed() {
         fixture.pairs.iter().any(|pair| pair.cross_topic),
         "expected at least one cross_topic pair"
     );
+    assert!(
+        fixture.top_k_default > 0,
+        "top_k_default must be positive — a top-0 eval checks nothing"
+    );
+    for pair in &fixture.pairs {
+        if let Some(top_k) = pair.top_k {
+            assert!(top_k > 0, "{}: top_k override must be positive", pair.id);
+        }
+    }
     let mut seen = HashSet::new();
     for pair in &fixture.pairs {
         for member in [&pair.a, &pair.b] {
@@ -225,6 +234,12 @@ fn known_similar_pairs_rank_each_counterpart_in_top_k() {
     let mut failures = Vec::new();
     for pair in &fixture.pairs {
         let top_k = pair.top_k.unwrap_or(fixture.top_k_default);
+        assert!(
+            top_k > 0,
+            "{}: effective top_k is 0 — every check would fail as 'not in top-0', hiding the \
+             real configuration error",
+            pair.id
+        );
         for (query, counterpart) in [(&pair.a, &pair.b), (&pair.b, &pair.a)] {
             let matches = index
                 .find_similar(
