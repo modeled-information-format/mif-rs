@@ -491,6 +491,20 @@ mod tests {
     }
 
     #[test]
+    fn an_index_with_zero_findings_reports_not_built() {
+        // Miss-recording CLI paths create the same database file without
+        // indexing any findings; file existence alone must not read as
+        // built, or every query would return an empty success.
+        let dir = tempfile::tempdir().unwrap();
+        let index_path = dir.path().join("index.sqlite");
+        drop(mif_rh::index::FindingIndex::open(&index_path).unwrap());
+        assert!(index_path.exists());
+
+        let error = search_inner("anything", 10, &index_path).unwrap_err();
+        assert!(matches!(error, super::McpError::IndexNotBuilt { .. }));
+    }
+
+    #[test]
     fn find_similar_reports_index_not_built_when_absent() {
         let dir = tempfile::tempdir().unwrap();
         let index_path = dir.path().join("index.sqlite");
