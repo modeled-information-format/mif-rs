@@ -203,7 +203,7 @@ design — the transport must not be added without one.
 
 - `research-harness-template` `docs/proposals/ontology-engine/rust-rfc-engine-core.md` (lines 200-204) — the Unresolved Question this ADR closes.
 - [rmcp](https://crates.io/crates/rmcp) — the MCP SDK crate; `mif-rh-mcp` enables its `server` and `transport-io` features only.
-- `mif-rh-punchlist.md` (workspace gap analysis, 2026-07-04) — Risk R-9, closed by this ADR.
+- `mif-rh-punchlist.md` (workspace gap analysis, 2026-07-04; an unpublished, workspace-local analysis cited for provenance — not resolvable from this published record) — Risk R-9, closed by this ADR.
 
 ## More Information
 

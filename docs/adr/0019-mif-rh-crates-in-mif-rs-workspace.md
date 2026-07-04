@@ -40,7 +40,7 @@ Accepted
 `research-harness-template`'s ADR-0014 ("Compiled ontology engine as a scoped
 CLI+MCP proof-of-concept") authorized a compiled reimplementation of its
 `resolve-ontology.sh`/`ontology-review.sh` pair. Its accompanying RFC
-(`docs/proposals/ontology-engine/rust-rfc-engine-core.md`, lines 99-109)
+(`docs/proposals/ontology-engine/rust-rfc-engine-core.md`, lines 76-109)
 proposed a concrete shape: a new standalone workspace named
 `harness-ontology-engine` with crates `engine-core`/`cli`/`mcp-server`,
 producing **one** binary, `hoe`, with `review`/`resolve`/`mcp-serve`
@@ -98,7 +98,7 @@ decision retroactively.
 
 **Description**: A new repository/workspace `harness-ontology-engine` with
 crates `engine-core`/`cli`/`mcp-server`, one `hoe` binary with three
-subcommands, as proposed in `rust-rfc-engine-core.md:99-109`.
+subcommands, as proposed in `rust-rfc-engine-core.md:76-109`.
 
 **Advantages**:
 
@@ -218,8 +218,8 @@ with the duplicated variant is explicitly not a goal.
 ### Negative
 
 1. **Naming mismatch against the published RFC**: permanent, and mitigated
-   only by records like this one and the RFC's own glossary noting `hoe` was
-   not built.
+   only by records like this one (the workspace gap analysis's glossary
+   makes the same note; the RFC itself carries no such correction).
 2. **Coupled release cadence**: the engine cannot ship a release without the
    workspace shipping one.
 
@@ -264,8 +264,8 @@ implementation.
 ## Links
 
 - research-harness-template ADR-0014, "Compiled ontology engine as a scoped CLI+MCP proof-of-concept" — the authorizing decision.
-- `research-harness-template` `docs/proposals/ontology-engine/rust-rfc-engine-core.md` (lines 99-109) — the RFC's proposed `harness-ontology-engine`/`hoe` shape this decision deviates from.
-- `mif-rh-punchlist.md` (workspace gap analysis, 2026-07-04) — Risks R-1, R-8, and R-10, all closed or recorded by this ADR.
+- `research-harness-template` `docs/proposals/ontology-engine/rust-rfc-engine-core.md` (lines 76-109) — the RFC's proposed `harness-ontology-engine`/`hoe` shape this decision deviates from.
+- `mif-rh-punchlist.md` (workspace gap analysis, 2026-07-04; an unpublished, workspace-local analysis cited for provenance — not resolvable from this published record) — Risks R-1, R-8, and R-10, all closed or recorded by this ADR.
 
 ## More Information
 
