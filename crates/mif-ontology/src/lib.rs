@@ -99,7 +99,7 @@ impl OntologyError {
     const fn meta(&self) -> ProblemMeta {
         match self {
             Self::Io { .. } => ProblemMeta {
-                slug: "io",
+                slug: "mif-ontology-io",
                 version: "v1",
                 title: "Failed to read an ontology definition file",
                 status: 500,

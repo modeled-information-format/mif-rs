@@ -170,7 +170,7 @@ impl MifRhError {
                 exit_code: 1,
             },
             Self::Json { .. } => ProblemMeta {
-                slug: "invalid-json",
+                slug: "mif-rh-invalid-json",
                 version: "v1",
                 title: "Supporting file is not valid JSON",
                 status: 400,
