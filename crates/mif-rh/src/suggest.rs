@@ -22,11 +22,12 @@ use crate::error::MifRhError;
 use crate::index::cosine_similarity;
 use crate::resolve::{ResolveContext, build_allowed};
 
-/// The shared candidate-list depth: `review --suggest` queues this many
-/// ranked candidates per finding, and `calibrate` measures gold recall at
-/// exactly this depth — the two are semantically coupled (tier-2 recall is
-/// calibrated at the queue's own truncation depth), so they share one
-/// constant.
+/// The shared candidate-list depth.
+///
+/// `review --suggest` queues this many ranked candidates per finding, and
+/// `calibrate` measures gold recall at exactly this depth — the two are
+/// semantically coupled (tier-2 recall is calibrated at the queue's own
+/// truncation depth), so they share one constant.
 pub const SUGGESTION_DEPTH: usize = 5;
 
 /// One ranked, tier-annotated entity-type hypothesis.
