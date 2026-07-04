@@ -55,7 +55,7 @@ after the fact, and the rationale below is **reconstructed** from this
 workspace's own stated, repeated design values found elsewhere in this
 codebase — chiefly `mif-schema`'s explicit offline-only validation design
 (see [ADR-0006: Vendor the Canonical JSON Schema at Compile Time, Not Fetch
-at Validate Time](0006-vendor-json-schema-at-compile-time.md)) and
+at Validate Time](https://modeled-information-format.github.io/mif-rs/adr/0006-vendor-json-schema-at-compile-time/)) and
 `mif-embed`'s own module doc comment, which describes the crate as loading
 its model "on first use, caching the model files under the platform cache
 directory so later runs are offline." It is not a transcription of an
@@ -253,8 +253,8 @@ few thousand rows," and this ADR does not claim it scales beyond that.
 
 ## Related Decisions
 
-- [ADR-0004: Library Crates Never Depend on the Binary Crates](0004-libraries-never-depend-on-binaries.md)
-- [ADR-0006: Vendor the Canonical JSON Schema at Compile Time, Not Fetch at Validate Time](0006-vendor-json-schema-at-compile-time.md) — the offline-first precedent this decision's reconstructed rationale draws on.
+- [ADR-0004: Library Crates Never Depend on the Binary Crates](https://modeled-information-format.github.io/mif-rs/adr/0004-libraries-never-depend-on-binaries/)
+- [ADR-0006: Vendor the Canonical JSON Schema at Compile Time, Not Fetch at Validate Time](https://modeled-information-format.github.io/mif-rs/adr/0006-vendor-json-schema-at-compile-time/) — the offline-first precedent this decision's reconstructed rationale draws on.
 
 ## Links
 

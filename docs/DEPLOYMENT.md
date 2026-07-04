@@ -35,10 +35,10 @@ entity:
 
 Cut a tagged release of `mif-rs` and confirm it landed on every armed
 distribution channel: GitHub Releases (multi-platform binaries for
-`mif-cli`/`mif-mcp`), crates.io (all 9 workspace crates — none carries
+`mif-cli`/`mif-mcp`), crates.io (every workspace crate — none carries
 `publish = false`), and the container image on GHCR. For the full
 pre-release checklist, monitoring detail, rollback, and hotfix procedures,
-see [`RELEASING.md`](runbooks/RELEASING.md); this guide covers the direct
+see [`RELEASING.md`](https://modeled-information-format.github.io/mif-rs/runbooks/releasing/); this guide covers the direct
 path from a version bump to a verified, live release.
 
 ## Prerequisites
@@ -102,8 +102,8 @@ GitHub Release), `publish.yml` (crates.io, for all 9 publishable workspace
 members), and — on a non-PR push — `pipeline.yml`'s container chain.
 `package-homebrew.yml` follows automatically once
 `release.yml` completes. See
-[`ATTESTED-DELIVERY.md`](security/ATTESTED-DELIVERY.md) for why the pipeline
-is shaped this way, and [`SIGNED-RELEASES.md`](security/SIGNED-RELEASES.md)
+[`ATTESTED-DELIVERY.md`](https://modeled-information-format.github.io/mif-rs/security/attested-delivery/) for why the pipeline
+is shaped this way, and [`SIGNED-RELEASES.md`](https://modeled-information-format.github.io/mif-rs/security/signed-releases/)
 for what each attestation proves.
 
 ## Step 4 — Watch the run
@@ -148,4 +148,4 @@ checksums, container images, the published crate) are in
 The tag is pushed, the fail-closed verify gate passed, and the release is
 live on every channel you checked in Step 5. For rollback, hotfixes, and the
 full post-release checklist, continue with
-[`RELEASING.md`](runbooks/RELEASING.md).
+[`RELEASING.md`](https://modeled-information-format.github.io/mif-rs/runbooks/releasing/).

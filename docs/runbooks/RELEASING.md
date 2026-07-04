@@ -234,7 +234,7 @@ Run through this after all workflows complete.
   gh release view vX.Y.Z --json assets --jq '.assets[].name'
   ```
 - [ ] **Attestations verify** from an independent machine (full reference:
-      [SECURITY.md](../../SECURITY.md#verifying-release-artifacts)):
+      [SECURITY.md](https://github.com/modeled-information-format/mif-rs/blob/main/SECURITY.md#verifying-release-artifacts)):
   ```bash
   gh release download vX.Y.Z --repo modeled-information-format/mif-rs
   for BIN in mif-cli mif-mcp; do
@@ -400,7 +400,7 @@ Conventional commit prefixes map onto changelog sections:
 - **Platforms:** Linux (amd64, arm64), macOS (amd64, arm64), Windows (amd64)
 - **Attestations:** SLSA build provenance + CycloneDX SBOM attestation per
   binary; verify per
-  [SECURITY.md](../../SECURITY.md#verifying-release-artifacts)
+  [SECURITY.md](https://github.com/modeled-information-format/mif-rs/blob/main/SECURITY.md#verifying-release-artifacts)
 
 ### Container Image (GHCR)
 
@@ -444,7 +444,7 @@ cargo install --git https://github.com/modeled-information-format/mif-rs mif-cli
 
 ## Troubleshooting
 
-See [CI-TROUBLESHOOTING.md](CI-TROUBLESHOOTING.md) § Release workflow
+See [CI-TROUBLESHOOTING.md](https://modeled-information-format.github.io/mif-rs/runbooks/ci-troubleshooting/) § Release workflow
 failures and § Docker build failures for the full table of failure modes and
 fixes. The release process is complete once every checkbox in Post-Release
 Verification passes.

@@ -235,9 +235,9 @@ strip = false
 
 ## Related Decisions
 
-- [ADR-0003: Virtual Cargo Workspace, Not a Root Package](0003-virtual-cargo-workspace.md) —
+- [ADR-0003: Virtual Cargo Workspace, Not a Root Package](https://modeled-information-format.github.io/mif-rs/adr/0003-virtual-cargo-workspace/) —
   establishes the workspace whose root `Cargo.toml` carries these profiles.
-- [ADR-0009: Pedantic Clippy Lint Groups](0009-pedantic-clippy-lint-groups.md) —
+- [ADR-0009: Pedantic Clippy Lint Groups](https://modeled-information-format.github.io/mif-rs/adr/0009-pedantic-clippy-lint-groups/) —
   establishes the `clippy::panic = "deny"` lint policy this decision relies
   on as the reason a panic-unwind-and-recover path was never a real use case
   here.
@@ -251,7 +251,7 @@ strip = false
   the `"unwind"` vs `"abort"` strategies this decision chooses between.
 - [Cargo Book: Profile Settings — LTO](https://doc.rust-lang.org/cargo/reference/profiles.html#lto) —
   thin vs fat link-time optimization trade-offs referenced in Option 3.
-- [`docs/runbooks/RELEASING.md`](../runbooks/RELEASING.md) — this
+- [`docs/runbooks/RELEASING.md`](https://modeled-information-format.github.io/mif-rs/runbooks/releasing/) — this
   workspace's own release pipeline, the end-user distribution context these
   profile settings serve.
 

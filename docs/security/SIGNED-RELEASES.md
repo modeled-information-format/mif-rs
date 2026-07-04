@@ -62,7 +62,7 @@ the registry-served `.crate`, signing container images under a separate
 identity) look the way they do. It does not repeat verification commands —
 those live in `SECURITY.md` § Verifying Release Artifacts, kept as the single
 canonical, copy-pasteable source — and it does not re-walk the whole pipeline
-job-by-job, which [`ATTESTED-DELIVERY.md`](./ATTESTED-DELIVERY.md) already
+job-by-job, which [`ATTESTED-DELIVERY.md`](https://modeled-information-format.github.io/mif-rs/security/attested-delivery/) already
 covers.
 
 ## Why attest at all
@@ -168,4 +168,4 @@ types, and troubleshooting steps, `SECURITY.md` § Verifying Release Artifacts
 is the canonical, kept-current reference — duplicating those commands here
 would just create a second copy to drift out of sync. For how every gate in
 the pipeline (SAST, SCA, IaC/license, VEX) fits together stage by stage, see
-[`ATTESTED-DELIVERY.md`](./ATTESTED-DELIVERY.md).
+[`ATTESTED-DELIVERY.md`](https://modeled-information-format.github.io/mif-rs/security/attested-delivery/).

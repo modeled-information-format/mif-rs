@@ -233,7 +233,7 @@ fixture round-trips losslessly.
 
 ## Related Decisions
 
-- [ADR-0003: Virtual Cargo Workspace](0003-virtual-cargo-workspace.md) — establishes the workspace `mif-frontmatter` is a member of.
+- [ADR-0003: Virtual Cargo Workspace](https://modeled-information-format.github.io/mif-rs/adr/0003-virtual-cargo-workspace/) — establishes the workspace `mif-frontmatter` is a member of.
 
 ## Links
 

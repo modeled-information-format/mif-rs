@@ -217,7 +217,7 @@ succeed with zero network access.
 
 ## Related Decisions
 
-- [ADR-0003: Virtual Cargo Workspace](0003-virtual-cargo-workspace.md)
+- [ADR-0003: Virtual Cargo Workspace](https://modeled-information-format.github.io/mif-rs/adr/0003-virtual-cargo-workspace/)
 
 ## Links
 
