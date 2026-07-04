@@ -4,22 +4,27 @@
 //! of [`mif_rh::FindingIndex::find_similar`] when every other member of the
 //! fixture serves as a distractor.
 //!
-//! Fixture discovery, in order:
+//! Fixture discovery:
 //!
 //! 1. `MIF_RH_SEARCH_EVAL_FIXTURE` — path to the known-similar-pairs JSON
 //!    file itself (lets local runs point at a draft fixture before the rht
-//!    branch that adds it lands).
-//! 2. `MIF_RH_PARITY_FIXTURES_ROOT` (or the default sibling
-//!    `research-harness-template` checkout, same as `parity.rs`) joined with
-//!    `evals/fixtures/search/known-similar-pairs.json`.
+//!    branch that adds it lands). Setting it TERMINATES discovery: a
+//!    missing file at that path is a hard failure, never a fallback to
+//!    step 2.
+//! 2. Otherwise `MIF_RH_PARITY_FIXTURES_ROOT` (or the default sibling
+//!    `research-harness-template` checkout, same as `parity.rs`) joined
+//!    with `evals/fixtures/search/known-similar-pairs.json`.
 //!
 //! Without a fixture, or when the embedding model can't load, these tests
-//! skip (print and return) — unless `MIF_RH_SEARCH_EVAL_REQUIRED` is set,
-//! which makes either condition a hard failure. That fail-closed switch is
-//! deliberately separate from the parity gate's `MIF_RH_PARITY_REQUIRED`:
-//! CI pins an rht SHA that won't contain this fixture until the companion
-//! rht PR merges and the pin is bumped, so the search eval must be
-//! requirable independently of the parity suite.
+//! skip (print and return) — unless `MIF_RH_SEARCH_EVAL_REQUIRED` is set
+//! (any value, matching the parity suite's own required-switch
+//! convention), which makes either condition a hard failure. This
+//! fail-closed switch is deliberately its own variable, separate from the
+//! parity suite's: CI pins an rht SHA that won't contain this fixture
+//! until the companion rht PR merges and the pin is bumped, so the search
+//! eval must be requirable independently. The pin-bump follow-up sets
+//! `MIF_RH_SEARCH_EVAL_REQUIRED` in the CI parity job — until then this
+//! eval runs locally only.
 //!
 //! This whole file is test-only support (an integration test target, not
 //! library code), so it exempts itself from `unwrap_used`/`expect_used`/
@@ -84,7 +89,16 @@ fn rht_root() -> Option<PathBuf> {
 fn fixture_path() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("MIF_RH_SEARCH_EVAL_FIXTURE") {
         let path = PathBuf::from(path);
-        return path.is_file().then_some(path);
+        // An explicit override naming a missing file is a configuration
+        // error, not fixture absence — skipping here would be fail-open,
+        // and setting the variable terminates discovery (no fallback to
+        // the rht probe below).
+        assert!(
+            path.is_file(),
+            "MIF_RH_SEARCH_EVAL_FIXTURE is set but {} is not a file",
+            path.display()
+        );
+        return Some(path);
     }
     let candidate = rht_root()?.join("evals/fixtures/search/known-similar-pairs.json");
     candidate.is_file().then_some(candidate)
@@ -170,18 +184,31 @@ fn known_similar_pairs_rank_each_counterpart_in_top_k() {
         },
     };
 
+    // This test enforces the invariants it relies on rather than trusting
+    // fixture_is_well_formed alone: a filtered run of just this test must
+    // still validate them, and a shared finding_id must fail loudly here
+    // instead of silently shrinking the distractor set.
+    assert!(
+        !fixture.pairs.is_empty(),
+        "fixture has no pairs — the ranking assertions below would pass vacuously"
+    );
     let mut embeddings: HashMap<String, Vec<f32>> = HashMap::new();
     let mut indexed = Vec::new();
     for pair in &fixture.pairs {
         for member in [&pair.a, &pair.b] {
-            if embeddings.contains_key(&member.finding_id) {
-                continue;
-            }
             let vector = embedder
                 .embed(&member.text)
                 .map_err(|err| format!("failed to embed {}: {err}", member.finding_id))
                 .expect("member text should embed");
-            embeddings.insert(member.finding_id.clone(), vector.clone());
+            let fresh = embeddings
+                .insert(member.finding_id.clone(), vector.clone())
+                .is_none();
+            assert!(
+                fresh,
+                "finding_id {} appears in more than one pair member — every member must be a \
+                 distinct index entry",
+                member.finding_id
+            );
             indexed.push(IndexedFinding {
                 finding_id: member.finding_id.clone(),
                 topic: member.topic.clone(),
