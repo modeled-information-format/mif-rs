@@ -11,6 +11,15 @@
 //! green. Override the path via `MIF_RH_PARITY_FIXTURES_ROOT` if rht lives
 //! somewhere other than the default sibling location.
 //!
+//! Two environment variables control fixture discovery:
+//!
+//! - `MIF_RH_PARITY_FIXTURES_ROOT` — explicit path to an rht checkout,
+//!   overriding the default sibling-location probe.
+//! - `MIF_RH_PARITY_REQUIRED` — when set (any value), a missing checkout is
+//!   a hard test FAILURE instead of a skip. CI's dedicated parity job sets
+//!   this so the gate is fail-closed: a broken rht checkout step can never
+//!   silently turn the whole parity suite into a green no-op.
+//!
 //! This whole file is test-only fixture-loading support (an integration
 //! test target, not library code), so it exempts itself from
 //! `unwrap_used`/`expect_used` the same way `#[cfg(test)]` unit test
@@ -96,6 +105,12 @@ macro_rules! skip_without_rht {
         match load_fixtures() {
             Some(fixtures) => fixtures,
             None => {
+                assert!(
+                    std::env::var_os("MIF_RH_PARITY_REQUIRED").is_none(),
+                    "MIF_RH_PARITY_REQUIRED is set but no research-harness-template \
+                     checkout was found (set MIF_RH_PARITY_FIXTURES_ROOT to a valid \
+                     rht checkout) — refusing to skip parity fail-open"
+                );
                 eprintln!(
                     "skipping: no research-harness-template checkout found (set \
                      MIF_RH_PARITY_FIXTURES_ROOT to override)"
