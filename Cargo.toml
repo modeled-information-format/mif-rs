@@ -10,6 +10,9 @@ members = [
     "crates/mif-store",
     "crates/mif-cli",
     "crates/mif-mcp",
+    "crates/mif-rh",
+    "crates/mif-rh-cli",
+    "crates/mif-rh-mcp",
 ]
 
 [workspace.package]
@@ -41,6 +44,15 @@ dirs = "6.0.0"
 # libsqlite3-sys ^0.37.0, which predates cfg_select! in its build script.
 rusqlite = { version = "=0.39.0", features = ["bundled"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+# Stale-PID liveness check for mif-rh's review lock, without raw signal calls
+# (this workspace forbids unsafe_code workspace-wide). Pinned below 0.38:
+# sysinfo >=0.38 requires Rust 1.95, newer than this workspace's MSRV of
+# 1.92 and would fail the MSRV Check CI job (same reasoning as the rusqlite
+# pin above).
+sysinfo = { version = "=0.37.2", default-features = false, features = ["system"] }
+# Discovery-pattern content matching for mif-rh (the direct equivalent of
+# rht's bash `[[ =~ ]]` regex fallback classifier).
+regex = "1.12.4"
 
 [workspace.dependencies.mif-core]
 path = "crates/mif-core"
@@ -68,6 +80,10 @@ version = "0.1.0"
 
 [workspace.dependencies.mif-store]
 path = "crates/mif-store"
+version = "0.1.0"
+
+[workspace.dependencies.mif-rh]
+path = "crates/mif-rh"
 version = "0.1.0"
 
 [profile.dev]

@@ -1,0 +1,35 @@
+[package]
+name = "mif-rh"
+description = "Compiled ontology resolution/review engine for research-harness-template corpora"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["mif", "ontology", "research-harness"]
+categories = ["data-structures"]
+
+[lints]
+workspace = true
+
+[dependencies]
+mif-core.workspace = true
+mif-ontology.workspace = true
+mif-embed.workspace = true
+mif-problem.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+thiserror.workspace = true
+# FTS5 is already compiled into the bundled SQLite via libsqlite3-sys's
+# unconditional `-DSQLITE_ENABLE_FTS5` build flag; no extra rusqlite Cargo
+# feature exists or is needed for it.
+jsonschema.workspace = true
+rusqlite.workspace = true
+sysinfo.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
