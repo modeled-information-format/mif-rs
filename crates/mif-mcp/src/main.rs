@@ -182,21 +182,21 @@ impl McpError {
     const fn meta(&self) -> ProblemMeta {
         match self {
             Self::Io { .. } => ProblemMeta {
-                slug: "mif-mcp-io",
+                slug: "io",
                 version: "v1",
                 title: "Failed to read an input file",
                 status: 500,
                 exit_code: 1,
             },
             Self::Json { .. } => ProblemMeta {
-                slug: "mif-mcp-invalid-json",
+                slug: "invalid-json",
                 version: "v1",
                 title: "Input file is not valid JSON",
                 status: 400,
                 exit_code: 2,
             },
             Self::DocumentNotFound(_) => ProblemMeta {
-                slug: "mif-mcp-document-not-found",
+                slug: "document-not-found",
                 version: "v1",
                 title: "No document with the given id has been ingested",
                 status: 404,
@@ -612,7 +612,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
             value["type"],
-            "https://modeled-information-format.github.io/mif-rs/references/errors/mif-mcp-io/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/io/v1"
         );
         assert_eq!(value["status"], 404);
         assert_eq!(value["suggested_fix"]["applicability"], "maybe_incorrect");
@@ -636,7 +636,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
             value["type"],
-            "https://modeled-information-format.github.io/mif-rs/references/errors/mif-mcp-io/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/io/v1"
         );
         #[cfg(not(windows))]
         {
@@ -659,7 +659,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
             value["type"],
-            "https://modeled-information-format.github.io/mif-rs/references/errors/mif-mcp-invalid-json/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/invalid-json/v1"
         );
     }
 
@@ -927,7 +927,7 @@ No type field.
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
             value["type"],
-            "https://modeled-information-format.github.io/mif-rs/references/errors/mif-mcp-document-not-found/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/document-not-found/v1"
         );
         assert_eq!(value["status"], 404);
     }

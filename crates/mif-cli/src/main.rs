@@ -151,21 +151,21 @@ impl CliError {
     const fn meta(&self) -> ProblemMeta {
         match self {
             Self::Io { .. } => ProblemMeta {
-                slug: "mif-cli-io",
+                slug: "io",
                 version: "v1",
                 title: "Failed to read an input file",
                 status: 500,
                 exit_code: 1,
             },
             Self::Json { .. } => ProblemMeta {
-                slug: "mif-cli-invalid-json",
+                slug: "invalid-json",
                 version: "v1",
                 title: "Input file is not valid JSON",
                 status: 400,
                 exit_code: 2,
             },
             Self::DocumentNotFound(_) => ProblemMeta {
-                slug: "mif-cli-document-not-found",
+                slug: "document-not-found",
                 version: "v1",
                 title: "No document with the given id has been ingested",
                 status: 404,
@@ -946,7 +946,7 @@ No type field.
         let problem = error.to_problem();
         assert_eq!(
             problem.problem_type,
-            "https://modeled-information-format.github.io/mif-rs/references/errors/mif-cli-document-not-found/v1"
+            "https://modeled-information-format.github.io/mif-rs/references/errors/document-not-found/v1"
         );
         assert_eq!(problem.status, 404);
     }
