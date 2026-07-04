@@ -2,7 +2,8 @@
 //! engine for research-harness-template (rht) corpora.
 //!
 //! Exposes `search`, `suggest_type`, `find_similar`, and `corpus_stats` as
-//! read-only MCP tools over the index `mif-rh-cli review` builds. This
+//! read-only MCP tools over the index `mif-rh-cli review --build-index`
+//! builds. This
 //! server has **no filesystem write access to `reports/`** — `suggest_type`
 //! returns a ranked hypothesis for a human or agent to confirm via rht's
 //! own `/ontology-review --enrich` step, never an auto-stamp. Every tool
@@ -19,7 +20,7 @@ use rmcp::transport::stdio;
 use rmcp::{ServerHandler, ServiceExt, schemars, tool, tool_handler, tool_router};
 use serde::Serialize;
 
-const DEFAULT_INDEX_PATH: &str = ".mif-rh/index.sqlite";
+const DEFAULT_INDEX_PATH: &str = "reports/_meta/search-index.sqlite";
 const DEFAULT_REPORTS_DIR: &str = "reports";
 const DEFAULT_CATALOG: &str = ".claude/enabled-packs.json";
 const DEFAULT_CONFIG: &str = "harness.config.json";
@@ -69,7 +70,7 @@ impl ToProblem for McpError {
                 .meta()
                 .into_details(env!("CARGO_PKG_NAME"), self.to_string())
                 .with_suggested_fix(mif_problem::SuggestedFix::new(
-                    "Run `mif-rh-cli review` to build the search index, then retry.",
+                    "Run `mif-rh-cli review --build-index` to build the search index, then retry.",
                     mif_problem::Applicability::MachineApplicable,
                 ))
                 .with_code_action(mif_problem::CodeAction::new(
@@ -101,7 +102,8 @@ struct SearchParams {
     query: String,
     /// Maximum number of ranked results to return. Defaults to 10.
     limit: Option<usize>,
-    /// Path to the search index. Defaults to `.mif-rh/index.sqlite`.
+    /// Path to the search index. Defaults to
+    /// `reports/_meta/search-index.sqlite`.
     index_path: Option<PathBuf>,
 }
 
@@ -111,6 +113,7 @@ struct SearchHit {
     finding_id: String,
     topic: String,
     snippet: String,
+    score: f64,
 }
 
 /// Parameters for the `suggest_type` tool.
@@ -151,7 +154,8 @@ struct FindSimilarParams {
     /// A finding id to exclude from the results (e.g. the finding whose own
     /// content is the query).
     exclude_finding_id: Option<String>,
-    /// Path to the search index. Defaults to `.mif-rh/index.sqlite`.
+    /// Path to the search index. Defaults to
+    /// `reports/_meta/search-index.sqlite`.
     index_path: Option<PathBuf>,
 }
 
@@ -249,6 +253,7 @@ fn search_inner(query: &str, limit: usize, index_path: &Path) -> Result<Vec<Sear
             finding_id: m.finding_id,
             topic: m.topic,
             snippet: m.snippet,
+            score: m.score,
         })
         .collect())
 }

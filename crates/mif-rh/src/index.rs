@@ -1,13 +1,19 @@
 //! `SQLite`-backed search index over a corpus's findings: an FTS5
 //! full-text table (for `search`) plus embedding vectors (for
-//! `find_similar`), topic-scoped.
+//! `find_similar`).
+//!
+//! A finding is a durable, cross-topic-reusable research artifact — this
+//! index always spans every topic in a corpus, never just the topic(s) a
+//! particular `review` invocation happened to classify, so a scoped
+//! `--topic` review never narrows what future recall can find.
 //!
 //! This is a new, `mif-rh`-owned schema — not a reuse of
 //! `mif_store::VectorStore` — since that store is scoped to one flat table
 //! of single MIF documents with no topic concept, while rht's corpus is
 //! `reports/<topic>/findings/*.json`. Built/refreshed only by
-//! [`crate::review::review`], as a derived, gitignored artifact under
-//! `.mif-rh/`.
+//! [`crate::build_search_index`] (opt-in via `mif-rh-cli review
+//! --build-index`, deliberately not run on every `review`), as a derived,
+//! gitignored artifact conventionally kept at `reports/_meta/search-index.sqlite`.
 
 use std::path::Path;
 
@@ -30,7 +36,7 @@ pub struct IndexedFinding {
 }
 
 /// One full-text search match.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SearchMatch {
     /// The matching finding's id.
     pub finding_id: String,
@@ -38,6 +44,9 @@ pub struct SearchMatch {
     pub topic: String,
     /// A short snippet of the matching content.
     pub snippet: String,
+    /// FTS5's bm25 relevance score for this match (more negative is more
+    /// relevant — bm25's own convention, not normalized to `0.0..=1.0`).
+    pub score: f64,
 }
 
 /// One similarity match, ranked by cosine similarity.
@@ -138,7 +147,7 @@ impl FindingIndex {
     /// fails (including a malformed FTS5 query string).
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchMatch>, MifRhError> {
         let mut stmt = self.conn.prepare(
-            "SELECT finding_id, topic, snippet(findings_fts, 2, '', '', '...', 8)
+            "SELECT finding_id, topic, snippet(findings_fts, 2, '', '', '...', 8), bm25(findings_fts)
              FROM findings_fts WHERE findings_fts MATCH ?1
              ORDER BY rank LIMIT ?2",
         )?;
@@ -148,6 +157,7 @@ impl FindingIndex {
                 finding_id: row.get(0)?,
                 topic: row.get(1)?,
                 snippet: row.get(2)?,
+                score: row.get(3)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)

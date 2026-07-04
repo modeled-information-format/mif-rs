@@ -1587,6 +1587,7 @@ name = "mif-rh-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "mif-embed",
  "mif-problem",
  "mif-rh",
  "serde_json",

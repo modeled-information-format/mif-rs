@@ -300,8 +300,8 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
         ),
         MifRhError::Index { .. } => (
             SuggestedFix::new(
-                "This indicates a corrupt or inaccessible index database. Delete \
-                 .mif-rh/index.sqlite to let it be rebuilt by `review`, then retry.",
+                "This indicates a corrupt or inaccessible index database. Delete it and \
+                 rebuild with `mif-rh-cli review --build-index`, then retry.",
                 Applicability::Unspecified,
             ),
             CodeAction::new("Rebuild the index", "quickfix", Applicability::Unspecified),
