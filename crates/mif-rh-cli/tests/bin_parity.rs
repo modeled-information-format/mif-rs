@@ -139,6 +139,9 @@ fn review_prints_the_exact_topic_table_and_ends_on_the_summary_line() {
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     let stdout = stdout_of(&output);
     let lines: Vec<&str> = stdout.lines().collect();
+    // Exactly header + row + separator + summary: pin the line COUNT too,
+    // so an inserted line cannot slip past the per-line asserts.
+    assert_eq!(lines.len(), 4, "unexpected extra output lines: {stdout}");
     assert_eq!(lines[0], TABLE_HEADER);
     assert_eq!(lines[1], MINIMAL_EDU_ROW);
     assert_eq!(lines[2], "---");
@@ -302,6 +305,7 @@ fn review_gate_m12_mixed_rht_corpus_matches_the_documented_output_through_the_bi
     assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
     let stdout = stdout_of(&output);
     let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 4, "unexpected extra output lines: {stdout}");
     assert_eq!(lines[0], TABLE_HEADER);
     assert_eq!(
         lines[1],
