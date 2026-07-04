@@ -22,3 +22,6 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 serde_norway = "0.9.42"
+
+[dev-dependencies]
+tempfile.workspace = true

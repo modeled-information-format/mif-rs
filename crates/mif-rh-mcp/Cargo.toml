@@ -21,6 +21,7 @@ workspace = true
 [dependencies]
 mif-rh.workspace = true
 mif-embed.workspace = true
+mif-ontology.workspace = true
 mif-problem.workspace = true
 thiserror.workspace = true
 rmcp = { version = "2.1.0", features = ["server", "transport-io"] }

@@ -285,7 +285,7 @@ pub fn resolve_finding(
     };
 
     let allowed = build_allowed(ctx)?;
-    let matches: Vec<(&OntologyPack, &crate::ontology_pack::EntityTypeDef)> = allowed
+    let matches: Vec<(&OntologyPack, &crate::ontology_pack::EntityType)> = allowed
         .iter()
         .filter_map(|pack| {
             pack.entity_types

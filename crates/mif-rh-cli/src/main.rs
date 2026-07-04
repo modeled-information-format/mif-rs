@@ -111,6 +111,43 @@ enum Command {
         #[arg(long)]
         index: Option<PathBuf>,
     },
+    /// Suggest candidate entity types for a text or a finding, ranked by
+    /// embedding similarity with confidence tiers (MIF ADR-020). Prints a
+    /// JSON array of hypotheses; never writes to `reports/`.
+    SuggestType {
+        /// The text to classify. Omit when using `--finding`.
+        #[arg(required_unless_present = "finding", conflicts_with = "finding")]
+        text: Option<String>,
+        /// Path to a finding JSON file whose indexed text (discovery text,
+        /// else its entity's name) is the query.
+        #[arg(long)]
+        finding: Option<PathBuf>,
+        /// The topic whose bound ontologies supply candidate entity types.
+        /// Required with TEXT; with `--finding` it may instead derive from
+        /// the finding's `reports/<topic>/...` path.
+        #[arg(long, required_unless_present = "finding")]
+        topic: Option<String>,
+        /// Path to the ontology catalog. Defaults to
+        /// `.claude/enabled-packs.json`.
+        #[arg(long)]
+        catalog: Option<PathBuf>,
+        /// Path to the harness config. Defaults to `harness.config.json`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Base directory ontology catalog `source` paths resolve against.
+        /// Defaults to the current directory.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Maximum number of ranked candidates to return.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        /// Path to the confidence-calibration artifact. Defaults to
+        /// `reports/_meta/confidence-calibration.json`; when absent,
+        /// conservative built-in thresholds apply and candidates carry
+        /// `calibrated: false`.
+        #[arg(long)]
+        calibration: Option<PathBuf>,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -182,6 +219,25 @@ fn run(command: &Command) -> Result<Outcome, CliError> {
             relationship_script: relationship_script.as_deref(),
             build_index: *build_index,
             index: index.as_deref(),
+        }),
+        Command::SuggestType {
+            text,
+            finding,
+            topic,
+            catalog,
+            config,
+            root,
+            limit,
+            calibration,
+        } => suggest_type_cmd(&SuggestTypeArgs {
+            text: text.as_deref(),
+            finding: finding.as_deref(),
+            topic: topic.as_deref(),
+            catalog: catalog.as_deref(),
+            config: config.as_deref(),
+            root: root.as_deref(),
+            limit: *limit,
+            calibration: calibration.as_deref(),
         }),
     }
 }
@@ -275,6 +331,75 @@ fn upsert_map_record(
     records.sort_by(|a, b| a.finding_id.cmp(&b.finding_id));
 
     mif_rh::write_json_atomic(map_path, &records)
+}
+
+/// Arguments for the `suggest-type` subcommand, bundled to match the
+/// `ReviewArgs` convention below.
+struct SuggestTypeArgs<'a> {
+    text: Option<&'a str>,
+    finding: Option<&'a Path>,
+    topic: Option<&'a str>,
+    catalog: Option<&'a Path>,
+    config: Option<&'a Path>,
+    root: Option<&'a Path>,
+    limit: usize,
+    calibration: Option<&'a Path>,
+}
+
+const DEFAULT_CALIBRATION: &str = "reports/_meta/confidence-calibration.json";
+
+/// Runs `suggest-type`: derives the query text (given directly, or a
+/// finding's indexed text), loads the topic's ontology context and the
+/// calibration artifact, and prints the tier-annotated candidate list as
+/// pretty JSON. Exit code 0 — a hypothesis list, even an empty one, is a
+/// successful outcome, and nothing is ever written to `reports/`.
+fn suggest_type_cmd(args: &SuggestTypeArgs<'_>) -> Result<Outcome, CliError> {
+    let catalog_path = effective_path(args.catalog, DEFAULT_CATALOG);
+    let config_path = effective_path(args.config, DEFAULT_CONFIG);
+    let root = effective_path(args.root, ".");
+    let calibration_path = effective_path(args.calibration, DEFAULT_CALIBRATION);
+
+    // clap guarantees exactly one of text/--finding, and --topic whenever
+    // text is given; with --finding the topic may still derive from the
+    // finding's reports/<topic>/... path, mirroring `resolve`.
+    let (query, topic) = if let Some(finding_path) = args.finding {
+        let finding = mif_rh::Finding::load(finding_path)?;
+        let topic = args
+            .topic
+            .map(str::to_string)
+            .or_else(|| topic_from_path(finding_path))
+            .unwrap_or_default();
+        (mif_rh::index_text(&finding), topic)
+    } else {
+        (
+            args.text.unwrap_or_default().to_string(),
+            args.topic.unwrap_or_default().to_string(),
+        )
+    };
+
+    let catalog = mif_rh::Catalog::load(&catalog_path)?;
+    let config = mif_rh::HarnessConfig::load(&config_path)?;
+    let ontology_packs = mif_rh::ontology_pack::load_packs_via_catalog(&catalog, &root)?;
+    let ctx = mif_rh::ResolveContext {
+        topic: &topic,
+        catalog: &catalog,
+        config: &config,
+        ontology_packs: &ontology_packs,
+    };
+    let cal = mif_ontology::CalibrationConfig::load_or_default(&calibration_path)
+        .map_err(mif_rh::MifRhError::from)?;
+    let embedder = mif_embed::Embedder::load()?;
+    let suggestions = mif_rh::suggest_type(&query, &ctx, &embedder, &cal, args.limit)?;
+
+    let message =
+        serde_json::to_string_pretty(&suggestions).map_err(|source| CliError::JsonSerialize {
+            path: "<stdout>".to_string(),
+            source,
+        })?;
+    Ok(Outcome {
+        message,
+        exit_code: 0,
+    })
 }
 
 /// Arguments for the `review` subcommand, bundled (rather than passed as
@@ -424,7 +549,7 @@ fn review(args: &ReviewArgs<'_>) -> Result<Outcome, CliError> {
 mod tests {
     use std::fs;
 
-    use super::{ReviewArgs, resolve, review, topic_from_path};
+    use super::{ReviewArgs, SuggestTypeArgs, resolve, review, suggest_type_cmd, topic_from_path};
 
     fn write_fixture(dir: &std::path::Path) {
         fs::create_dir_all(dir.join(".claude")).unwrap();
@@ -495,6 +620,73 @@ mod tests {
 
         assert_eq!(outcome.exit_code, 1);
         assert!(outcome.message.contains("valid=false"));
+    }
+
+    #[test]
+    fn suggest_type_prints_tier_annotated_json_and_exits_zero() {
+        if mif_embed::Embedder::load().is_err() {
+            eprintln!("skipping: embedding model unavailable in this environment");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture(dir.path());
+
+        let outcome = suggest_type_cmd(&SuggestTypeArgs {
+            text: Some("A textbook titled Algebra I"),
+            finding: None,
+            topic: Some("edu"),
+            catalog: Some(&dir.path().join(".claude/enabled-packs.json")),
+            config: Some(&dir.path().join("harness.config.json")),
+            root: Some(dir.path()),
+            limit: 10,
+            calibration: Some(&dir.path().join("absent-calibration.json")),
+        })
+        .unwrap();
+
+        assert_eq!(outcome.exit_code, 0);
+        let suggestions: serde_json::Value = serde_json::from_str(&outcome.message).unwrap();
+        let list = suggestions.as_array().unwrap();
+        // The fixture pack's only entity type carries no description/aliases/
+        // exemplars — no positive embedding signal, so it is skipped and the
+        // hypothesis list is empty, which is still a successful outcome.
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn suggest_type_ranks_a_described_type_from_a_finding_query() {
+        if mif_embed::Embedder::load().is_err() {
+            eprintln!("skipping: embedding model unavailable in this environment");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture(dir.path());
+        // Enrich the fixture pack with a described, aliased entity type so a
+        // real candidate exists.
+        fs::write(
+            dir.path().join("packs/edu-fixture.yaml"),
+            "ontology:\n  id: edu-fixture\n  version: \"0.1.0\"\nentity_types:\n  - name: title\n    description: A published educational title\n    aliases: [textbook]\n    schema:\n      required: [name]\n      properties: {name: {type: string}}\n",
+        )
+        .unwrap();
+
+        let outcome = suggest_type_cmd(&SuggestTypeArgs {
+            text: None,
+            finding: Some(&dir.path().join("reports/edu/findings/good.json")),
+            topic: None, // derived from the finding's reports/<topic>/ path
+            catalog: Some(&dir.path().join(".claude/enabled-packs.json")),
+            config: Some(&dir.path().join("harness.config.json")),
+            root: Some(dir.path()),
+            limit: 10,
+            calibration: Some(&dir.path().join("absent-calibration.json")),
+        })
+        .unwrap();
+
+        assert_eq!(outcome.exit_code, 0);
+        let suggestions: serde_json::Value = serde_json::from_str(&outcome.message).unwrap();
+        let list = suggestions.as_array().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["entity_type"], "title");
+        assert!(list[0]["tier"].is_string());
+        assert_eq!(list[0]["calibrated"], false);
     }
 
     #[test]

@@ -20,6 +20,8 @@ workspace = true
 
 [dependencies]
 mif-rh.workspace = true
+mif-embed.workspace = true
+mif-ontology.workspace = true
 mif-problem.workspace = true
 clap.workspace = true
 serde_json.workspace = true
@@ -27,4 +29,3 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-mif-embed.workspace = true
