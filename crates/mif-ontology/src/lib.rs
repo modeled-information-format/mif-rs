@@ -1,4 +1,5 @@
-//! Ontology resolution for the MIF (Modeled Information Format) ecosystem.
+//! Ontology resolution and classification-confidence capabilities for the
+//! MIF (Modeled Information Format) ecosystem.
 //!
 //! Resolves the three-tier ontology inheritance chain (`mif-base` ->
 //! `shared-traits` -> domain ontologies), driven by each ontology
@@ -8,6 +9,19 @@
 //! YAML files supplied by the caller (e.g. a local checkout of the
 //! `ontologies` repository), matching the convention already used by the
 //! `MIF` repository's own `validate-ontologies.py --path`.
+//!
+//! Beyond chain resolution, this crate carries the MIF-level *model* for
+//! embedding-based entity-type classification (MIF ADR-020,
+//! "Confidence-Tiered Entity-Type Classification"): the full
+//! [`EntityType`] shape including its v1.1 classification fields and the
+//! positive embedding-document composition rule
+//! ([`EntityType::embedding_doc`]), plus the two-threshold, three-tier
+//! confidence policy ([`confidence`]). All of it is pure model code — no
+//! embedding inference and no persistence live here; consumers (like the
+//! `mif-rh` crates) supply vectors and storage.
+
+pub mod confidence;
+pub mod entity_type;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -19,13 +33,22 @@ use mif_problem::{
 };
 use serde::Deserialize;
 
+pub use confidence::{
+    CalibrationConfig, ConfidenceTier, ExpansionConfig, SimilarityBand, assign_tier, band_by_score,
+    cluster_by_mutual_similarity,
+};
+pub use entity_type::EntityType;
+
 /// Metadata for one ontology definition: identifier, version, and the
 /// `extends` chain used for three-tier resolution.
 ///
 /// This deliberately covers only `ontology.schema.json`'s `ontology` block
-/// (id/version/description/extends) — not the richer namespace/entity-type/
-/// trait/relationship/discovery content an ontology definition may also
-/// carry, which is out of scope for resolution.
+/// (id/version/description/extends) — not the richer namespace/trait/
+/// relationship/discovery content an ontology definition may also carry,
+/// which is out of scope for resolution. The one exception is the
+/// entity-type shape itself: [`EntityType`] models `$defs/entityType` in
+/// full (including the v1.1 classification fields) for consumers that
+/// classify content against an ontology's declared types.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct OntologyMetadata {
     /// Unique identifier for the ontology (`^[a-z][a-z0-9-]*$`).
@@ -93,6 +116,17 @@ pub enum OntologyError {
     /// The `extends` graph contains a cycle.
     #[error("ontology '{0}' is part of an extends cycle")]
     Cycle(String),
+    /// A confidence-calibration artifact exists but is unusable: unreadable,
+    /// malformed JSON, or carrying non-finite/mis-ordered threshold values.
+    /// A *missing* artifact is not an error — see
+    /// [`CalibrationConfig::load_or_default`].
+    #[error("calibration artifact at {path} is invalid: {detail}")]
+    CalibrationInvalid {
+        /// The artifact path that failed to load.
+        path: String,
+        /// What was wrong with it.
+        detail: String,
+    },
 }
 
 impl OntologyError {
@@ -139,6 +173,13 @@ impl OntologyError {
                 title: "Ontology extends graph contains a cycle",
                 status: 422,
                 exit_code: 4,
+            },
+            Self::CalibrationInvalid { .. } => ProblemMeta {
+                slug: "calibration-invalid",
+                version: "v1",
+                title: "Confidence-calibration artifact is invalid",
+                status: 422,
+                exit_code: 2,
             },
         }
     }
@@ -209,6 +250,19 @@ impl ToProblem for OntologyError {
                 ),
                 CodeAction::new(
                     "Remove the cyclic extends reference",
+                    "quickfix",
+                    Applicability::MaybeIncorrect,
+                ),
+            ),
+            Self::CalibrationInvalid { .. } => (
+                SuggestedFix::new(
+                    "Delete the corrupt calibration artifact and re-run the consumer's \
+                     calibration step (e.g. `mif-rh-cli calibrate`), or restore a valid \
+                     artifact, then retry.",
+                    Applicability::MaybeIncorrect,
+                ),
+                CodeAction::new(
+                    "Regenerate the calibration artifact",
                     "quickfix",
                     Applicability::MaybeIncorrect,
                 ),
@@ -450,6 +504,23 @@ mod tests {
         assert_ne!(not_found.problem_type, cycle.problem_type);
         assert!(not_found.suggested_fix.is_some());
         assert!(cycle.suggested_fix.is_some());
+    }
+
+    #[test]
+    fn calibration_invalid_maps_to_its_own_problem_type() {
+        let problem = OntologyError::CalibrationInvalid {
+            path: "reports/_meta/confidence-calibration.json".to_string(),
+            detail: "tier2_floor (0.95) must not exceed tier1_floor (0.85)".to_string(),
+        }
+        .to_problem();
+
+        assert_eq!(
+            problem.problem_type,
+            "https://modeled-information-format.github.io/mif-rs/references/errors/calibration-invalid/v1"
+        );
+        assert_eq!(problem.status, 422);
+        assert_eq!(problem.exit_code, Some(2));
+        assert!(problem.suggested_fix.is_some());
     }
 
     #[test]

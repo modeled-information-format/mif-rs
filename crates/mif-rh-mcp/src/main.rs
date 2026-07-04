@@ -13,6 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
+use mif_ontology::{CalibrationConfig, SimilarityBand, band_by_score};
 use mif_problem::{ProblemMeta, ToProblem};
 use mif_rh::index::FindingIndex;
 use rmcp::handler::server::wrapper::Parameters;
@@ -24,6 +25,7 @@ const DEFAULT_INDEX_PATH: &str = "reports/_meta/search-index.sqlite";
 const DEFAULT_REPORTS_DIR: &str = "reports";
 const DEFAULT_CATALOG: &str = ".claude/enabled-packs.json";
 const DEFAULT_CONFIG: &str = "harness.config.json";
+const DEFAULT_CALIBRATION: &str = "reports/_meta/confidence-calibration.json";
 const DEFAULT_LIMIT: usize = 10;
 
 /// Errors reported by the `mif-rh-mcp` binary itself.
@@ -51,6 +53,9 @@ enum McpError {
     /// Loading the ontology corpus, resolving, or reading the index failed.
     #[error(transparent)]
     MifRh(#[from] mif_rh::MifRhError),
+    /// The confidence-calibration artifact exists but is unusable.
+    #[error(transparent)]
+    Calibration(#[from] mif_ontology::OntologyError),
 }
 
 impl McpError {
@@ -70,7 +75,7 @@ impl McpError {
                 status: 404,
                 exit_code: 1,
             },
-            Self::MifRh(_) => ProblemMeta {
+            Self::MifRh(_) | Self::Calibration(_) => ProblemMeta {
                 slug: "delegated",
                 version: "v1",
                 title: "Delegated error",
@@ -85,6 +90,7 @@ impl ToProblem for McpError {
     fn to_problem(&self) -> mif_problem::ProblemDetails {
         match self {
             Self::MifRh(inner) => inner.to_problem(),
+            Self::Calibration(inner) => inner.to_problem(),
             Self::IndexNotBuilt { .. } => self
                 .meta()
                 .into_details(env!("CARGO_PKG_NAME"), self.to_string())
@@ -169,15 +175,11 @@ struct SuggestTypeParams {
     root: Option<PathBuf>,
     /// Maximum number of ranked candidates to return. Defaults to 10.
     limit: Option<usize>,
-}
-
-/// One ranked entity-type hypothesis. A hypothesis, never a stamp — this
-/// tool has no write access to `reports/`.
-#[derive(Debug, Serialize)]
-struct EntityTypeSuggestion {
-    entity_type: String,
-    ontology_id: String,
-    score: f32,
+    /// Path to the confidence-calibration artifact. Defaults to
+    /// `reports/_meta/confidence-calibration.json`; when absent,
+    /// conservative built-in thresholds apply and results carry
+    /// `calibrated: false`.
+    calibration: Option<PathBuf>,
 }
 
 /// Parameters for the `find_similar` tool.
@@ -193,15 +195,26 @@ struct FindSimilarParams {
     /// Path to the search index. Defaults to
     /// `reports/_meta/search-index.sqlite`.
     index_path: Option<PathBuf>,
+    /// Path to the confidence-calibration artifact. Defaults to
+    /// `reports/_meta/confidence-calibration.json`; when absent,
+    /// conservative built-in thresholds apply and results carry
+    /// `calibrated: false`.
+    calibration: Option<PathBuf>,
 }
 
 /// One similarity match, ranked by cosine similarity, across every topic
 /// in the corpus.
+///
+/// `band` is a similarity band (`near_duplicate`/`related`/`weak`) under
+/// the calibrated floors — deliberately NOT the classification tier
+/// vocabulary, since similarity recall is not a classification decision.
 #[derive(Debug, Serialize)]
 struct SimilarityHit {
     finding_id: String,
     topic: String,
     score: f32,
+    band: SimilarityBand,
+    calibrated: bool,
 }
 
 /// Parameters for the `corpus_stats` tool.
@@ -303,8 +316,11 @@ fn find_similar_inner(
     limit: usize,
     exclude_finding_id: Option<&str>,
     index_path: &Path,
+    calibration_path: &Path,
 ) -> Result<Vec<SimilarityHit>, McpError> {
     let index = open_index(index_path)?;
+    let cal = CalibrationConfig::load_or_default(calibration_path)?;
+    let calibrated = cal.governs(mif_embed::MODEL_ID);
     let embedder = mif_embed::Embedder::load().map_err(mif_rh::MifRhError::from)?;
     let vector = embedder.embed(text).map_err(mif_rh::MifRhError::from)?;
     let matches = index.find_similar(&vector, limit, exclude_finding_id)?;
@@ -313,15 +329,18 @@ fn find_similar_inner(
         .map(|m| SimilarityHit {
             finding_id: m.finding_id,
             topic: m.topic,
+            band: band_by_score(m.score, &cal),
             score: m.score,
+            calibrated,
         })
         .collect())
 }
 
-/// Embeds `text` and every candidate entity-type description for `topic`'s
-/// currently allowed ontologies (small candidate set — a handful of entity
-/// types per topic — so this is computed live, with no persistent index),
-/// ranking by cosine similarity. Never writes anywhere.
+/// Loads the topic's ontology context and delegates to
+/// [`mif_rh::suggest_type`]: embeds `text` and every allowed entity type's
+/// positive embedding document (description + aliases + exemplars), ranks
+/// by cosine similarity, and annotates confidence tiers under the corpus's
+/// calibration artifact. Never writes anywhere.
 fn suggest_type_inner(
     text: &str,
     topic: &str,
@@ -329,7 +348,8 @@ fn suggest_type_inner(
     config_path: &Path,
     root: &Path,
     limit: usize,
-) -> Result<Vec<EntityTypeSuggestion>, McpError> {
+    calibration_path: &Path,
+) -> Result<Vec<mif_rh::TypeSuggestion>, McpError> {
     let catalog = mif_rh::Catalog::load(catalog_path)?;
     let config = mif_rh::HarnessConfig::load(config_path)?;
     let ontology_packs = mif_rh::ontology_pack::load_packs_via_catalog(&catalog, root)?;
@@ -340,32 +360,9 @@ fn suggest_type_inner(
         config: &config,
         ontology_packs: &ontology_packs,
     };
-    let allowed = mif_rh::build_allowed(&ctx)?;
-
+    let cal = CalibrationConfig::load_or_default(calibration_path)?;
     let embedder = mif_embed::Embedder::load().map_err(mif_rh::MifRhError::from)?;
-    let query_vector = embedder.embed(text).map_err(mif_rh::MifRhError::from)?;
-
-    let mut suggestions = Vec::new();
-    for pack in &allowed {
-        for entity_type in &pack.entity_types {
-            let Some(description) = &entity_type.description else {
-                continue;
-            };
-            let candidate_vector = embedder
-                .embed(description)
-                .map_err(mif_rh::MifRhError::from)?;
-            let score = mif_rh::index::cosine_similarity(&query_vector, &candidate_vector);
-            suggestions.push(EntityTypeSuggestion {
-                entity_type: entity_type.name.clone(),
-                ontology_id: pack.id.clone(),
-                score,
-            });
-        }
-    }
-
-    suggestions.sort_by(|a, b| b.score.total_cmp(&a.score));
-    suggestions.truncate(limit);
-    Ok(suggestions)
+    Ok(mif_rh::suggest_type(text, &ctx, &embedder, &cal, limit)?)
 }
 
 #[derive(Clone)]
@@ -394,8 +391,11 @@ impl MifRh {
 
     #[tool(
         description = "Suggest candidate entity types for a piece of text, ranked by embedding \
-                        similarity to a topic's bound ontologies' entity-type descriptions. A \
-                        hypothesis only — never writes to reports/"
+                        similarity to a topic's bound ontologies' entity-type embedding documents \
+                        (description + aliases + exemplars), each annotated with a confidence \
+                        tier (auto_classify_eligible / flag_for_review / trigger_expansion) under \
+                        the corpus's calibration artifact. A hypothesis only — never writes to \
+                        reports/, at any tier"
     )]
     fn suggest_type(
         &self,
@@ -406,11 +406,13 @@ impl MifRh {
             config,
             root,
             limit,
+            calibration,
         }): Parameters<SuggestTypeParams>,
     ) -> String {
         let catalog_path = resolve_path(catalog.as_deref(), DEFAULT_CATALOG);
         let config_path = resolve_path(config.as_deref(), DEFAULT_CONFIG);
         let root = resolve_path(root.as_deref(), ".");
+        let calibration_path = resolve_path(calibration.as_deref(), DEFAULT_CALIBRATION);
         match suggest_type_inner(
             &text,
             &topic,
@@ -418,6 +420,7 @@ impl MifRh {
             &config_path,
             &root,
             limit.unwrap_or(DEFAULT_LIMIT),
+            &calibration_path,
         ) {
             Ok(suggestions) => {
                 serde_json::to_string(&suggestions).unwrap_or_else(|_| "[]".to_string())
@@ -426,7 +429,11 @@ impl MifRh {
         }
     }
 
-    #[tool(description = "Find findings similar to a piece of text, across every topic")]
+    #[tool(
+        description = "Find findings similar to a piece of text, across every topic. Each hit \
+                        carries a similarity band (near_duplicate/related/weak) under the \
+                        calibrated floors — not a classification decision"
+    )]
     fn find_similar(
         &self,
         Parameters(FindSimilarParams {
@@ -434,14 +441,17 @@ impl MifRh {
             limit,
             exclude_finding_id,
             index_path,
+            calibration,
         }): Parameters<FindSimilarParams>,
     ) -> String {
         let index_path = resolve_path(index_path.as_deref(), DEFAULT_INDEX_PATH);
+        let calibration_path = resolve_path(calibration.as_deref(), DEFAULT_CALIBRATION);
         match find_similar_inner(
             &text,
             limit.unwrap_or(DEFAULT_LIMIT),
             exclude_finding_id.as_deref(),
             &index_path,
+            &calibration_path,
         ) {
             Ok(hits) => serde_json::to_string(&hits).unwrap_or_else(|_| "[]".to_string()),
             Err(error) => error.to_problem().to_json(),
@@ -514,8 +524,66 @@ mod tests {
     fn find_similar_reports_index_not_built_when_absent() {
         let dir = tempfile::tempdir().unwrap();
         let index_path = dir.path().join("index.sqlite");
-        let error = find_similar_inner("anything", 10, None, &index_path).unwrap_err();
+        let calibration = dir.path().join("confidence-calibration.json");
+        let error =
+            find_similar_inner("anything", 10, None, &index_path, &calibration).unwrap_err();
         assert!(matches!(error, super::McpError::IndexNotBuilt { .. }));
+    }
+
+    #[test]
+    fn find_similar_hits_carry_similarity_bands_and_uncalibrated_flag() {
+        let Ok(embedder) = mif_embed::Embedder::load() else {
+            eprintln!("skipping: embedding model unavailable in this environment");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let index_path = dir.path().join("index.sqlite");
+        let calibration = dir.path().join("absent-calibration.json");
+        let vector = embedder.embed("a great textbook about algebra").unwrap();
+        let mut index = mif_rh::index::FindingIndex::open(&index_path).unwrap();
+        index
+            .rebuild(&[IndexedFinding {
+                finding_id: "f-1".to_string(),
+                topic: "edu".to_string(),
+                content: "a great textbook about algebra".to_string(),
+                vector,
+            }])
+            .unwrap();
+
+        let hits = find_similar_inner(
+            "a great textbook about algebra",
+            10,
+            None,
+            &index_path,
+            &calibration,
+        )
+        .unwrap();
+        assert_eq!(hits.len(), 1);
+        // An identical text embeds identically: cosine 1.0 lands in the top
+        // similarity band.
+        assert_eq!(hits[0].band, mif_ontology::SimilarityBand::NearDuplicate);
+        // No calibration artifact: built-in defaults, explicitly uncalibrated.
+        assert!(!hits[0].calibrated);
+    }
+
+    #[test]
+    fn a_malformed_calibration_artifact_is_an_explicit_error_not_a_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let index_path = dir.path().join("index.sqlite");
+        let mut index = mif_rh::index::FindingIndex::open(&index_path).unwrap();
+        index
+            .rebuild(&[IndexedFinding {
+                finding_id: "f-1".to_string(),
+                topic: "edu".to_string(),
+                content: "anything".to_string(),
+                vector: vec![1.0, 0.0],
+            }])
+            .unwrap();
+        let calibration = dir.path().join("confidence-calibration.json");
+        fs::write(&calibration, "{ not json").unwrap();
+
+        let error = find_similar_inner("anything", 10, None, &index_path, &calibration);
+        assert!(matches!(error, Err(super::McpError::Calibration(_))));
     }
 
     #[test]

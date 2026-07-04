@@ -20,11 +20,15 @@
 //! (ADR-0011) consumes `ontology-map.json`'s `basis`/`valid` fields
 //! directly to decide whether a finding can ship.
 //!
-//! Cosine similarity is used only by [`index::FindingIndex`] (full-text and
-//! embedding search over a corpus, consumed by the `mif-rh-mcp` server's
-//! `search`/`suggest_type`/`find_similar` tools) — a separate, read-only,
-//! never-authoritative recall/hypothesis layer that never writes to
-//! `ontology-map.json`.
+//! Embeddings and cosine similarity are used only by the hypothesis layer:
+//! [`index::FindingIndex`] (full-text and embedding search over a corpus)
+//! and [`suggest::suggest_type`] (tier-annotated entity-type hypotheses per
+//! MIF ADR-020's confidence policy, via [`mif_ontology::confidence`]) —
+//! both consumed by the `mif-rh-mcp` server's
+//! `search`/`suggest_type`/`find_similar` tools and by `mif-rh-cli`'s
+//! `suggest-type` subcommand. That layer is read-only and
+//! never-authoritative: it never writes to `ontology-map.json`, and
+//! `resolve`/`review` never call into it.
 
 pub mod catalog;
 pub mod config;
@@ -35,6 +39,7 @@ pub mod lock;
 pub mod ontology_pack;
 pub mod resolve;
 pub mod review;
+pub mod suggest;
 
 pub use catalog::Catalog;
 pub use config::HarnessConfig;
@@ -42,12 +47,13 @@ pub use error::MifRhError;
 pub use finding::Finding;
 pub use index::{FindingIndex, IndexStats, IndexedFinding, SearchMatch, SimilarFinding};
 pub use lock::ReviewLock;
-pub use ontology_pack::OntologyPack;
+pub use ontology_pack::{EntityType, OntologyPack};
 pub use resolve::{Basis, MapRecord, ResolveContext, build_allowed, resolve_finding};
 pub use review::{
     FollowupBacklog, FollowupEntry, ReviewOptions, ReviewReport, TopicSummary, review,
     write_followup,
 };
+pub use suggest::{TypeSuggestion, suggest_type};
 
 /// Rebuilds the search index for `topic_ids`, embedding every finding's
 /// discovery text (or its entity's `name`, for typed findings with no
@@ -127,7 +133,12 @@ pub fn write_json_atomic<T: serde::Serialize>(
 
 /// The text embedded and indexed for one finding: its discovery text
 /// (typically `content`) if any, otherwise its entity's `name`, if any.
-fn index_text(finding: &Finding) -> String {
+///
+/// Public so binary frontends can derive the same query text from a
+/// finding file (e.g. `mif-rh-cli suggest-type --finding <path>`) that the
+/// index itself embeds.
+#[must_use]
+pub fn index_text(finding: &Finding) -> String {
     let discovery_text = finding.discovery_text();
     if !discovery_text.is_empty() {
         return discovery_text;

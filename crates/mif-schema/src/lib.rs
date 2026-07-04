@@ -319,6 +319,48 @@ mod tests {
     }
 
     #[test]
+    fn entity_type_with_classification_fields_passes() {
+        // The v1.1 additive fields: aliases, exemplars, negative_examples.
+        let ontology = json!({
+            "ontology": {
+                "id": "sec-fixture",
+                "version": "1.1.0",
+            },
+            "entity_types": [{
+                "name": "control",
+                "base": "semantic",
+                "aliases": ["safeguard", "countermeasure"],
+                "exemplars": ["Enforce MFA for all administrative access"],
+                "negative_examples": ["An incident report describing a control failure"],
+            }]
+        });
+        assert!(validate_ontology_definition(&ontology).is_ok());
+    }
+
+    #[test]
+    fn entity_type_classification_fields_reject_non_string_and_empty_items() {
+        let non_string_alias = json!({
+            "ontology": { "id": "sec-fixture", "version": "1.1.0" },
+            "entity_types": [{
+                "name": "control",
+                "base": "semantic",
+                "aliases": [123],
+            }]
+        });
+        assert!(validate_ontology_definition(&non_string_alias).is_err());
+
+        let empty_exemplar = json!({
+            "ontology": { "id": "sec-fixture", "version": "1.1.0" },
+            "entity_types": [{
+                "name": "control",
+                "base": "semantic",
+                "exemplars": [""],
+            }]
+        });
+        assert!(validate_ontology_definition(&empty_exemplar).is_err());
+    }
+
+    #[test]
     fn citation_missing_required_field_fails() {
         let citation = json!({
             "@type": "Citation",

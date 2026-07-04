@@ -254,8 +254,8 @@ fn cosine_similarity_with_norm(a: &[f32], b: &[f32], a_norm: f32) -> f32 {
 /// Cosine similarity between two vectors, in `-1.0..=1.0`.
 ///
 /// Computes both norms internally, for one-shot pairwise comparisons (e.g.
-/// `mif-rh-mcp`'s `suggest_type`, ranking a query against a handful of
-/// candidate descriptions). A hot loop ranking many vectors against one
+/// [`crate::suggest::suggest_type`], ranking a query against a handful of
+/// candidate embedding documents). A hot loop ranking many vectors against one
 /// fixed query (see `find_similar` above) precomputes that query's norm
 /// once and calls the internal norm-carrying version directly instead, to
 /// avoid recomputing it on every row.

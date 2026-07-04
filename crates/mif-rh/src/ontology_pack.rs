@@ -4,32 +4,20 @@
 //! `mif-ontology`'s [`mif_ontology::OntologyMetadata`] deliberately parses
 //! only `ontology.id`/`version`/`description`/`extends` — this module reads
 //! the same files a second time for the richer `entity_types[]`/`discovery`
-//! content `resolve()`/`suggest_type` need, since generalizing
-//! `OntologyMetadata` itself is out of that crate's scope (see its own doc
-//! comment).
+//! content `resolve()`/`suggest_type` need. The entity-type shape itself is
+//! [`mif_ontology::EntityType`], the shared MIF-level model (including the
+//! v1.1 `aliases`/`exemplars`/`negative_examples` classification fields and
+//! its `embedding_doc()` composition rule), not a pack-local duplicate.
 
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
 use serde::Deserialize;
-use serde_json::Value;
+
+pub use mif_ontology::EntityType;
 
 use crate::error::MifRhError;
-
-/// One entity type an ontology declares.
-#[derive(Debug, Clone, Deserialize)]
-pub struct EntityTypeDef {
-    /// The entity type's name (`^[a-z][a-z0-9-]*$`).
-    pub name: String,
-    /// Human-readable description, embedded on demand for `suggest_type`.
-    #[serde(default)]
-    pub description: Option<String>,
-    /// The `{required, properties}` shape validated against, additively
-    /// (rht's ontology packs never set `additionalProperties: false`).
-    #[serde(default)]
-    pub schema: Value,
-}
 
 /// One discovery pattern: a regex tested against a finding's content, and
 /// what it suggests if it matches.
@@ -76,7 +64,7 @@ struct OntologyBlock {
 struct OntologyPackFile {
     ontology: OntologyBlock,
     #[serde(default)]
-    entity_types: Vec<EntityTypeDef>,
+    entity_types: Vec<EntityType>,
     #[serde(default)]
     discovery: DiscoveryConfig,
 }
@@ -92,7 +80,7 @@ pub struct OntologyPack {
     /// Ontology ids this ontology directly extends.
     pub extends: Vec<String>,
     /// Entity types this ontology declares.
-    pub entity_types: Vec<EntityTypeDef>,
+    pub entity_types: Vec<EntityType>,
     /// Discovery-fallback configuration.
     pub discovery: DiscoveryConfig,
 }
