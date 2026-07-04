@@ -372,9 +372,12 @@ fn review(args: &ReviewArgs<'_>) -> Result<Outcome, CliError> {
     let (report, backlog) = mif_rh::review(&opts)?;
 
     let mut message = format_topic_table(&report);
-    message.push('\n');
-    message.push_str(&report.summary_line());
 
+    // Matches `ontology-review.sh`'s own output order exactly: the
+    // `--followup` write confirmation prints before the final "---" +
+    // summary line, so a caller capturing only the last stdout line (as
+    // `verify.sh`'s gate_m12 does) always sees the aggregate summary, not
+    // this confirmation.
     if let Some(followup_path) = args.followup {
         use std::fmt::Write as _;
 
@@ -388,6 +391,9 @@ fn review(args: &ReviewArgs<'_>) -> Result<Outcome, CliError> {
             backlog.topics.len(),
         );
     }
+
+    message.push('\n');
+    message.push_str(&report.summary_line());
 
     if args.build_index {
         // Always the full corpus (every topic in `config`), never just the
@@ -552,6 +558,37 @@ mod tests {
         assert!(
             !dir.path().join("reports/_meta/.review.lock").exists(),
             "lock file must be released after review() returns"
+        );
+    }
+
+    #[test]
+    fn review_with_followup_prints_the_summary_line_last() {
+        // `ontology-review.sh` always ends its stdout on the aggregate
+        // summary line, even when `--followup` also prints a write
+        // confirmation — callers that capture only the last line (like
+        // `verify.sh`'s gate_m12) depend on this exact order.
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture(dir.path());
+        let followup_path = dir.path().join("followup.json");
+
+        let outcome = review(&ReviewArgs {
+            topics: &[],
+            strict: false,
+            reports_dir: Some(&dir.path().join("reports")),
+            config: Some(&dir.path().join("harness.config.json")),
+            catalog: Some(&dir.path().join(".claude/enabled-packs.json")),
+            followup: Some(&followup_path),
+            root: Some(dir.path()),
+            relationship_script: None,
+            build_index: false,
+            index: None,
+        })
+        .unwrap();
+
+        let last_line = outcome.message.lines().next_back().unwrap();
+        assert!(
+            last_line.starts_with("1 topic(s);"),
+            "last line should be the summary, got: {last_line}"
         );
     }
 
