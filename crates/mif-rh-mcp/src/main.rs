@@ -36,6 +36,13 @@ enum McpError {
         /// The index path that does not exist.
         path: String,
     },
+    /// `corpus_stats` was pointed at a reports directory that does not
+    /// exist or cannot be read.
+    #[error("reports directory not found or unreadable at {path}")]
+    ReportsDirMissing {
+        /// The reports directory that could not be read.
+        path: String,
+    },
     /// Loading the ontology corpus, resolving, or reading the index failed.
     #[error(transparent)]
     MifRh(#[from] mif_rh::MifRhError),
@@ -48,6 +55,13 @@ impl McpError {
                 slug: "index-not-built",
                 version: "v1",
                 title: "Search index has not been built yet",
+                status: 404,
+                exit_code: 1,
+            },
+            Self::ReportsDirMissing { .. } => ProblemMeta {
+                slug: "reports-dir-missing",
+                version: "v1",
+                title: "Reports directory not found",
                 status: 404,
                 exit_code: 1,
             },
@@ -75,6 +89,19 @@ impl ToProblem for McpError {
                 ))
                 .with_code_action(mif_problem::CodeAction::new(
                     "Build the search index",
+                    "quickfix",
+                    mif_problem::Applicability::MachineApplicable,
+                )),
+            Self::ReportsDirMissing { .. } => self
+                .meta()
+                .into_details(env!("CARGO_PKG_NAME"), self.to_string())
+                .with_suggested_fix(mif_problem::SuggestedFix::new(
+                    "Pass `reports_dir` pointing at the corpus root — the directory containing \
+                     `<topic>/ontology-map.json` — then retry.",
+                    mif_problem::Applicability::MachineApplicable,
+                ))
+                .with_code_action(mif_problem::CodeAction::new(
+                    "Point reports_dir at the corpus root",
                     "quickfix",
                     mif_problem::Applicability::MachineApplicable,
                 )),
@@ -192,7 +219,7 @@ struct CorpusStatsResult {
 /// Reads every `reports/<topic>/ontology-map.json` under `reports_dir` and
 /// aggregates the same coverage buckets `review()` computes, without
 /// re-resolving anything.
-fn corpus_stats_inner(reports_dir: &Path) -> CorpusStatsResult {
+fn corpus_stats_inner(reports_dir: &Path) -> Result<CorpusStatsResult, McpError> {
     use mif_rh::Basis;
 
     let mut topics = 0_u64;
@@ -202,16 +229,9 @@ fn corpus_stats_inner(reports_dir: &Path) -> CorpusStatsResult {
     let mut untyped = 0_u64;
     let mut invalid = 0_u64;
 
-    let Ok(entries) = std::fs::read_dir(reports_dir) else {
-        return CorpusStatsResult {
-            topics: 0,
-            findings: 0,
-            stamped: 0,
-            discovery: 0,
-            untyped: 0,
-            invalid: 0,
-        };
-    };
+    let entries = std::fs::read_dir(reports_dir).map_err(|_| McpError::ReportsDirMissing {
+        path: reports_dir.display().to_string(),
+    })?;
 
     for entry in entries.filter_map(Result::ok) {
         let map_path = entry.path().join("ontology-map.json");
@@ -234,14 +254,14 @@ fn corpus_stats_inner(reports_dir: &Path) -> CorpusStatsResult {
         }
     }
 
-    CorpusStatsResult {
+    Ok(CorpusStatsResult {
         topics,
         findings,
         stamped,
         discovery,
         untyped,
         invalid,
-    }
+    })
 }
 
 fn search_inner(query: &str, limit: usize, index_path: &Path) -> Result<Vec<SearchHit>, McpError> {
@@ -414,8 +434,10 @@ impl MifRh {
         Parameters(CorpusStatsParams { reports_dir }): Parameters<CorpusStatsParams>,
     ) -> String {
         let reports_dir = resolve_path(reports_dir.as_deref(), DEFAULT_REPORTS_DIR);
-        let stats = corpus_stats_inner(&reports_dir);
-        serde_json::to_string(&stats).unwrap_or_else(|_| "{}".to_string())
+        match corpus_stats_inner(&reports_dir) {
+            Ok(stats) => serde_json::to_string(&stats).unwrap_or_else(|_| "{}".to_string()),
+            Err(error) => error.to_problem().to_json(),
+        }
     }
 }
 
@@ -490,7 +512,7 @@ mod tests {
         )
         .unwrap();
 
-        let stats = corpus_stats_inner(dir.path());
+        let stats = corpus_stats_inner(dir.path()).unwrap();
         assert_eq!(stats.topics, 1);
         assert_eq!(stats.findings, 3);
         assert_eq!(stats.stamped, 1);
@@ -499,10 +521,27 @@ mod tests {
     }
 
     #[test]
-    fn corpus_stats_on_a_missing_reports_dir_returns_zeroes_not_an_error() {
+    fn corpus_stats_on_a_missing_reports_dir_is_an_explicit_error() {
+        use mif_problem::ToProblem;
+
         let dir = tempfile::tempdir().unwrap();
-        let stats = corpus_stats_inner(&dir.path().join("nonexistent"));
+        let error = corpus_stats_inner(&dir.path().join("nonexistent")).unwrap_err();
+        assert!(matches!(error, super::McpError::ReportsDirMissing { .. }));
+
+        let problem = error.to_problem();
+        assert_eq!(problem.status, 404);
+        assert!(problem.suggested_fix.is_some());
+    }
+
+    #[test]
+    fn corpus_stats_on_an_empty_reports_dir_returns_zeroes() {
+        let dir = tempfile::tempdir().unwrap();
+        let stats = corpus_stats_inner(dir.path()).unwrap();
         assert_eq!(stats.topics, 0);
         assert_eq!(stats.findings, 0);
+        assert_eq!(stats.stamped, 0);
+        assert_eq!(stats.discovery, 0);
+        assert_eq!(stats.untyped, 0);
+        assert_eq!(stats.invalid, 0);
     }
 }
