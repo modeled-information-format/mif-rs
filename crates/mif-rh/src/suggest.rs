@@ -16,14 +16,14 @@
 //! `review` never call it.
 
 use mif_ontology::{CalibrationConfig, ConfidenceTier, assign_tier};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::MifRhError;
 use crate::index::cosine_similarity;
 use crate::resolve::{ResolveContext, build_allowed};
 
 /// One ranked, tier-annotated entity-type hypothesis.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypeSuggestion {
     /// The candidate entity type's name.
     pub entity_type: String,
@@ -38,7 +38,7 @@ pub struct TypeSuggestion {
     /// The top candidate's lead over the second-best candidate. `Some`
     /// only at rank 0 when a rival exists — the margin is a property of
     /// the decision between the top two, not of every candidate.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub margin: Option<f32>,
     /// Whether the tier came from a real calibration run against the
     /// embedding model actually in use. `false` means built-in

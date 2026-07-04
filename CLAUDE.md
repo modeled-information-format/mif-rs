@@ -6,19 +6,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `mif-rs` is a Cargo **workspace** implementing the [MIF (Modeled Information
 Format)](https://mif-spec.dev) specification in Rust (edition 2024, MSRV
-1.92). Nine members, in dependency order:
+1.92). Twelve members, in dependency order:
 
 | Crate | Kind | Purpose |
 |---|---|---|
 | `mif-core` | library | Shared types: `OntologyReference`, `EntityReference`, `EntityData`, `ConceptType` |
 | `mif-problem` | library | Shared RFC 9457 Problem Details envelope (`ProblemDetails`, `ToProblem` trait, `OutputFormat`) every other crate's error enum maps into |
 | `mif-schema` | library | JSON Schema validation of MIF documents/citations/ontology definitions |
-| `mif-ontology` | library | Three-tier ontology `extends` chain resolution |
+| `mif-ontology` | library | Three-tier ontology `extends` chain resolution, plus the MIF-level classification model (MIF ADR-020): the full `EntityType` shape with `embedding_doc()`, and the `confidence` module (tiers, recalibratable `CalibrationConfig`, `assign_tier` floor+margin gate, mutual-similarity clustering) |
 | `mif-frontmatter` | library | Markdown-frontmatter <-> JSON-LD projection and lossless round-trip proof, ported from the `MIF` repo's `mif_convert.py`, generalized beyond it (see "Why Generic Frontmatter Pass-Through" below) |
 | `mif-embed` | library | Local (offline-after-first-fetch) sentence embeddings via `candle`, `sentence-transformers/all-MiniLM-L6-v2` |
 | `mif-store` | library | `SQLite`-backed vector store for document embeddings (`rusqlite`, bundled), with brute-force cosine-similarity ranking (`top_k_similar`) |
+| `mif-rh` | library | Compiled research-harness ontology engine: deterministic `resolve()`/`review()` (rht bash parity), plus the hypothesis layer — `suggest_type()` (tier-annotated suggestions), the `FindingIndex` (FTS5 + vectors + tier-3 miss store), the suggestion queue, and `stamped-quantile-v1` calibration |
 | `mif-cli` | binary | CLI: `mif-cli validate <file>`, `mif-cli ontology resolve <id> --ontologies-dir <dir>`, `mif-cli ingest <file> [--db-path <path>]`, `mif-cli search <query>`, `mif-cli find-similar <id>`, `mif-cli corpus-stats` |
 | `mif-mcp` | binary | MCP server exposing `validate_mif_document`, `resolve_ontology_reference`, `ingest_mif_document`, `search_documents`, `find_similar_documents`, and `corpus_stats` as tools |
+| `mif-rh-cli` | binary | Research-harness CLI: `resolve`, `review [--strict --followup --build-index --suggest]`, `suggest-type [--record]`, `calibrate`, `expansion-candidates` |
+| `mif-rh-mcp` | binary | Read-only MCP server over the mif-rh index: `search`, `suggest_type`, `find_similar` (tier-annotated), `corpus_stats` |
 
 Source for each crate lives at `crates/<name>/src/`. This is a **virtual
 workspace** (the root `Cargo.toml` has no `[package]` section) — shared

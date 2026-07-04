@@ -23,7 +23,22 @@ similarity, each annotated with a confidence tier
 ADR-020) under the corpus's calibration artifact
 (`reports/_meta/confidence-calibration.json` by default; absent means
 built-in thresholds and `calibrated: false`). Hypotheses only — it never
-writes to `reports/`.
+writes a finding's `entity_type`. With `--record` (requires `--finding`),
+a tier-3 miss is persisted in the index for `expansion-candidates`.
+
+The full ADR-020 tier routing:
+
+- `review --suggest` writes tier-annotated suggestion queues to
+  `<reports-dir>/_meta/suggestions/<topic>.json` for this review's
+  not-durably-stamped findings (confirmed/rejected verdicts from
+  `/ontology-review --enrich` are preserved on re-runs), and records
+  tier-3 misses.
+- `calibrate` derives the corpus's calibration artifact from its stamped
+  findings (`stamped-quantile-v1`: loosest floor+margin gate meeting
+  `--target-precision`, tier-2 floor from gold-recall quantiles).
+- `expansion-candidates` clusters recorded misses (mutual similarity,
+  minimum cluster size, minimum distinct runs) into ontology-expansion
+  candidates, as JSON for `author-ontology.sh --from-clusters`.
 
 `--relationship-script` is Unix-only: it spawns the given script directly
 and relies on its `#!` shebang, which Windows does not honor. Leave it

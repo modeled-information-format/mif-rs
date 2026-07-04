@@ -69,6 +69,33 @@ pub struct IndexStats {
     pub findings: u64,
 }
 
+/// One recorded low-confidence classification miss (tier 3).
+///
+/// A `trigger_expansion` query no allowed entity type matched well,
+/// persisted across runs so recurring misses can cluster into
+/// ontology-expansion candidates (MIF ADR-020 — expansion never triggers
+/// from a single miss).
+///
+/// Misses live in the same `SQLite` file as the search index but in their
+/// own table, which [`FindingIndex::rebuild`] deliberately leaves intact.
+/// Deleting the index file loses miss history — acceptable: misses are
+/// advisory hypotheses that re-accumulate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Miss {
+    /// The finding whose classification missed.
+    pub finding_id: String,
+    /// The finding's topic.
+    pub topic: String,
+    /// The query text that was embedded.
+    pub content: String,
+    /// The query's embedding vector.
+    pub vector: Vec<f32>,
+    /// The run that recorded this miss. One row per `(finding_id,
+    /// run_id)` — re-recording within one run replaces, across runs
+    /// accumulates (recurrence is the signal).
+    pub run_id: String,
+}
+
 const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS findings (
     finding_id TEXT PRIMARY KEY,
@@ -81,6 +108,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS findings_fts USING fts5(
     finding_id UNINDEXED,
     topic UNINDEXED,
     content
+);
+CREATE TABLE IF NOT EXISTS misses (
+    miss_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    finding_id TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    content TEXT NOT NULL,
+    dim INTEGER NOT NULL,
+    vector BLOB NOT NULL,
+    run_id TEXT NOT NULL,
+    UNIQUE (finding_id, run_id)
 );
 ";
 
@@ -214,6 +251,54 @@ impl FindingIndex {
         Ok(matches)
     }
 
+    /// Records one tier-3 miss, replacing any prior row for the same
+    /// `(finding_id, run_id)` pair — one row per finding per run, so
+    /// re-suggesting within a run does not inflate recurrence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MifRhError::Index`] if the underlying `SQLite` statement
+    /// fails.
+    pub fn record_miss(&self, miss: &Miss) -> Result<(), MifRhError> {
+        let blob = encode_vector(&miss.vector);
+        self.conn.execute(
+            "INSERT OR REPLACE INTO misses (finding_id, topic, content, dim, vector, run_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                miss.finding_id,
+                miss.topic,
+                miss.content,
+                i64::try_from(miss.vector.len()).unwrap_or(i64::MAX),
+                blob,
+                miss.run_id
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every recorded miss, in recording order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MifRhError::Index`] if the underlying `SQLite` statement
+    /// fails.
+    pub fn misses(&self) -> Result<Vec<Miss>, MifRhError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT finding_id, topic, content, vector, run_id FROM misses ORDER BY miss_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let blob: Vec<u8> = row.get(3)?;
+            Ok(Miss {
+                finding_id: row.get(0)?,
+                topic: row.get(1)?,
+                content: row.get(2)?,
+                vector: decode_vector(&blob),
+                run_id: row.get(4)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Aggregate statistics over the index.
     ///
     /// # Errors
@@ -277,7 +362,54 @@ fn decode_vector(bytes: &[u8]) -> Vec<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FindingIndex, IndexedFinding};
+    use super::{FindingIndex, IndexedFinding, Miss};
+
+    fn miss(finding_id: &str, run_id: &str, vector: Vec<f32>) -> Miss {
+        Miss {
+            finding_id: finding_id.to_string(),
+            topic: "edu".to_string(),
+            content: format!("content of {finding_id}"),
+            vector,
+            run_id: run_id.to_string(),
+        }
+    }
+
+    #[test]
+    fn misses_roundtrip_and_survive_a_rebuild() {
+        let (_dir, mut index) = open_temp();
+        index
+            .record_miss(&miss("f-1", "run-1", vec![1.0, 0.0]))
+            .unwrap();
+        index
+            .record_miss(&miss("f-1", "run-2", vec![1.0, 0.0]))
+            .unwrap();
+        index
+            .record_miss(&miss("f-2", "run-1", vec![0.0, 1.0]))
+            .unwrap();
+
+        // Rebuild wipes findings, never miss history.
+        index.rebuild(&[]).unwrap();
+
+        let misses = index.misses().unwrap();
+        assert_eq!(misses.len(), 3);
+        assert_eq!(misses[0].finding_id, "f-1");
+        assert_eq!(misses[0].vector, vec![1.0, 0.0]);
+    }
+
+    #[test]
+    fn re_recording_the_same_finding_within_one_run_replaces_not_accumulates() {
+        let (_dir, index) = open_temp();
+        index
+            .record_miss(&miss("f-1", "run-1", vec![1.0, 0.0]))
+            .unwrap();
+        index
+            .record_miss(&miss("f-1", "run-1", vec![0.5, 0.5]))
+            .unwrap();
+
+        let misses = index.misses().unwrap();
+        assert_eq!(misses.len(), 1);
+        assert_eq!(misses[0].vector, vec![0.5, 0.5]);
+    }
 
     fn open_temp() -> (tempfile::TempDir, FindingIndex) {
         let dir = tempfile::tempdir().unwrap();
