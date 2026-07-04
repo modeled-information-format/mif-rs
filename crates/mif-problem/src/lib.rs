@@ -706,10 +706,15 @@ mod tests {
     /// (delegating match arms whose real problem comes from an inner
     /// error's own `to_problem()` instead of this crate's `meta()`).
     fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
+        let read_result = std::fs::read_dir(dir);
+        if matches!(&read_result, Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
             return;
-        };
-        for path in entries.filter_map(Result::ok).map(|e| e.path()) {
+        }
+        let dir_msg = format!("failed to read dir {}", dir.display());
+        let entries = read_result.expect(&dir_msg);
+        for entry in entries {
+            let entry_msg = format!("failed to read entry in {}", dir.display());
+            let path = entry.expect(&entry_msg).path();
             if path.is_dir() {
                 collect_rs_files(&path, out);
                 continue;
@@ -722,7 +727,8 @@ mod tests {
 
     /// Every `slug: "..."` literal in a source file's text, in appearance order.
     fn slugs_in_file(path: &std::path::Path) -> Vec<String> {
-        let contents = std::fs::read_to_string(path).unwrap_or_default();
+        let msg = format!("failed to read {}", path.display());
+        let contents = std::fs::read_to_string(path).expect(&msg);
         contents
             .lines()
             .filter_map(|line| {
