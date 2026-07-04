@@ -163,7 +163,8 @@ pub fn load_packs_from_dir(dir: &Path) -> Result<HashMap<String, OntologyPack>, 
 /// ontology names its own YAML file's repo-relative path in
 /// `.claude/enabled-packs.json`'s `source` field (core ontologies typically
 /// under `schemas/ontologies/`, domain packs vendored under
-/// `packs/ontologies/`, per ADR-0012). A catalog entry with no `source` is
+/// `packs/ontologies/`, per rht's ADR-0012, "On-Demand Ontology Vendoring" —
+/// not this workspace's ADR-0012). A catalog entry with no `source` is
 /// skipped, not an error — matching how a hand-authored catalog fixture may
 /// omit it for a pack resolved another way.
 ///
