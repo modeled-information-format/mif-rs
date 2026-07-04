@@ -272,16 +272,7 @@ fn upsert_map_record(
     records.push(record.clone());
     records.sort_by(|a, b| a.finding_id.cmp(&b.finding_id));
 
-    let json = serde_json::to_string_pretty(&records).unwrap_or_else(|_| "[]".to_string());
-    let tmp_path = map_path.with_extension("json.tmp");
-    std::fs::write(&tmp_path, json).map_err(|source| mif_rh::MifRhError::Io {
-        path: tmp_path.display().to_string(),
-        source,
-    })?;
-    std::fs::rename(&tmp_path, map_path).map_err(|source| mif_rh::MifRhError::Io {
-        path: map_path.display().to_string(),
-        source,
-    })
+    mif_rh::write_json_atomic(map_path, &records)
 }
 
 /// Arguments for the `review` subcommand, bundled (rather than passed as

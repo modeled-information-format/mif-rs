@@ -186,16 +186,7 @@ pub(crate) fn list_finding_files(dir: &Path) -> Result<Vec<PathBuf>, MifRhError>
 fn write_map(path: &Path, records: &[MapRecord]) -> Result<(), MifRhError> {
     let mut sorted = records.to_vec();
     sorted.sort_by(|a, b| a.finding_id.cmp(&b.finding_id));
-    let json = serde_json::to_string_pretty(&sorted).unwrap_or_else(|_| "[]".to_string());
-    let tmp_path = path.with_extension("json.tmp");
-    fs::write(&tmp_path, json).map_err(|source| MifRhError::Io {
-        path: tmp_path.display().to_string(),
-        source,
-    })?;
-    fs::rename(&tmp_path, path).map_err(|source| MifRhError::Io {
-        path: path.display().to_string(),
-        source,
-    })
+    crate::write_json_atomic(path, &sorted)
 }
 
 fn review_one_topic(
@@ -378,16 +369,7 @@ pub fn review(opts: &ReviewOptions<'_>) -> Result<(ReviewReport, FollowupBacklog
 ///
 /// Returns [`MifRhError::Io`] if `path` cannot be written.
 pub fn write_followup(path: &Path, backlog: &FollowupBacklog) -> Result<(), MifRhError> {
-    let json = serde_json::to_string_pretty(backlog).unwrap_or_else(|_| "{}".to_string());
-    let tmp_path = path.with_extension("json.tmp");
-    fs::write(&tmp_path, json).map_err(|source| MifRhError::Io {
-        path: tmp_path.display().to_string(),
-        source,
-    })?;
-    fs::rename(&tmp_path, path).map_err(|source| MifRhError::Io {
-        path: path.display().to_string(),
-        source,
-    })
+    crate::write_json_atomic(path, backlog)
 }
 
 #[cfg(test)]
