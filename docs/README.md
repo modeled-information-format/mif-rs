@@ -53,6 +53,7 @@ docs/
 ├── README.md            (this document)
 ├── DEPLOYMENT.md
 ├── adr/
+├── benchmarks/
 ├── distribution/
 ├── runbooks/
 ├── security/
@@ -80,6 +81,14 @@ Security architecture documents under `docs/security/`.
 | --- | --- | --- |
 | [Attested Delivery, End to End](security/ATTESTED-DELIVERY.md) | explanation | How a change travels from a pull request to a signed, independently verifiable release, and which gate signs what. |
 | [Signed Releases & SLSA Provenance](security/SIGNED-RELEASES.md) | explanation | Release artifact cryptographic attestations and the fail-closed verification gate. |
+
+## Benchmarks
+
+Manual performance-benchmark records under `docs/benchmarks/`.
+
+| Document | Diátaxis mode | Description |
+| --- | --- | --- |
+| [M2 Review Performance Benchmark](benchmarks/M2-review-performance.md) | reference | Append-only results of manual `mif-rh-cli review` runs against the real findings corpus, versus the PRD's 300-second M2 target. |
 
 ## Distribution
 

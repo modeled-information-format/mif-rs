@@ -125,6 +125,73 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --all-features --verbose
 
+  parity:
+    name: RHT Parity (fail-closed)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        # v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Checkout research-harness-template (pinned)
+        # v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: modeled-information-format/research-harness-template
+          # Pinned rht commit the parity suite runs against. Bump by PR
+          # (take the current SHA of research-harness-template@main); the
+          # checkout must contain evals/fixtures/ontology/.
+          ref: fdb08d14fed7a8280bcff49eea5a72c3eb3afbbb
+          path: rht
+
+      - name: Checkout ontologies registry (pinned)
+        # v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: modeled-information-format/ontologies
+          # The rht fixture catalog references one pack rht VENDORS rather
+          # than commits (packs/ontologies/..., per rht's ADR-0012), so a
+          # fresh rht checkout lacks it. The canonical copy lives in the
+          # ontologies registry; the step below vendors it byte-identically.
+          # Bump alongside the rht pin above.
+          ref: a958c5f477e2cf1f0a617a325ff659eb45a065c7
+          path: ontologies-registry
+
+      - name: Vendor the fixture-referenced ontology pack into rht
+        run: |
+          mkdir -p rht/packs/ontologies/software-engineering
+          cp ontologies-registry/ontologies/software-engineering.ontology.yaml \
+            rht/packs/ontologies/software-engineering/software-engineering.ontology.yaml
+
+      - name: Install Rust toolchain
+        # master
+        uses: >-
+          dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: ${{ inputs.rust-version }}
+
+      - name: Cache cargo registry
+        # v5.0.3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: >-
+            ${{ runner.os }}-cargo-parity-${{
+            hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-parity-
+
+      - name: Run parity tests (fixtures required, fail-closed)
+        env:
+          MIF_RH_PARITY_FIXTURES_ROOT: ${{ github.workspace }}/rht
+          MIF_RH_PARITY_REQUIRED: "1"
+        run: >-
+          cargo test -p mif-rh --test parity --all-features
+          -- --nocapture
+
   doc:
     name: Documentation
     runs-on: ubuntu-latest
@@ -212,7 +279,7 @@ jobs:
   all-checks-pass:
     name: All Checks Pass
     if: always()
-    needs: [fmt, clippy, test, doc, deny, msrv]
+    needs: [fmt, clippy, test, parity, doc, deny, msrv]
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs passed
@@ -220,6 +287,7 @@ jobs:
           FMT_RESULT: ${{ needs.fmt.result }}
           CLIPPY_RESULT: ${{ needs.clippy.result }}
           TEST_RESULT: ${{ needs.test.result }}
+          PARITY_RESULT: ${{ needs.parity.result }}
           DOC_RESULT: ${{ needs.doc.result }}
           DENY_RESULT: ${{ needs.deny.result }}
           MSRV_RESULT: ${{ needs.msrv.result }}
@@ -227,6 +295,7 @@ jobs:
           if [[ "$FMT_RESULT" != "success" ]] || \
              [[ "$CLIPPY_RESULT" != "success" ]] || \
              [[ "$TEST_RESULT" != "success" ]] || \
+             [[ "$PARITY_RESULT" != "success" ]] || \
              [[ "$DOC_RESULT" != "success" ]] || \
              [[ "$DENY_RESULT" != "success" ]] || \
              [[ "$MSRV_RESULT" != "success" ]]; then
