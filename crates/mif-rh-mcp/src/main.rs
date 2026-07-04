@@ -489,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn find_similar_hits_carry_score_band_tiers_and_uncalibrated_flag() {
+    fn find_similar_hits_carry_similarity_bands_and_uncalibrated_flag() {
         let Ok(embedder) = mif_embed::Embedder::load() else {
             eprintln!("skipping: embedding model unavailable in this environment");
             return;

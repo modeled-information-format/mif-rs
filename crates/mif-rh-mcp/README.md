@@ -11,8 +11,8 @@ tools, read-only over the index `mif-rh-cli review --build-index` builds
 ranked hypothesis and never writes to `reports/` — a human or agent confirms
 it via rht's own `/ontology-review --enrich` step.
 
-`suggest_type` and `find_similar` results carry confidence-tier annotations
-(MIF ADR-020): each candidate's `tier` is one of `auto_classify_eligible`,
+`suggest_type` results carry confidence-tier annotations (MIF ADR-020):
+each candidate's `tier` is one of `auto_classify_eligible`,
 `flag_for_review`, or `trigger_expansion` under the corpus's calibration
 artifact (default `reports/_meta/confidence-calibration.json`; absent means
 conservative built-in thresholds and `calibrated: false`). `suggest_type`

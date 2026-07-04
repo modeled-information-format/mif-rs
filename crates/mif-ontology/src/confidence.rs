@@ -448,6 +448,21 @@ mod tests {
         value["expansions"] = serde_json::json!({ "min_cluster_size": 99 });
         let result: Result<CalibrationConfig, _> = serde_json::from_value(value);
         assert!(result.is_err(), "typo'd optional key must fail loud");
+
+        // A typo INSIDE the nested expansion block fails just as loud.
+        let mut value: serde_json::Value =
+            serde_json::to_value(CalibrationConfig::default()).unwrap();
+        value["expansion"]["cluster_similarty"] = serde_json::json!(0.9);
+        let result: Result<CalibrationConfig, _> = serde_json::from_value(value);
+        assert!(result.is_err(), "typo'd nested key must fail loud");
+    }
+
+    #[test]
+    fn similarity_band_serializes_snake_case_on_the_wire() {
+        assert_eq!(
+            serde_json::to_string(&SimilarityBand::NearDuplicate).unwrap(),
+            "\"near_duplicate\""
+        );
     }
 
     #[test]
