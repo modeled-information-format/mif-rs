@@ -163,7 +163,7 @@ impl MifRhError {
                 exit_code: 2,
             },
             Self::Io { .. } => ProblemMeta {
-                slug: "io",
+                slug: "mif-rh-io",
                 version: "v1",
                 title: "Failed to read a supporting file",
                 status: 500,
@@ -405,5 +405,180 @@ impl ToProblem for MifRhError {
 impl From<rusqlite::Error> for MifRhError {
     fn from(source: rusqlite::Error) -> Self {
         Self::Index { source }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MifRhError;
+
+    fn io_error() -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "not found")
+    }
+
+    fn json_error() -> serde_json::Error {
+        serde_json::from_str::<serde_json::Value>("not json").unwrap_err()
+    }
+
+    fn yaml_error() -> serde_norway::Error {
+        serde_norway::from_str::<serde_json::Value>("- a\n  bad: [unterminated").unwrap_err()
+    }
+
+    fn every_variant() -> Vec<MifRhError> {
+        vec![
+            MifRhError::FindingIo {
+                path: "f.json".to_string(),
+                source: io_error(),
+            },
+            MifRhError::FindingJson {
+                path: "f.json".to_string(),
+                source: json_error(),
+            },
+            MifRhError::Io {
+                path: "x".to_string(),
+                source: io_error(),
+            },
+            MifRhError::Json {
+                path: "x.json".to_string(),
+                source: json_error(),
+            },
+            MifRhError::JsonSerialize {
+                path: "x.json".to_string(),
+                source: json_error(),
+            },
+            MifRhError::OntologyPackYaml {
+                path: "x.yaml".to_string(),
+                source: yaml_error(),
+            },
+            MifRhError::CatalogMissing {
+                path: "catalog.json".to_string(),
+            },
+            MifRhError::ConfigMissing {
+                path: "config.json".to_string(),
+            },
+            MifRhError::DirectBindingInvalid {
+                topic: "t".to_string(),
+                id: "o".to_string(),
+            },
+            MifRhError::Ontology(mif_ontology::OntologyError::Io {
+                path: "onto.yaml".to_string(),
+                source: io_error(),
+            }),
+            MifRhError::EntityTypeSchemaInvalid {
+                entity_type: "widget".to_string(),
+                detail: "bad schema".to_string(),
+            },
+            MifRhError::Index {
+                source: rusqlite::Error::InvalidParameterName("p".to_string()),
+            },
+            MifRhError::LockIo {
+                path: "lock".to_string(),
+                source: io_error(),
+            },
+            MifRhError::LockHeld { holder_pid: 1234 },
+            MifRhError::Embed(mif_embed::EmbedError::NoCacheDir {
+                model: "test-model",
+            }),
+        ]
+    }
+
+    #[test]
+    fn every_variant_produces_a_distinct_problem_type() {
+        use mif_problem::ToProblem;
+
+        let problem_types: Vec<String> = every_variant()
+            .iter()
+            .map(|e| e.to_problem().problem_type)
+            .collect();
+        let mut deduped = problem_types.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(
+            problem_types.len(),
+            deduped.len(),
+            "expected every variant to produce a distinct problem_type: {problem_types:?}"
+        );
+    }
+
+    #[test]
+    fn every_variant_has_a_display_message() {
+        for error in every_variant() {
+            assert!(!error.to_string().is_empty());
+        }
+    }
+
+    #[test]
+    fn io_classified_variants_delegate_status_to_classify_io_error() {
+        use mif_problem::ToProblem;
+
+        let not_found = MifRhError::Io {
+            path: "missing".to_string(),
+            source: io_error(),
+        };
+        // classify_io_error maps NotFound to 404, overriding meta()'s generic 500.
+        assert_eq!(not_found.to_problem().status, 404);
+    }
+
+    #[test]
+    fn delegated_variants_forward_to_the_inner_error() {
+        use mif_problem::ToProblem;
+
+        let ontology_problem = MifRhError::Ontology(mif_ontology::OntologyError::Io {
+            path: "onto.yaml".to_string(),
+            source: io_error(),
+        })
+        .to_problem();
+        let inner_problem = mif_ontology::OntologyError::Io {
+            path: "onto.yaml".to_string(),
+            source: io_error(),
+        }
+        .to_problem();
+        assert_eq!(ontology_problem.problem_type, inner_problem.problem_type);
+
+        let embed_problem = MifRhError::Embed(mif_embed::EmbedError::NoCacheDir {
+            model: "test-model",
+        })
+        .to_problem();
+        let inner_embed_problem = mif_embed::EmbedError::NoCacheDir {
+            model: "test-model",
+        }
+        .to_problem();
+        assert_eq!(embed_problem.problem_type, inner_embed_problem.problem_type);
+    }
+
+    #[test]
+    fn exit_codes_match_the_documented_scheme() {
+        use mif_problem::ToProblem;
+
+        assert_eq!(
+            MifRhError::CatalogMissing {
+                path: "c".to_string()
+            }
+            .to_problem()
+            .exit_code,
+            Some(3)
+        );
+        assert_eq!(
+            MifRhError::LockHeld { holder_pid: 1 }
+                .to_problem()
+                .exit_code,
+            Some(2)
+        );
+        assert_eq!(
+            MifRhError::DirectBindingInvalid {
+                topic: "t".to_string(),
+                id: "o".to_string(),
+            }
+            .to_problem()
+            .exit_code,
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn rusqlite_error_converts_into_the_index_variant() {
+        let source = rusqlite::Error::InvalidParameterName("p".to_string());
+        let error: MifRhError = source.into();
+        assert!(matches!(error, MifRhError::Index { .. }));
     }
 }
