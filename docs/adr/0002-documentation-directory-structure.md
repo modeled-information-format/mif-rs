@@ -1,6 +1,6 @@
 ---
 title: "Documentation Directory Structure"
-description: "Organize mif-rs documentation as a single flat docs/ tree with topic subdirectories (runbooks, security, distribution, testing, ux, workflows), rather than the upstream template's two-tier onboarding-guide plus reference-material split, since this workspace has no guided template-adoption flow to document."
+description: "Organize mif-rs documentation as a single flat docs/ tree with topic subdirectories (runbooks, security, distribution, testing, ux, workflows), rather than the upstream template's two-tier onboarding-guide plus reference split, since this workspace has no guided template-adoption flow."
 type: adr
 conceptType: semantic
 x-ontology:
@@ -87,6 +87,9 @@ no real audience here. We need a documentation structure that reflects that.
 even though they describe a template-adoption flow and a workflow that no
 longer exist in this repository.
 
+**Advantages**: No restructuring work at all — the directory tree stays
+exactly as inherited from the upstream template.
+
 **Disadvantages**: Documents content that is factually wrong for this repo —
 `docs/template/GETTING-STARTED.md` would describe using a template that has
 already been used, and `docs/observability/METRICS-DASHBOARD.md` would
@@ -116,6 +119,11 @@ at the top level.
   longer has two distinct audiences.
 - Minimal restructuring: the topic subdirectories were already well-organized
   and are kept unchanged.
+
+**Disadvantages**: Loses the upstream template's guided onboarding path —
+if `mif-rs` ever needs to explain "how to bootstrap a project like this one"
+again, that guide has to be written from scratch rather than adapted from
+`docs/template/`.
 
 **Risk Assessment**:
 
@@ -176,6 +184,10 @@ process, or component that exists in this repository as of this ADR's date.
 ## Related Decisions
 
 - [ADR-0001: Use Architectural Decision Records](0001-use-architectural-decision-records.md) — establishes the ADR practice this document follows.
+
+## Links
+
+- [attested-delivery/rust-template](https://github.com/attested-delivery/rust-template) — the upstream attested-delivery template `mif-rs` was forked from, whose two-tier `docs/template/` + `docs/runbooks/` split this ADR moves away from.
 
 ## More Information
 
