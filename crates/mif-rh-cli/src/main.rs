@@ -94,7 +94,9 @@ enum Command {
         /// Path to rht's `check-relationship-targets.sh`, run once,
         /// corpus-wide, after classification. Defaults to
         /// `<root>/scripts/check-relationship-targets.sh` if that file
-        /// exists; otherwise the check is skipped.
+        /// exists; otherwise the check is skipped. Unix-only: the script is
+        /// spawned directly and relies on its `#!` shebang, which Windows
+        /// does not honor.
         #[arg(long)]
         relationship_script: Option<PathBuf>,
         /// Rebuild the corpus-wide search index (every topic in `config`,

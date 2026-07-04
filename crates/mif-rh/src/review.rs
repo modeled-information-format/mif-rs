@@ -298,9 +298,18 @@ fn review_one_topic(
 /// never touches the per-finding subprocess cost this engine exists to
 /// eliminate.
 ///
+/// **Unix-only.** `script` is spawned directly (`Command::new(script)`),
+/// relying on the OS to honor its `#!/usr/bin/env bash` shebang — Windows
+/// has no shebang support, so this fails there whenever a real `.sh`
+/// script is configured. Acceptable because this hook is opt-in
+/// (`--relationship-script`) and fails loud (a clean [`MifRhError::Io`]),
+/// never silently: a Windows caller who never sets the flag is unaffected.
+///
 /// # Errors
 ///
-/// Returns [`MifRhError::Io`] if the script cannot be executed at all.
+/// Returns [`MifRhError::Io`] if the script cannot be executed at all
+/// (including "no such interpreter" on a platform without shebang
+/// support).
 fn relationship_targets_clean(script: &Path, reports_dir: &Path) -> Result<bool, MifRhError> {
     let status = Command::new(script)
         .arg("--reports-dir")

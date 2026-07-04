@@ -16,6 +16,11 @@ for the duration of the run, and — with `--build-index` — rebuilds the
 corpus-wide search index (`<reports-dir>/_meta/search-index.sqlite`) that
 `mif-rh-mcp`'s `search`/`find_similar` tools read.
 
+`--relationship-script` is Unix-only: it spawns the given script directly
+and relies on its `#!` shebang, which Windows does not honor. Leave it
+unset on Windows (the default auto-detection already no-ops when the
+script isn't found) or run under a POSIX-compatible shell.
+
 ## License
 
 MIT
