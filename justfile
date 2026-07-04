@@ -108,6 +108,31 @@ miri:
 bench:
     cargo bench --workspace
 
+# WARNING: `review` REWRITES reports/<topic>/ontology-map.json and reports/_meta/
+# inside CORPUS_DIR — point this at a disposable copy, never a pristine checkout.
+# Manual M2 benchmark: time `mif-rh-cli review` over a findings corpus (disposable copy!)
+bench-review CORPUS_DIR:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    corpus="$(cd "{{ CORPUS_DIR }}" && pwd)"
+    echo "WARNING: review rewrites reports/<topic>/ontology-map.json and reports/_meta/ under ${corpus} — use a disposable copy." >&2
+    cargo build --release -p mif-rh-cli
+    bin="$(pwd)/target/release/mif-rh-cli"
+    findings="$(find "${corpus}/reports" -path '*/findings/*.json' -type f | wc -l | tr -d ' ')"
+    time_out="$(mktemp)"
+    trap 'rm -f "${time_out}"' EXIT
+    cd "${corpus}"
+    # `time -p` reports on ITS stderr; the inner sh re-points the CLI's own
+    # stderr at fd 3 (our terminal stderr) so the two streams never mix and
+    # the `real` line parses cleanly.
+    /usr/bin/time -p sh -c 'exec "$1" review 2>&3' _ "${bin}" 3>&2 2>"${time_out}"
+    wall="$(awk '/^real/ { print $2 }' "${time_out}")"
+    fps="$(awk -v f="${findings}" -v w="${wall}" 'BEGIN { printf "%.1f", f / w }')"
+    echo "corpus:       ${corpus}"
+    echo "findings:     ${findings}"
+    echo "wall seconds: ${wall} (PRD M2 target: < 300)"
+    echo "findings/sec: ${fps}"
+
 # Run a fuzz target for a given duration (seconds)
 fuzz TARGET DURATION="60":
     cargo fuzz run {{ TARGET }} -- -max_total_time={{ DURATION }}
