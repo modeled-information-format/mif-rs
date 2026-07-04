@@ -1,0 +1,33 @@
+[package]
+name = "mif-rh-mcp"
+description = "MCP server for the mif-rh research-harness ontology engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["mif", "mcp", "research-harness"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "mif-rh-mcp"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+mif-rh.workspace = true
+mif-embed.workspace = true
+mif-problem.workspace = true
+thiserror.workspace = true
+rmcp = { version = "2.1.0", features = ["server", "transport-io"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "io-std"] }
+anyhow = "1.0.103"
+
+[dev-dependencies]
+tempfile.workspace = true

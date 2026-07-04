@@ -1,0 +1,30 @@
+[package]
+name = "mif-rh-cli"
+description = "Command-line interface for the mif-rh research-harness ontology engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["mif", "cli", "research-harness"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "mif-rh-cli"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+mif-rh.workspace = true
+mif-problem.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+mif-embed.workspace = true
