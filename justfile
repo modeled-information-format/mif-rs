@@ -114,7 +114,7 @@ bench:
 bench-review CORPUS_DIR:
     #!/usr/bin/env bash
     set -euo pipefail
-    corpus="$(cd "{{ CORPUS_DIR }}" && pwd)"
+    corpus="$(cd {{ quote(CORPUS_DIR) }} && pwd)"
     echo "WARNING: review rewrites reports/<topic>/ontology-map.json and reports/_meta/ under ${corpus} — use a disposable copy." >&2
     cargo build --release -p mif-rh-cli
     bin="$(pwd)/target/release/mif-rh-cli"
@@ -127,7 +127,7 @@ bench-review CORPUS_DIR:
     # the `real` line parses cleanly.
     /usr/bin/time -p sh -c 'exec "$1" review 2>&3' _ "${bin}" 3>&2 2>"${time_out}"
     wall="$(awk '/^real/ { print $2 }' "${time_out}")"
-    fps="$(awk -v f="${findings}" -v w="${wall}" 'BEGIN { printf "%.1f", f / w }')"
+    fps="$(awk -v f="${findings}" -v w="${wall}" 'BEGIN { if (w + 0 == 0) { print "n/a" } else { printf "%.1f", f / w } }')"
     echo "corpus:       ${corpus}"
     echo "findings:     ${findings}"
     echo "wall seconds: ${wall} (PRD M2 target: < 300)"

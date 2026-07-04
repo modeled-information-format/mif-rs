@@ -37,14 +37,17 @@ completes in under **300 seconds** (5 minutes) wall time.
 ## Method
 
 Runs use the `bench-review` justfile recipe, which builds `mif-rh-cli` in
-release mode, counts finding files (`reports/*/findings/*.json`) in the
+release mode, counts finding files (any-depth `**/findings/*.json` under `reports/`) in the
 corpus, and times a default `review` (no `--strict`, no `--build-index`)
 with `/usr/bin/time -p` from the corpus root:
 
 ```bash
-just bench-review CORPUS_DIR=<disposable-corpus-copy>
+just bench-review <disposable-corpus-copy>
 ```
 
+- A relative corpus path resolves against the repository root (`just` runs
+  recipes there), not the shell's current directory — pass an absolute path
+  when unsure.
 - The corpus is local and private; it is never checked in and this benchmark
   is **not** wired into CI. It exists to seed and refresh the results table
   below by hand.
