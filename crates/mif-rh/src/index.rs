@@ -94,6 +94,11 @@ pub struct Miss {
     /// run_id)` — re-recording within one run replaces, across runs
     /// accumulates (recurrence is the signal).
     pub run_id: String,
+    /// The embedding model that produced `vector`. Clustering only makes
+    /// sense within one model's vector space — consumers filter on this
+    /// before clustering, so misses recorded under a superseded model
+    /// cannot silently mix with fresh ones.
+    pub model: String,
 }
 
 const SCHEMA_SQL: &str = "
@@ -117,6 +122,7 @@ CREATE TABLE IF NOT EXISTS misses (
     dim INTEGER NOT NULL,
     vector BLOB NOT NULL,
     run_id TEXT NOT NULL,
+    model TEXT NOT NULL,
     UNIQUE (finding_id, run_id)
 );
 ";
@@ -262,15 +268,16 @@ impl FindingIndex {
     pub fn record_miss(&self, miss: &Miss) -> Result<(), MifRhError> {
         let blob = encode_vector(&miss.vector);
         self.conn.execute(
-            "INSERT OR REPLACE INTO misses (finding_id, topic, content, dim, vector, run_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT OR REPLACE INTO misses (finding_id, topic, content, dim, vector, run_id, model)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 miss.finding_id,
                 miss.topic,
                 miss.content,
                 i64::try_from(miss.vector.len()).unwrap_or(i64::MAX),
                 blob,
-                miss.run_id
+                miss.run_id,
+                miss.model
             ],
         )?;
         Ok(())
@@ -284,7 +291,7 @@ impl FindingIndex {
     /// fails.
     pub fn misses(&self) -> Result<Vec<Miss>, MifRhError> {
         let mut stmt = self.conn.prepare(
-            "SELECT finding_id, topic, content, vector, run_id FROM misses ORDER BY miss_id",
+            "SELECT finding_id, topic, content, vector, run_id, model FROM misses ORDER BY miss_id",
         )?;
         let rows = stmt.query_map([], |row| {
             let blob: Vec<u8> = row.get(3)?;
@@ -294,6 +301,7 @@ impl FindingIndex {
                 content: row.get(2)?,
                 vector: decode_vector(&blob),
                 run_id: row.get(4)?,
+                model: row.get(5)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -371,6 +379,7 @@ mod tests {
             content: format!("content of {finding_id}"),
             vector,
             run_id: run_id.to_string(),
+            model: "test-model".to_string(),
         }
     }
 

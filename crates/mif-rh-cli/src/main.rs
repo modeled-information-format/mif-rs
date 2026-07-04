@@ -122,7 +122,7 @@ enum Command {
         /// Path to the confidence-calibration artifact used by
         /// `--suggest`. Defaults to
         /// `<reports-dir>/_meta/confidence-calibration.json`.
-        #[arg(long)]
+        #[arg(long, requires = "suggest")]
         calibration: Option<PathBuf>,
     },
     /// Suggest candidate entity types for a text or a finding, ranked by
@@ -494,18 +494,19 @@ fn suggest_type_cmd(args: &SuggestTypeArgs<'_>) -> Result<Outcome, CliError> {
     // clap guarantees exactly one of text/--finding, and --topic whenever
     // text is given; with --finding the topic may still derive from the
     // finding's reports/<topic>/... path, mirroring `resolve`.
-    let (query, topic) = if let Some(finding_path) = args.finding {
+    let (query, topic, finding_id) = if let Some(finding_path) = args.finding {
         let finding = mif_rh::Finding::load(finding_path)?;
         let topic = args
             .topic
             .map(str::to_string)
             .or_else(|| topic_from_path(finding_path))
             .unwrap_or_default();
-        (mif_rh::index_text(&finding), topic)
+        (mif_rh::index_text(&finding), topic, Some(finding.id))
     } else {
         (
             args.text.unwrap_or_default().to_string(),
             args.topic.unwrap_or_default().to_string(),
+            None,
         )
     };
 
@@ -524,17 +525,23 @@ fn suggest_type_cmd(args: &SuggestTypeArgs<'_>) -> Result<Outcome, CliError> {
     let suggestions = mif_rh::suggest_type(&query, &ctx, &embedder, &cal, args.limit)?;
 
     if args.record && is_expansion_miss(&suggestions) {
-        // clap's `requires = "finding"` guarantees a finding path here.
-        if let Some(finding_path) = args.finding {
-            let finding = mif_rh::Finding::load(finding_path)?;
+        // clap's `requires = "finding"` guarantees the id was captured above.
+        if let Some(finding_id) = finding_id {
             let index_path = effective_path(args.index, DEFAULT_INDEX);
+            if let Some(parent) = index_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|source| mif_rh::MifRhError::Io {
+                    path: parent.display().to_string(),
+                    source,
+                })?;
+            }
             let index = mif_rh::FindingIndex::open(&index_path)?;
             index.record_miss(&mif_rh::Miss {
-                finding_id: finding.id,
+                finding_id,
                 topic: topic.clone(),
                 content: query.clone(),
                 vector: embedder.embed(&query)?,
                 run_id: run_id(),
+                model: mif_embed::MODEL_ID.to_string(),
             })?;
         }
     }
@@ -641,8 +648,20 @@ fn expansion_candidates_cmd(
 
     let cal = mif_ontology::CalibrationConfig::load_or_default(&calibration_path)
         .map_err(mif_rh::MifRhError::from)?;
-    let idx = mif_rh::FindingIndex::open(&index_path)?;
-    let misses = idx.misses()?;
+    // A read-only query must not create the index as a side effect: a
+    // missing index simply means no misses were ever recorded.
+    let misses = if index_path.exists() {
+        let idx = mif_rh::FindingIndex::open(&index_path)?;
+        idx.misses()?
+    } else {
+        Vec::new()
+    };
+    // Vectors from different embedding models share no space; cluster
+    // only what the model in use produced.
+    let misses: Vec<mif_rh::Miss> = misses
+        .into_iter()
+        .filter(|m| m.model == mif_embed::MODEL_ID)
+        .collect();
     let candidates = mif_rh::expansion_candidates(&misses, &cal.expansion);
 
     let payload = serde_json::json!({
@@ -732,6 +751,9 @@ fn run_suggest_pass(inputs: &SuggestPassInputs<'_>) -> Result<String, CliError> 
             config: inputs.config,
             ontology_packs: inputs.ontology_packs,
         };
+        // One embedding pass over this topic's candidate documents,
+        // reused for every followup finding below.
+        let candidates = mif_rh::suggest::build_candidates(&ctx, &embedder, &cal)?;
         let mut fresh = Vec::new();
         for followup_entry in &inputs.backlog.topics[topic_id] {
             // A "gap" entry's file could not even be parsed by review;
@@ -747,14 +769,21 @@ fn run_suggest_pass(inputs: &SuggestPassInputs<'_>) -> Result<String, CliError> 
             if query.is_empty() {
                 continue;
             }
-            let suggestions = mif_rh::suggest_type(&query, &ctx, &embedder, &cal, 5)?;
+            let query_vector = embedder.embed(&query)?;
+            let suggestions = mif_rh::suggest::suggest_from_candidates(
+                &query_vector,
+                &candidates,
+                &cal,
+                mif_rh::suggest::SUGGESTION_DEPTH,
+            );
             if is_expansion_miss(&suggestions) {
                 index.record_miss(&mif_rh::Miss {
                     finding_id: finding.id.clone(),
                     topic: topic_id.clone(),
-                    vector: embedder.embed(&query)?,
+                    vector: query_vector,
                     content: query,
                     run_id: run.clone(),
+                    model: mif_embed::MODEL_ID.to_string(),
                 })?;
                 misses_recorded += 1;
             }
@@ -779,6 +808,11 @@ fn run_suggest_pass(inputs: &SuggestPassInputs<'_>) -> Result<String, CliError> 
         mif_rh::upsert_suggestions(&queue_path, topic_id, fresh)?;
     }
 
+    if total_entries == 0 {
+        return Ok(format!(
+            "ontology-review: no findings needed suggestions; {misses_recorded} miss(es) recorded"
+        ));
+    }
     Ok(format!(
         "ontology-review: suggestions written to {} ({} finding(s) across {} topic(s); {} \
          miss(es) recorded)",
@@ -1156,7 +1190,7 @@ mod tests {
             .expect("suggestions confirmation line present");
         assert!(confirmation < lines.len() - 1);
 
-        // The invalid finding (not durably stamped) got queued.
+        // The untyped finding (not durably stamped) got queued.
         let queue_path = dir.path().join("reports/_meta/suggestions/edu.json");
         let queue: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&queue_path).unwrap()).unwrap();

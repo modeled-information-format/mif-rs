@@ -30,6 +30,7 @@ jsonschema.workspace = true
 rusqlite.workspace = true
 sysinfo.workspace = true
 regex.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

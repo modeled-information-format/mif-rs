@@ -34,7 +34,10 @@ pub const STATUS_PENDING: &str = "pending";
 pub struct SuggestionEntry {
     /// The finding's id.
     pub finding_id: String,
-    /// The finding's file path, repo-relative if derivable.
+    /// The finding's file path exactly as the producing review listed it:
+    /// absolute when the review ran with an absolute `--reports-dir`,
+    /// otherwise relative to that review's working directory. Not
+    /// normalized to repo-relative.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     /// Why the finding needed a suggestion: its followup basis
@@ -73,6 +76,21 @@ pub struct SuggestionQueue {
 ///
 /// A missing queue file starts empty; a present-but-unparsable one is an
 /// explicit error, never silently reset — it may carry human verdicts.
+///
+/// Two contract notes for consumers:
+///
+/// - **Verdict writers must not race this upsert.** The atomic rename
+///   prevents torn files, not lost updates: a verdict written between this
+///   function's read and its rename is clobbered. `review --suggest` runs
+///   under the review lock; any surface writing verdicts (rht's
+///   `/ontology-review --enrich`, a human editor) must not run concurrently
+///   with a suggesting review.
+/// - **The queue only grows.** Entries not re-suggested are kept even when
+///   pending — a `--topic`-scoped run legitimately re-suggests only a
+///   subset, and this function cannot tell scope from staleness. Pending
+///   entries whose findings have since been stamped or deleted therefore
+///   accumulate until a consumer prunes them; treat `pending` as "not yet
+///   reviewed", not "still applicable".
 ///
 /// # Errors
 ///
@@ -158,6 +176,12 @@ pub struct ExpansionCandidate {
 /// **distinct findings** spanning at least `cfg.min_distinct_runs`
 /// distinct runs — recurrence across runs, never a single low-confidence
 /// miss (MIF ADR-020, tier 3).
+///
+/// Clustering ignores topic boundaries deliberately: a concept missing a
+/// type across several topics is exactly the cross-topic signal worth
+/// surfacing, and each member carries its `topic` so reviewers see the
+/// span. Callers should filter `misses` to one embedding model first
+/// ([`Miss::model`]) — vectors from different models do not share a space.
 #[must_use]
 pub fn expansion_candidates(misses: &[Miss], cfg: &ExpansionConfig) -> Vec<ExpansionCandidate> {
     let vectors: Vec<Vec<f32>> = misses.iter().map(|m| m.vector.clone()).collect();
@@ -229,6 +253,7 @@ mod tests {
             content: format!("content of {finding_id}"),
             vector,
             run_id: run_id.to_string(),
+            model: "test-model".to_string(),
         }
     }
 

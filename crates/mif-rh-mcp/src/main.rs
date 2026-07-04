@@ -98,7 +98,19 @@ fn open_index(index_path: &Path) -> Result<FindingIndex, McpError> {
             path: index_path.display().to_string(),
         });
     }
-    Ok(FindingIndex::open(index_path)?)
+    let index = FindingIndex::open(index_path)?;
+    // File existence alone no longer proves a build: mif-rh-cli paths that
+    // record tier-3 misses (`review --suggest`, `suggest-type --record`)
+    // create the same database without indexing any findings. An index
+    // with zero findings answers every query with an empty success, which
+    // reads exactly like "nothing matches" — report it as not built so the
+    // caller learns to run `review --build-index` instead.
+    if index.stats()?.findings == 0 {
+        return Err(McpError::IndexNotBuilt {
+            path: index_path.display().to_string(),
+        });
+    }
+    Ok(index)
 }
 
 /// Parameters for the `search` tool.

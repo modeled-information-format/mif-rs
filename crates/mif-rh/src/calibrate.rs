@@ -24,11 +24,8 @@ use serde::Serialize;
 
 use crate::error::MifRhError;
 use crate::resolve::{Basis, MapRecord, ResolveContext};
-use crate::suggest::suggest_type;
+use crate::suggest::{SUGGESTION_DEPTH, build_candidates, suggest_from_candidates};
 use crate::{Finding, index_text, review::list_finding_files};
-
-/// How many ranked candidates "gold appears among the candidates" checks.
-const GOLD_RECALL_DEPTH: usize = 5;
 
 /// One labeled calibration sample: a stamped finding's scoring outcome.
 #[derive(Debug, Clone, Serialize)]
@@ -37,8 +34,10 @@ pub struct CalibrationSample {
     pub finding_id: String,
     /// The top candidate's score.
     pub top1_score: f32,
-    /// The top candidate's lead over the second-best (`0.0` when no rival).
-    pub top1_margin: f32,
+    /// The top candidate's lead over the second-best; `None` when the
+    /// topic offered no rival candidate. Mirrors `assign_tier`'s vacuous
+    /// margin pass: a no-rival sample satisfies every margin gate.
+    pub top1_margin: Option<f32>,
     /// Whether the top candidate names the finding's stamped entity type.
     pub top1_correct: bool,
     /// Whether the stamped type appears in the top candidates at all.
@@ -87,8 +86,18 @@ pub fn collect_topic_samples(
     embedder: &mif_embed::Embedder,
 ) -> Result<Vec<CalibrationSample>, MifRhError> {
     let map_path = reports_dir.join(ctx.topic).join("ontology-map.json");
-    let Ok(contents) = std::fs::read_to_string(&map_path) else {
-        return Ok(Vec::new()); // never reviewed — nothing stamped to learn from
+    let contents = match std::fs::read_to_string(&map_path) {
+        Ok(contents) => contents,
+        // Never reviewed — nothing stamped to learn from.
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        // Any other read failure (permissions, I/O) would silently drop a
+        // whole topic's labeled samples and bias the calibration — fail loud.
+        Err(source) => {
+            return Err(MifRhError::Io {
+                path: map_path.display().to_string(),
+                source,
+            });
+        },
     };
     let records: Vec<MapRecord> =
         serde_json::from_str(&contents).map_err(|source| MifRhError::Json {
@@ -102,6 +111,10 @@ pub fn collect_topic_samples(
     }
 
     let neutral = CalibrationConfig::default();
+    // One embedding pass over the topic's candidate documents, reused for
+    // every finding below — per-finding re-embedding would cost
+    // O(findings x types) forward passes.
+    let candidates = build_candidates(ctx, embedder, &neutral)?;
     let mut samples = Vec::new();
     for file in list_finding_files(&findings_dir)? {
         let Ok(finding) = Finding::load(&file) else {
@@ -122,16 +135,18 @@ pub fn collect_topic_samples(
         if query.is_empty() {
             continue;
         }
-        let candidates = suggest_type(&query, ctx, embedder, &neutral, GOLD_RECALL_DEPTH)?;
-        let Some(top) = candidates.first() else {
+        let query_vector = embedder.embed(&query)?;
+        let ranked =
+            suggest_from_candidates(&query_vector, &candidates, &neutral, SUGGESTION_DEPTH);
+        let Some(top) = ranked.first() else {
             continue; // no scorable entity types for this topic
         };
         samples.push(CalibrationSample {
             finding_id: finding.id.clone(),
             top1_score: top.score,
-            top1_margin: top.margin.unwrap_or(0.0),
+            top1_margin: top.margin,
             top1_correct: top.entity_type == gold,
-            gold_in_candidates: candidates.iter().any(|c| c.entity_type == gold),
+            gold_in_candidates: ranked.iter().any(|c| c.entity_type == gold),
         });
     }
     Ok(samples)
@@ -222,23 +237,21 @@ pub fn sweep(
     };
 
     // tier2_floor: the lowest grid floor whose at-or-above set still finds
-    // the gold type among the candidates at the target rate.
+    // the gold type among the candidates at the target rate. The rate is
+    // NOT monotone in the floor (adding low-score samples can push it
+    // below target at one floor and back above at a lower one), so the
+    // full grid is scanned rather than stopping at the first failure.
     let mut tier2_floor_pct = tier1_floor_pct;
-    for floor_pct in (0..=95_u8).rev() {
+    for floor_pct in 0..=95_u8 {
         let floor = f32::from(floor_pct) / 100.0;
-        let at_or_above = samples.iter().filter(|s| s.top1_score >= floor);
         let (mut total, mut with_gold) = (0_usize, 0_usize);
-        for s in at_or_above {
+        for s in samples.iter().filter(|s| s.top1_score >= floor) {
             total += 1;
             with_gold += usize::from(s.gold_in_candidates);
         }
-        if total == 0 {
-            continue;
-        }
-        if ratio(with_gold, total) >= opts.tier2_target {
+        if total > 0 && ratio(with_gold, total) >= opts.tier2_target {
             tier2_floor_pct = floor_pct.min(tier1_floor_pct);
-        } else {
-            break; // rates only degrade as the floor keeps dropping
+            break; // ascending scan: the first passing floor IS the lowest
         }
     }
 
@@ -276,7 +289,11 @@ fn accepted_meeting_target(
     let margin = f32::from(margin_pct) / 100.0;
     let (mut accepted, mut correct) = (0_usize, 0_usize);
     for s in samples {
-        if s.top1_score >= floor && s.top1_margin >= margin {
+        // A no-rival sample passes any margin gate vacuously, exactly as
+        // `assign_tier` treats a lone candidate at runtime — excluding it
+        // here would let the artifact overstate the gate's real precision.
+        let margin_ok = s.top1_margin.is_none_or(|m| m >= margin);
+        if s.top1_score >= floor && margin_ok {
             accepted += 1;
             correct += usize::from(s.top1_correct);
         }
@@ -292,45 +309,16 @@ const fn gate_is_better(candidate: (usize, u8, u8), current: (usize, u8, u8)) ->
             && (candidate.1 < current.1 || (candidate.1 == current.1 && candidate.2 < current.2)))
 }
 
-/// Current UTC time as RFC 3339 (`YYYY-MM-DDTHH:MM:SSZ`), derived from the
-/// system clock without a date-time dependency (civil-from-days per Howard
-/// Hinnant's algorithm).
+/// Current UTC time as RFC 3339 seconds (`YYYY-MM-DDTHH:MM:SSZ`).
 fn now_rfc3339() -> String {
-    let epoch_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let days = i64::try_from(epoch_secs / 86_400).unwrap_or(0);
-    let secs_of_day = epoch_secs % 86_400;
-    let (year, month, day) = civil_from_days(days);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
-        secs_of_day / 3600,
-        (secs_of_day % 3600) / 60,
-        secs_of_day % 60
-    )
-}
-
-/// Converts days since 1970-01-01 to a civil (year, month, day) date.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // day/month fit u8 by construction
-const fn civil_from_days(days: i64) -> (i64, u8, u8) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u8;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u8;
-    let year = if month <= 2 { year + 1 } else { year };
-    (year, month, day)
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::{CalibrateOptions, CalibrationSample, civil_from_days, subsample, sweep};
+    use super::{CalibrateOptions, CalibrationSample, subsample, sweep};
 
     fn sample(
         id: &str,
@@ -342,7 +330,7 @@ mod tests {
         CalibrationSample {
             finding_id: id.to_string(),
             top1_score: score,
-            top1_margin: margin,
+            top1_margin: Some(margin),
             top1_correct: correct,
             gold_in_candidates: gold_in,
         }
@@ -381,6 +369,33 @@ mod tests {
         assert!(cal.tier2_floor <= cal.tier1_floor);
         assert_eq!(cal.method.as_deref(), Some("stamped-quantile-v1"));
         assert_eq!(cal.sample_size, Some(3));
+    }
+
+    #[test]
+    fn no_rival_samples_pass_margin_gates_vacuously_matching_runtime() {
+        // A no-rival sample (margin None) is auto-classify-eligible at
+        // runtime whenever its score clears the floor, so the sweep must
+        // count it toward every margin gate's precision rather than
+        // exclude it and overstate what the gate delivers.
+        let lone = CalibrationSample {
+            finding_id: "lone".to_string(),
+            top1_score: 0.90,
+            top1_margin: None,
+            top1_correct: true,
+            gold_in_candidates: true,
+        };
+        let rivaled = sample("rivaled", 0.88, 0.10, true, true);
+        let cal = sweep(
+            &[lone, rivaled],
+            &CalibrateOptions {
+                target_precision: 1.0,
+                ..CalibrateOptions::default()
+            },
+            Path::new("test.json"),
+        )
+        .unwrap();
+        assert!(cal.calibrated);
+        assert_eq!(cal.sample_size, Some(2));
     }
 
     #[test]
@@ -435,12 +450,5 @@ mod tests {
             first.iter().map(|s| &s.finding_id).collect::<Vec<_>>(),
             other_seed.iter().map(|s| &s.finding_id).collect::<Vec<_>>()
         );
-    }
-
-    #[test]
-    fn civil_from_days_matches_known_dates() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(19_723), (2024, 1, 1)); // 2024-01-01
-        assert_eq!(civil_from_days(20_638), (2026, 7, 4)); // 2026-07-04
     }
 }
