@@ -705,38 +705,42 @@ mod tests {
     /// as intentionally-shared dead code that `to_problem()` never reaches
     /// (delegating match arms whose real problem comes from an inner
     /// error's own `to_problem()` instead of this crate's `meta()`).
-    fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        let read_result = std::fs::read_dir(dir);
-        if matches!(&read_result, Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
-            return;
-        }
-        let dir_msg = format!("failed to read dir {}", dir.display());
-        let entries = read_result.expect(&dir_msg);
+    fn collect_rs_files(
+        dir: &std::path::Path,
+        out: &mut Vec<std::path::PathBuf>,
+    ) -> Result<(), String> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(format!("failed to read dir {}: {e}", dir.display())),
+        };
         for entry in entries {
-            let entry_msg = format!("failed to read entry in {}", dir.display());
-            let path = entry.expect(&entry_msg).path();
+            let path = entry
+                .map_err(|e| format!("failed to read entry in {}: {e}", dir.display()))?
+                .path();
             if path.is_dir() {
-                collect_rs_files(&path, out);
+                collect_rs_files(&path, out)?;
                 continue;
             }
             if path.extension().is_some_and(|ext| ext == "rs") {
                 out.push(path);
             }
         }
+        Ok(())
     }
 
     /// Every `slug: "..."` literal in a source file's text, in appearance order.
-    fn slugs_in_file(path: &std::path::Path) -> Vec<String> {
-        let msg = format!("failed to read {}", path.display());
-        let contents = std::fs::read_to_string(path).expect(&msg);
-        contents
+    fn slugs_in_file(path: &std::path::Path) -> Result<Vec<String>, String> {
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        Ok(contents
             .lines()
             .filter_map(|line| {
                 let rest = line.trim_start().strip_prefix("slug: \"")?;
                 let end = rest.find('"')?;
                 Some(rest[..end].to_string())
             })
-            .collect()
+            .collect())
     }
 
     /// `type_uri()` is `{ERROR_TYPE_BASE_URI}/{slug}/{version}` with no crate
@@ -764,13 +768,14 @@ mod tests {
             .expect("workspace crates/ directory must exist")
             .filter_map(Result::ok)
         {
-            collect_rs_files(&crate_dir.path().join("src"), &mut files);
+            collect_rs_files(&crate_dir.path().join("src"), &mut files)
+                .expect("crate src tree walk failed");
         }
 
         let mut occurrences: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
         for file in &files {
-            for slug in slugs_in_file(file) {
+            for slug in slugs_in_file(file).expect("failed to read a collected .rs file") {
                 occurrences
                     .entry(slug)
                     .or_default()
