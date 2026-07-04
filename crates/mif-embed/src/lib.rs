@@ -17,8 +17,15 @@ use mif_problem::{
 };
 use tokenizers::{Tokenizer, TruncationParams};
 
-/// Hugging Face Hub repository providing the model this crate embeds with.
-const MODEL_REPO: &str = "sentence-transformers/all-MiniLM-L6-v2";
+/// The model identity this crate embeds with (its Hugging Face Hub id).
+///
+/// Public so consumers governing scores by model (e.g. a calibration
+/// artifact's `embedding_model` field) can compare against the model
+/// actually in use instead of duplicating this string.
+pub const MODEL_ID: &str = "sentence-transformers/all-MiniLM-L6-v2";
+
+/// Alias retained for this crate's internal call sites.
+const MODEL_REPO: &str = MODEL_ID;
 
 /// Output embedding dimensionality of `sentence-transformers/all-MiniLM-L6-v2`.
 pub const EMBEDDING_DIM: usize = 384;

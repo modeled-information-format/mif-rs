@@ -15,7 +15,6 @@
 //! this crate's determinism boundary (see the crate doc) — `resolve`/
 //! `review` never call it.
 
-use mif_ontology::confidence::DEFAULT_EMBEDDING_MODEL;
 use mif_ontology::{CalibrationConfig, ConfidenceTier, assign_tier};
 use serde::Serialize;
 
@@ -58,6 +57,13 @@ pub struct TypeSuggestion {
 /// margin is always measured against the true second-best, not the best
 /// survivor of an early cut.
 ///
+/// The second-best candidate includes duplicate declarations of the same
+/// type name across allowed packs: two packs declaring near-identical
+/// types leave the near-twin at rank 1 with a margin near zero, so the top
+/// candidate cannot reach tier 1 even when the type-*name* answer is
+/// unambiguous. Deliberate — the `ontology_id` genuinely is ambiguous in
+/// that corpus, and auto-classify eligibility must not paper over it.
+///
 /// # Errors
 ///
 /// Returns [`MifRhError`] if the topic's ontology bindings cannot be
@@ -73,10 +79,9 @@ pub fn suggest_type(
     let allowed = build_allowed(ctx)?;
     let query_vector = embedder.embed(text)?;
 
-    // The calibration only governs scores produced by the model it was
-    // calibrated for; mif-embed pins one model, so anything else in the
-    // artifact means "treat as uncalibrated".
-    let calibrated = cal.calibrated && cal.embedding_model == DEFAULT_EMBEDDING_MODEL;
+    // The calibration only governs scores produced by the model actually
+    // in use; an artifact naming any other model reads as uncalibrated.
+    let calibrated = cal.governs(mif_embed::MODEL_ID);
 
     let mut scored: Vec<(String, String, f32)> = Vec::new();
     for pack in &allowed {
@@ -90,7 +95,15 @@ pub fn suggest_type(
         }
     }
 
-    scored.sort_by(|a, b| b.2.total_cmp(&a.2));
+    // Total order: score desc, then ontology id, then type name — exact
+    // score ties (identical embedding docs across packs) must rank
+    // deterministically, including which twin sits at rank 0 carrying the
+    // margin, since build_allowed's pack order is hash-map-dependent.
+    scored.sort_by(|a, b| {
+        b.2.total_cmp(&a.2)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.0.cmp(&b.0))
+    });
     let second_best = scored.get(1).map(|(_, _, score)| *score);
 
     let mut suggestions: Vec<TypeSuggestion> = scored
@@ -155,6 +168,17 @@ entity_types:
         let mut packs = HashMap::new();
         packs.insert(pack.id.clone(), pack);
         (catalog, config, packs)
+    }
+
+    #[test]
+    fn the_default_calibration_model_names_the_embedder_actually_in_use() {
+        // Guards the governs() rule against silent drift: if mif-embed ever
+        // changes models, this forces the calibration default to move with
+        // it (or the divergence to be handled deliberately).
+        assert_eq!(
+            mif_ontology::confidence::DEFAULT_EMBEDDING_MODEL,
+            mif_embed::MODEL_ID
+        );
     }
 
     #[test]

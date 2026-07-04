@@ -13,8 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use mif_ontology::confidence::DEFAULT_EMBEDDING_MODEL;
-use mif_ontology::{CalibrationConfig, ConfidenceTier, band_by_score};
+use mif_ontology::{CalibrationConfig, SimilarityBand, band_by_score};
 use mif_problem::{ProblemMeta, ToProblem};
 use mif_rh::index::FindingIndex;
 use rmcp::handler::server::wrapper::Parameters;
@@ -170,15 +169,15 @@ struct FindSimilarParams {
 /// One similarity match, ranked by cosine similarity, across every topic
 /// in the corpus.
 ///
-/// `tier` is a score *band* (no rank/margin semantics): the top band reads
-/// as "near-duplicate candidate", not "safe to auto-classify" — similarity
-/// recall is not a classification decision.
+/// `band` is a similarity band (`near_duplicate`/`related`/`weak`) under
+/// the calibrated floors — deliberately NOT the classification tier
+/// vocabulary, since similarity recall is not a classification decision.
 #[derive(Debug, Serialize)]
 struct SimilarityHit {
     finding_id: String,
     topic: String,
     score: f32,
-    tier: ConfidenceTier,
+    band: SimilarityBand,
     calibrated: bool,
 }
 
@@ -281,7 +280,7 @@ fn find_similar_inner(
 ) -> Result<Vec<SimilarityHit>, McpError> {
     let index = open_index(index_path)?;
     let cal = CalibrationConfig::load_or_default(calibration_path)?;
-    let calibrated = cal.calibrated && cal.embedding_model == DEFAULT_EMBEDDING_MODEL;
+    let calibrated = cal.governs(mif_embed::MODEL_ID);
     let embedder = mif_embed::Embedder::load().map_err(mif_rh::MifRhError::from)?;
     let vector = embedder.embed(text).map_err(mif_rh::MifRhError::from)?;
     let matches = index.find_similar(&vector, limit, exclude_finding_id)?;
@@ -290,7 +289,7 @@ fn find_similar_inner(
         .map(|m| SimilarityHit {
             finding_id: m.finding_id,
             topic: m.topic,
-            tier: band_by_score(m.score, &cal),
+            band: band_by_score(m.score, &cal),
             score: m.score,
             calibrated,
         })
@@ -391,9 +390,9 @@ impl MifRh {
     }
 
     #[tool(
-        description = "Find findings similar to a piece of text, across every topic. Each hit's \
-                        tier is a score band only (top band = near-duplicate candidate, not a \
-                        classification decision)"
+        description = "Find findings similar to a piece of text, across every topic. Each hit \
+                        carries a similarity band (near_duplicate/related/weak) under the \
+                        calibrated floors — not a classification decision"
     )]
     fn find_similar(
         &self,
@@ -519,11 +518,8 @@ mod tests {
         .unwrap();
         assert_eq!(hits.len(), 1);
         // An identical text embeds identically: cosine 1.0 lands in the top
-        // band, which for find_similar reads as near-duplicate candidate.
-        assert_eq!(
-            hits[0].tier,
-            mif_ontology::ConfidenceTier::AutoClassifyEligible
-        );
+        // similarity band.
+        assert_eq!(hits[0].band, mif_ontology::SimilarityBand::NearDuplicate);
         // No calibration artifact: built-in defaults, explicitly uncalibrated.
         assert!(!hits[0].calibrated);
     }

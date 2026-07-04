@@ -50,8 +50,15 @@ pub enum ConfidenceTier {
 
 /// Knobs for the tier-3 miss-clustering criterion. All configurable,
 /// carried in the same calibration artifact as the score thresholds.
+///
+/// Unknown fields are rejected (`deny_unknown_fields`): the artifact is
+/// governance data, and a typo'd knob silently reverting to defaults while
+/// `calibrated: true` still claims governance is exactly the masquerade
+/// this module refuses. Forward compatibility with newer-writer artifacts
+/// is deliberately traded away — an artifact this reader cannot fully
+/// understand must not half-apply.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ExpansionConfig {
     /// Minimum pairwise cosine similarity every pair of members of one
     /// cluster must satisfy (mutual, not chained).
@@ -78,8 +85,11 @@ impl Default for ExpansionConfig {
 /// Lives as derived, per-corpus data (conventionally
 /// `reports/_meta/confidence-calibration.json` in a research-harness
 /// corpus), never as authored configuration — see
-/// [`CalibrationConfig::load_or_default`].
+/// [`CalibrationConfig::load_or_default`]. Unknown fields are rejected
+/// (`deny_unknown_fields`) for the same fail-loud reason documented on
+/// [`ExpansionConfig`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CalibrationConfig {
     /// The embedding model these thresholds were calibrated for.
     pub embedding_model: String,
@@ -157,8 +167,10 @@ impl CalibrationConfig {
     }
 
     /// Checks the threshold values are usable: finite, within `[-1, 1]`
-    /// (cosine range), a non-negative margin, and `tier2_floor <=
-    /// tier1_floor` (the bands must nest).
+    /// (cosine range), a satisfiable margin (`0..=2`, the maximum top-two
+    /// gap in cosine space), nested bands (`tier2_floor <= tier1_floor`),
+    /// and sane expansion knobs (finite in-range cluster similarity,
+    /// non-zero cluster size and run counts).
     ///
     /// # Errors
     ///
@@ -168,6 +180,10 @@ impl CalibrationConfig {
             ("tier1_floor", self.tier1_floor),
             ("tier1_margin", self.tier1_margin),
             ("tier2_floor", self.tier2_floor),
+            (
+                "expansion.cluster_similarity",
+                self.expansion.cluster_similarity,
+            ),
         ] {
             if !value.is_finite() {
                 return Err(format!("{label} is not a finite number"));
@@ -176,8 +192,10 @@ impl CalibrationConfig {
         if !(-1.0..=1.0).contains(&self.tier1_floor) || !(-1.0..=1.0).contains(&self.tier2_floor) {
             return Err("tier floors must be within the cosine range [-1, 1]".to_string());
         }
-        if self.tier1_margin < 0.0 {
-            return Err("tier1_margin must be non-negative".to_string());
+        if !(0.0..=2.0).contains(&self.tier1_margin) {
+            return Err(
+                "tier1_margin must be within [0, 2] (the maximum top-two cosine gap)".to_string(),
+            );
         }
         if self.tier2_floor > self.tier1_floor {
             return Err(format!(
@@ -185,7 +203,27 @@ impl CalibrationConfig {
                 self.tier2_floor, self.tier1_floor
             ));
         }
+        if !(-1.0..=1.0).contains(&self.expansion.cluster_similarity) {
+            return Err(
+                "expansion.cluster_similarity must be within the cosine range [-1, 1]".to_string(),
+            );
+        }
+        if self.expansion.min_cluster_size == 0 || self.expansion.min_distinct_runs == 0 {
+            return Err(
+                "expansion.min_cluster_size and expansion.min_distinct_runs must be at least 1"
+                    .to_string(),
+            );
+        }
         Ok(())
+    }
+
+    /// Whether this artifact's tiers govern scores produced by `model`:
+    /// it must be a real calibration run (`calibrated`) AND for the model
+    /// actually in use — an artifact calibrated for a different embedding
+    /// model reads as uncalibrated to that consumer.
+    #[must_use]
+    pub fn governs(&self, model: &str) -> bool {
+        self.calibrated && self.embedding_model == model
     }
 }
 
@@ -221,19 +259,36 @@ pub fn assign_tier(
     }
 }
 
-/// Bands a score by the two floors alone, with no rank/margin semantics.
+/// A similarity band: the same two floors as the classification tiers,
+/// with deliberately different labels.
 ///
-/// For score streams that are not a classification decision (e.g.
-/// `find_similar`'s duplicate-confidence annotation, where the top band
-/// reads as "near-duplicate candidate", not "safe to auto-classify").
+/// Similarity recall (e.g. `find_similar`) is not a classification
+/// decision — reusing [`ConfidenceTier`]'s `auto_classify_eligible` label
+/// on the wire would hand machine consumers a string asserting semantics
+/// the producer disclaims. These labels say what a similarity score
+/// actually means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SimilarityBand {
+    /// At or above the tier-1 floor: a near-duplicate candidate.
+    NearDuplicate,
+    /// Between the floors: related material worth a look.
+    Related,
+    /// Below the tier-2 floor: weak similarity.
+    Weak,
+}
+
+/// Bands a similarity score by the two calibrated floors alone, with no
+/// rank/margin semantics — for score streams that are not a
+/// classification decision.
 #[must_use]
-pub fn band_by_score(score: f32, cal: &CalibrationConfig) -> ConfidenceTier {
+pub fn band_by_score(score: f32, cal: &CalibrationConfig) -> SimilarityBand {
     if score >= cal.tier1_floor {
-        ConfidenceTier::AutoClassifyEligible
+        SimilarityBand::NearDuplicate
     } else if score >= cal.tier2_floor {
-        ConfidenceTier::FlagForReview
+        SimilarityBand::Related
     } else {
-        ConfidenceTier::TriggerExpansion
+        SimilarityBand::Weak
     }
 }
 
@@ -298,7 +353,8 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        CalibrationConfig, ConfidenceTier, assign_tier, band_by_score, cluster_by_mutual_similarity,
+        CalibrationConfig, ConfidenceTier, SimilarityBand, assign_tier, band_by_score,
+        cluster_by_mutual_similarity,
     };
 
     fn cal() -> CalibrationConfig {
@@ -349,16 +405,49 @@ mod tests {
     }
 
     #[test]
-    fn band_by_score_ignores_margin_semantics() {
-        assert_eq!(
-            band_by_score(0.99, &cal()),
-            ConfidenceTier::AutoClassifyEligible
-        );
-        assert_eq!(band_by_score(0.70, &cal()), ConfidenceTier::FlagForReview);
-        assert_eq!(
-            band_by_score(0.10, &cal()),
-            ConfidenceTier::TriggerExpansion
-        );
+    fn band_by_score_uses_similarity_labels_not_classification_tiers() {
+        assert_eq!(band_by_score(0.99, &cal()), SimilarityBand::NearDuplicate);
+        assert_eq!(band_by_score(0.70, &cal()), SimilarityBand::Related);
+        assert_eq!(band_by_score(0.10, &cal()), SimilarityBand::Weak);
+    }
+
+    #[test]
+    fn governs_requires_calibrated_and_matching_model() {
+        let uncalibrated = cal();
+        assert!(!uncalibrated.governs(super::DEFAULT_EMBEDDING_MODEL));
+
+        let calibrated = CalibrationConfig {
+            calibrated: true,
+            ..cal()
+        };
+        assert!(calibrated.governs(super::DEFAULT_EMBEDDING_MODEL));
+        assert!(!calibrated.governs("some-other/model"));
+    }
+
+    #[test]
+    fn validate_rejects_bad_expansion_knobs_and_oversize_margin() {
+        let oversize_margin = CalibrationConfig {
+            tier1_margin: 2.5,
+            ..cal()
+        };
+        assert!(oversize_margin.validate().is_err());
+
+        let mut bad_similarity = cal();
+        bad_similarity.expansion.cluster_similarity = f32::NAN;
+        assert!(bad_similarity.validate().is_err());
+
+        let mut zero_size = cal();
+        zero_size.expansion.min_cluster_size = 0;
+        assert!(zero_size.validate().is_err());
+    }
+
+    #[test]
+    fn unknown_artifact_fields_are_rejected_not_ignored() {
+        let mut value: serde_json::Value =
+            serde_json::to_value(CalibrationConfig::default()).unwrap();
+        value["expansions"] = serde_json::json!({ "min_cluster_size": 99 });
+        let result: Result<CalibrationConfig, _> = serde_json::from_value(value);
+        assert!(result.is_err(), "typo'd optional key must fail loud");
     }
 
     #[test]

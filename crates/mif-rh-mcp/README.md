@@ -20,8 +20,10 @@ matches against each entity type's positive embedding document
 (`description` + `aliases` + `exemplars`), and only a top candidate that
 clears both the calibrated floor and a top-1/top-2 margin is
 `auto_classify_eligible` — which is still a hypothesis, never an
-auto-stamp. `find_similar`'s tier is a score band only: its top band reads
-as "near-duplicate candidate", not a classification decision.
+auto-stamp. `find_similar` carries a similarity band instead
+(`near_duplicate`/`related`/`weak`, under the same calibrated floors) —
+deliberately not the classification-tier vocabulary, because similarity
+recall is not a classification decision.
 
 ## License
 
