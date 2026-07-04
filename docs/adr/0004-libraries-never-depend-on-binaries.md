@@ -195,7 +195,7 @@ depend on whichever of the seven library crates they call directly; none of
 The decision achieves its primary objective — libraries that stay
 independently reusable — measured by: none of `mif-core`, `mif-schema`,
 `mif-ontology`, `mif-problem`, `mif-frontmatter`, `mif-embed`, or
-`mif-store` ever appears as a dependent of `mif-cli` or `mif-mcp` in any
+`mif-store` ever lists `mif-cli` or `mif-mcp` as a dependency in its own
 `Cargo.toml`.
 
 ## Related Decisions
