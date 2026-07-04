@@ -66,7 +66,7 @@ impl McpError {
             Self::ReportsDirMissing { .. } => ProblemMeta {
                 slug: "reports-dir-missing",
                 version: "v1",
-                title: "Reports directory not found",
+                title: "Cannot read the reports directory",
                 status: 404,
                 exit_code: 1,
             },
@@ -104,12 +104,13 @@ impl ToProblem for McpError {
                 .meta()
                 .into_details(env!("CARGO_PKG_NAME"), self.to_string())
                 .with_suggested_fix(mif_problem::SuggestedFix::new(
-                    "Pass `reports_dir` pointing at the corpus root — the directory containing \
-                     `<topic>/ontology-map.json` — then retry.",
+                    "Pass `reports_dir` pointing at the reports directory itself — the one \
+                     directly containing `<topic>/ontology-map.json`, conventionally \
+                     `reports/` — then retry.",
                     mif_problem::Applicability::HasPlaceholders,
                 ))
                 .with_code_action(mif_problem::CodeAction::new(
-                    "Point reports_dir at the corpus root",
+                    "Point reports_dir at the reports directory",
                     "quickfix",
                     mif_problem::Applicability::HasPlaceholders,
                 )),
@@ -224,9 +225,10 @@ struct CorpusStatsResult {
     invalid: u64,
 }
 
-/// Reads every `reports/<topic>/ontology-map.json` under `reports_dir` and
-/// aggregates the same coverage buckets `review()` computes, without
-/// re-resolving anything.
+/// Reads every `<reports_dir>/<topic>/ontology-map.json` — `reports_dir`
+/// is the reports directory itself (conventionally `reports/`), not a
+/// corpus root above it — and aggregates the same coverage buckets
+/// `review()` computes, without re-resolving anything.
 ///
 /// Failure semantics are deliberately asymmetric: a missing or unreadable
 /// `reports_dir` ROOT is an explicit error (a misconfigured path must not
