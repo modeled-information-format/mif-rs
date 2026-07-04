@@ -107,10 +107,22 @@ pub fn upsert_suggestions(
             path: path.display().to_string(),
             source,
         })?;
-        serde_json::from_str::<SuggestionQueue>(&contents).map_err(|source| MifRhError::Json {
-            path: path.display().to_string(),
-            source,
-        })?
+        let queue = serde_json::from_str::<SuggestionQueue>(&contents).map_err(|source| {
+            MifRhError::Json {
+                path: path.display().to_string(),
+                source,
+            }
+        })?;
+        // A queue file recorded for another topic (copied, renamed, or a
+        // wrong-path caller) must not silently absorb this topic's entries.
+        if queue.topic != topic {
+            return Err(MifRhError::QueueTopicMismatch {
+                path: path.display().to_string(),
+                expected: topic.to_string(),
+                found: queue.topic,
+            });
+        }
+        queue
     } else {
         SuggestionQueue {
             topic: topic.to_string(),
@@ -313,6 +325,19 @@ mod tests {
             .map(|e| e.finding_id.as_str())
             .collect();
         assert_eq!(ids, ["f-1", "f-2", "f-3"]);
+    }
+
+    #[test]
+    fn a_queue_recorded_for_another_topic_is_rejected_not_absorbed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sec.json");
+        upsert_suggestions(&path, "sec", vec![entry("f-1", "run-1", STATUS_PENDING)]).unwrap();
+
+        let error = upsert_suggestions(&path, "edu", vec![]).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::MifRhError::QueueTopicMismatch { .. }
+        ));
     }
 
     #[test]

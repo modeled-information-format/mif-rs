@@ -522,7 +522,12 @@ fn suggest_type_cmd(args: &SuggestTypeArgs<'_>) -> Result<Outcome, CliError> {
     let cal = mif_ontology::CalibrationConfig::load_or_default(&calibration_path)
         .map_err(mif_rh::MifRhError::from)?;
     let embedder = mif_embed::Embedder::load()?;
-    let suggestions = mif_rh::suggest_type(&query, &ctx, &embedder, &cal, args.limit)?;
+    // Embed the query once; the vector serves both the ranking and — on a
+    // tier-3 miss — the recorded miss, with no second forward pass.
+    let candidates = mif_rh::suggest::build_candidates(&ctx, &embedder, &cal)?;
+    let query_vector = embedder.embed(&query)?;
+    let suggestions =
+        mif_rh::suggest::suggest_from_candidates(&query_vector, &candidates, &cal, args.limit);
 
     if args.record && is_expansion_miss(&suggestions) {
         // clap's `requires = "finding"` guarantees the id was captured above.
@@ -538,8 +543,8 @@ fn suggest_type_cmd(args: &SuggestTypeArgs<'_>) -> Result<Outcome, CliError> {
             index.record_miss(&mif_rh::Miss {
                 finding_id,
                 topic: topic.clone(),
-                content: query.clone(),
-                vector: embedder.embed(&query)?,
+                content: query,
+                vector: query_vector,
                 run_id: run_id(),
                 model: mif_embed::MODEL_ID.to_string(),
             })?;

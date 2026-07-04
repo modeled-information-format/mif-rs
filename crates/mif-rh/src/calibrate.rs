@@ -180,9 +180,10 @@ pub fn subsample(
 ///
 /// Picks the loosest `(tier1_floor, tier1_margin)` (most accepted samples;
 /// ties prefer the lower floor, then lower margin) whose accepted set has
-/// top-1 precision `>= opts.target_precision`, and the lowest `tier2_floor`
-/// such that samples at or above it keep a gold-in-candidates rate
-/// `>= opts.tier2_target` (clamped to `tier1_floor`).
+/// top-1 precision `>= opts.target_precision`, and the lowest
+/// `tier2_floor` at or below `tier1_floor` whose at-or-above sample set
+/// keeps a gold-in-candidates rate `>= opts.tier2_target` (the bands
+/// collapse to `tier1_floor` when no in-band floor qualifies).
 ///
 /// # Errors
 ///
@@ -236,13 +237,18 @@ pub fn sweep(
         )));
     };
 
-    // tier2_floor: the lowest grid floor whose at-or-above set still finds
-    // the gold type among the candidates at the target rate. The rate is
-    // NOT monotone in the floor (adding low-score samples can push it
-    // below target at one floor and back above at a lower one), so the
-    // full grid is scanned rather than stopping at the first failure.
+    // tier2_floor: the lowest grid floor, at or below tier1_floor, whose
+    // at-or-above set still finds the gold type among the candidates at
+    // the target rate. The rate is NOT monotone in the floor (adding
+    // low-score samples can push it below target at one floor and back
+    // above at a lower one), so only floors within the band are scanned —
+    // clamping a higher passing floor down to tier1_floor would fabricate
+    // a floor whose own rate was never measured against the target. If no
+    // in-band floor passes, the bands collapse (tier2_floor ==
+    // tier1_floor): everything below tier 1 routes to tier 3, an honest
+    // statement that the mid band offers no useful gold recall.
     let mut tier2_floor_pct = tier1_floor_pct;
-    for floor_pct in 0..=95_u8 {
+    for floor_pct in 0..=tier1_floor_pct {
         let floor = f32::from(floor_pct) / 100.0;
         let (mut total, mut with_gold) = (0_usize, 0_usize);
         for s in samples.iter().filter(|s| s.top1_score >= floor) {
@@ -250,7 +256,7 @@ pub fn sweep(
             with_gold += usize::from(s.gold_in_candidates);
         }
         if total > 0 && ratio(with_gold, total) >= opts.tier2_target {
-            tier2_floor_pct = floor_pct.min(tier1_floor_pct);
+            tier2_floor_pct = floor_pct;
             break; // ascending scan: the first passing floor IS the lowest
         }
     }
