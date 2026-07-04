@@ -218,7 +218,7 @@ stated recheck-by date, not a growing permanent list.
 
 ## Related Decisions
 
-- [ADR-0012: Cargo Chef Docker Layer Caching](0012-cargo-chef-docker-layer-caching.md)
+- [ADR-0012: Cargo Chef Docker Layer Caching](https://modeled-information-format.github.io/mif-rs/adr/0012-cargo-chef-docker-layer-caching/)
 
 ## Links
 

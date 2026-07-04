@@ -55,9 +55,9 @@ is shaped the way it is: why evidence gets produced at two separate points rathe
 than one, why the release machinery is built to honor a per-crate `publish =
 false` switch even though none of the 9 crates currently sets one, and why a tag
 publishes nothing that hasn't already been verified. For the verification commands
-themselves, see [`SIGNED-RELEASES.md`](./SIGNED-RELEASES.md) and `SECURITY.md` §
+themselves, see [`SIGNED-RELEASES.md`](https://modeled-information-format.github.io/mif-rs/security/signed-releases/) and `SECURITY.md` §
 Verifying Release Artifacts; for the operational sequence of cutting a release,
-see [`RELEASING.md`](../runbooks/RELEASING.md).
+see [`RELEASING.md`](https://modeled-information-format.github.io/mif-rs/runbooks/releasing/).
 
 ## Why two seams, not one
 

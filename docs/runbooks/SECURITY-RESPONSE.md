@@ -33,7 +33,7 @@ entity:
 
 Triage, fix, and coordinate disclosure of a security vulnerability reported
 against `mif-rs`, from acknowledgment through a published advisory. Based on
-the project's [Security Policy](../../SECURITY.md).
+the project's [Security Policy](https://github.com/modeled-information-format/mif-rs/blob/main/SECURITY.md).
 
 ## Prerequisites
 
@@ -115,7 +115,7 @@ no new issues were introduced.
 While the fix is in review:
 
 - [ ] Determine the new version (typically a PATCH bump — see
-      [RELEASING.md](RELEASING.md) for SemVer policy).
+      [RELEASING.md](https://modeled-information-format.github.io/mif-rs/runbooks/releasing/) for SemVer policy).
 - [ ] Draft release notes describing the fix without revealing exploit
       details before coordinated disclosure.
 - [ ] Request a CVE ID if severity warrants it.
@@ -138,7 +138,7 @@ git push origin vX.Y.(Z+1)
 ```
 
 The tag push triggers the standard release pipeline — see
-[RELEASING.md](RELEASING.md) for the full workflow chain and verification
+[RELEASING.md](https://modeled-information-format.github.io/mif-rs/runbooks/releasing/) for the full workflow chain and verification
 steps.
 
 Verify deployment before notifying anyone:

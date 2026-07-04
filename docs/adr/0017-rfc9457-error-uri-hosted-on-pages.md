@@ -241,8 +241,8 @@ once).
 
 ## Related Decisions
 
-- [ADR-0005: Per-Crate `thiserror` Error Enums](0005-per-crate-thiserror-error-enums.md) — establishes the per-crate error-enum pattern that each implements `ToProblem` against, producing the type URIs this decision hosts.
-- [ADR-0018: Rustdoc and Starlight Unified Pages Deployment](0018-rustdoc-and-starlight-unified-pages-deployment.md) — establishes the GitHub Pages site this decision hosts the error reference pages on.
+- [ADR-0005: Per-Crate `thiserror` Error Enums](https://modeled-information-format.github.io/mif-rs/adr/0005-per-crate-thiserror-error-enums/) — establishes the per-crate error-enum pattern that each implements `ToProblem` against, producing the type URIs this decision hosts.
+- [ADR-0018: Rustdoc and Starlight Unified Pages Deployment](https://modeled-information-format.github.io/mif-rs/adr/0018-rustdoc-and-starlight-unified-pages-deployment/) — establishes the GitHub Pages site this decision hosts the error reference pages on.
 
 ## Links
 

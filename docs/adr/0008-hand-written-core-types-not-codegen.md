@@ -226,8 +226,8 @@ throughout.
 
 ## Related Decisions
 
-- [ADR-0003: Virtual Cargo Workspace](0003-virtual-cargo-workspace.md)
-- [ADR-0006: Vendor the Canonical JSON Schema at Compile Time, Not Fetch at Validate Time](0006-vendor-json-schema-at-compile-time.md)
+- [ADR-0003: Virtual Cargo Workspace](https://modeled-information-format.github.io/mif-rs/adr/0003-virtual-cargo-workspace/)
+- [ADR-0006: Vendor the Canonical JSON Schema at Compile Time, Not Fetch at Validate Time](https://modeled-information-format.github.io/mif-rs/adr/0006-vendor-json-schema-at-compile-time/)
 
 ## Links
 

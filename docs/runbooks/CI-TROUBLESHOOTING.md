@@ -182,7 +182,7 @@ commented exception to `deny.toml`'s `[advisories] ignore`.
 **License failure** (`error[rejected]: license 'X' is not in the allow
 list`): either drop the dependency, or add the SPDX identifier to
 `[licenses] allow` if it's genuinely acceptable — see
-[DEPENDENCY-UPDATES.md](DEPENDENCY-UPDATES.md) for the current allow-list.
+[DEPENDENCY-UPDATES.md](https://modeled-information-format.github.io/mif-rs/runbooks/dependency-updates/) for the current allow-list.
 
 **Ban failure** (`error[banned]: crate 'openssl' is banned`): find what pulls
 it in (`cargo tree -i openssl`), then either switch to an alternative that
@@ -280,7 +280,7 @@ calling org reusables). Required check contexts: `pin-check / pin-check` and
 - **pin-check** fails when any `uses:` in `.github/workflows/*.yml` isn't
   pinned to a full 40-character commit SHA (a version tag or branch ref
   fails). Resolve the SHA and pin it — see
-  [DEPENDENCY-UPDATES.md](DEPENDENCY-UPDATES.md) for the general "update a
+  [DEPENDENCY-UPDATES.md](https://modeled-information-format.github.io/mif-rs/runbooks/dependency-updates/) for the general "update a
   pinned action" flow.
 - **validate-workflows** (`actionlint`) fails on workflow YAML syntax or
   semantic errors — a typo'd `needs:` reference, an invalid `if:` expression,
@@ -297,7 +297,7 @@ on a PR it builds without pushing (`push: ${{ github.event_name !=
 true from day one here, since `mif-cli` and `mif-mcp` both carry `[[bin]]`
 targets — so the docker job always runs; it is not tied to any crate's
 publish status (all 9 crates are already published — see
-[RELEASING.md](RELEASING.md)).
+[RELEASING.md](https://modeled-information-format.github.io/mif-rs/runbooks/releasing/)).
 
 | Error | Cause | Fix |
 |---|---|---|
@@ -334,14 +334,14 @@ The release matrix builds both `mif-cli` and `mif-mcp` across 5 platforms and
 publishes all 9 crates (`mif-core`, `mif-problem`, `mif-schema`,
 `mif-frontmatter`, `mif-ontology`, `mif-embed`, `mif-store`, `mif-cli`,
 `mif-mcp`) independently to crates.io. See
-[RELEASING.md](RELEASING.md) for the full chain and monitoring steps; the
+[RELEASING.md](https://modeled-information-format.github.io/mif-rs/runbooks/releasing/) for the full chain and monitoring steps; the
 common failure points are:
 
 | Error | Cause | Fix |
 |---|---|---|
 | `Cargo.toml version mismatch` | Workspace `version` doesn't match the tag | Ensure `version = "X.Y.Z"` in `[workspace.package]` matches tag `vX.Y.Z` |
 | macos-amd64 build fails | Cross-target leg (`x86_64-apple-darwin` on `macos-latest`) | Check the toolchain step's `targets:` input; the other 4 legs build natively |
-| Cargo Audit gate fails | Real advisory in `Cargo.lock` | Fix via a normal PR first (see [DEPENDENCY-UPDATES.md](DEPENDENCY-UPDATES.md)), then restart the release |
+| Cargo Audit gate fails | Real advisory in `Cargo.lock` | Fix via a normal PR first (see [DEPENDENCY-UPDATES.md](https://modeled-information-format.github.io/mif-rs/runbooks/dependency-updates/)), then restart the release |
 | Verify Attestations fails | Missing/unverifiable attestation | The fail-closed gate worked — no release was created. Fix the cause and release with a **new** tag; never re-run against an existing one |
 | crates.io publish fails, "No Trusted Publishing config found" | Trusted Publishing not configured for that crate | One-time setup per crate on crates.io: **Settings → Trusted Publishing**, workflow `publish.yml`, environment `release` |
 | Homebrew formula not updated | `workflow_run` trigger missed, or tap token missing | `gh workflow run package-homebrew.yml -f version=X.Y.Z -f dry_run=false`; check `HOMEBREW_TAP_TOKEN` |

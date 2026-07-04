@@ -212,7 +212,7 @@ forward from the original verified measurement recorded in commit
 
 ## Related Decisions
 
-- [ADR-0013: Chainguard glibc-dynamic Container Base](0013-chainguard-glibc-dynamic-container-base.md) — the runtime stage this Dockerfile's `builder` stage feeds into.
+- [ADR-0013: Chainguard glibc-dynamic Container Base](https://modeled-information-format.github.io/mif-rs/adr/0013-chainguard-glibc-dynamic-container-base/) — the runtime stage this Dockerfile's `builder` stage feeds into.
 
 ## Links
 

@@ -258,7 +258,7 @@ quoted above.
 
 ## Related Decisions
 
-- [ADR-0003: Virtual Cargo Workspace, Not a Root Package](0003-virtual-cargo-workspace.md) — establishes the 9-member workspace this lint policy applies across.
+- [ADR-0003: Virtual Cargo Workspace, Not a Root Package](https://modeled-information-format.github.io/mif-rs/adr/0003-virtual-cargo-workspace/) — establishes the 9-member workspace this lint policy applies across.
 
 ## Links
 

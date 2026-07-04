@@ -273,7 +273,7 @@ onboarding/release runbook.
 
 ## Related Decisions
 
-- [ADR-0013: Chainguard glibc-dynamic as the Container Runtime Base, Superseding distroless/cc-debian12](0013-chainguard-glibc-dynamic-container-base.md)
+- [ADR-0013: Chainguard glibc-dynamic as the Container Runtime Base, Superseding distroless/cc-debian12](https://modeled-information-format.github.io/mif-rs/adr/0013-chainguard-glibc-dynamic-container-base/)
 
 ## Links
 

@@ -225,7 +225,7 @@ independent deployments.
 
 ## Related Decisions
 
-- [ADR-0017: RFC 9457 error URI hosted on Pages](0017-rfc9457-error-uri-hosted-on-pages.md) — another decision that depends on this repository's Pages deployment.
+- [ADR-0017: RFC 9457 error URI hosted on Pages](https://modeled-information-format.github.io/mif-rs/adr/0017-rfc9457-error-uri-hosted-on-pages/) — another decision that depends on this repository's Pages deployment.
 
 ## Links
 

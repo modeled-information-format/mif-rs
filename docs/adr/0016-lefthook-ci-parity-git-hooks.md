@@ -225,7 +225,7 @@ genuinely CI-equivalent, not merely similar — measured by: `lefthook.yml`'s
 
 ## Related Decisions
 
-- [ADR-0009: Pedantic Clippy Lint Groups](0009-pedantic-clippy-lint-groups.md) — the lint policy this pre-push hook enforces at `cargo clippy -D warnings` time.
+- [ADR-0009: Pedantic Clippy Lint Groups](https://modeled-information-format.github.io/mif-rs/adr/0009-pedantic-clippy-lint-groups/) — the lint policy this pre-push hook enforces at `cargo clippy -D warnings` time.
 
 ## Links
 

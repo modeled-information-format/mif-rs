@@ -265,10 +265,10 @@ doc comment states this design intent explicitly:
 
 ## Related Decisions
 
-- [ADR-0003: Virtual Cargo Workspace](0003-virtual-cargo-workspace.md) —
+- [ADR-0003: Virtual Cargo Workspace](https://modeled-information-format.github.io/mif-rs/adr/0003-virtual-cargo-workspace/) —
   establishes the multi-crate workspace structure whose members each own an
   independent error enum under this decision.
-- [ADR-0004: Libraries Never Depend on Binaries](0004-libraries-never-depend-on-binaries.md) —
+- [ADR-0004: Libraries Never Depend on Binaries](https://modeled-information-format.github.io/mif-rs/adr/0004-libraries-never-depend-on-binaries/) —
   the same directional-dependency discipline that keeps library crates from
   depending on binary crates also keeps them from being forced into a shared
   error type only the binaries would otherwise motivate.

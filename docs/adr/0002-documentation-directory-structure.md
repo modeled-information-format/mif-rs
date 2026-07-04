@@ -183,7 +183,7 @@ process, or component that exists in this repository as of this ADR's date.
 
 ## Related Decisions
 
-- [ADR-0001: Use Architectural Decision Records](0001-use-architectural-decision-records.md) — establishes the ADR practice this document follows.
+- [ADR-0001: Use Architectural Decision Records](https://modeled-information-format.github.io/mif-rs/adr/0001-use-architectural-decision-records/) — establishes the ADR practice this document follows.
 
 ## Links
 
