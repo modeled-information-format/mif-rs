@@ -235,7 +235,7 @@ discovery:
     }
 
     #[test]
-    fn load_packs_via_catalog_resolves_each_entrys_source_path() {
+    fn load_packs_via_catalog_resolves_each_entries_source_path() {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join("packs")).unwrap();
         fs::write(
