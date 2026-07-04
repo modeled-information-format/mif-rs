@@ -119,7 +119,7 @@ bench-review CORPUS_DIR:
     cargo build --release -p mif-rh-cli
     bin="$(pwd)/target/release/mif-rh-cli"
     findings="$(find "${corpus}/reports" -path '*/findings/*.json' -type f | wc -l | tr -d ' ')"
-    time_out="$(mktemp)"
+    time_out="$(mktemp "${TMPDIR:-/tmp}/bench-review.XXXXXX")"
     trap 'rm -f "${time_out}"' EXIT
     cd "${corpus}"
     # `time -p` reports on ITS stderr; the inner sh re-points the CLI's own
