@@ -36,6 +36,18 @@ enum McpError {
         /// The index path that does not exist.
         path: String,
     },
+    /// `corpus_stats` was pointed at a reports directory that does not
+    /// exist or cannot be read.
+    #[error("cannot read reports directory at {path}: {source}")]
+    ReportsDirMissing {
+        /// The reports directory that could not be read.
+        path: String,
+        /// The underlying I/O error — the problem `detail` distinguishes a
+        /// genuinely missing directory from a permission or I/O failure,
+        /// even though the status stays a coarse 404.
+        #[source]
+        source: std::io::Error,
+    },
     /// Loading the ontology corpus, resolving, or reading the index failed.
     #[error(transparent)]
     MifRh(#[from] mif_rh::MifRhError),
@@ -48,6 +60,13 @@ impl McpError {
                 slug: "index-not-built",
                 version: "v1",
                 title: "Search index has not been built yet",
+                status: 404,
+                exit_code: 1,
+            },
+            Self::ReportsDirMissing { .. } => ProblemMeta {
+                slug: "reports-dir-missing",
+                version: "v1",
+                title: "Cannot read the reports directory",
                 status: 404,
                 exit_code: 1,
             },
@@ -77,6 +96,23 @@ impl ToProblem for McpError {
                     "Build the search index",
                     "quickfix",
                     mif_problem::Applicability::MachineApplicable,
+                )),
+            // HasPlaceholders, not MachineApplicable: unlike IndexNotBuilt's
+            // concrete runnable command, this fix carries a slot (`<topic>`,
+            // the corpus root's location) the agent must fill itself.
+            Self::ReportsDirMissing { .. } => self
+                .meta()
+                .into_details(env!("CARGO_PKG_NAME"), self.to_string())
+                .with_suggested_fix(mif_problem::SuggestedFix::new(
+                    "Pass `reports_dir` pointing at the reports directory itself — the one \
+                     directly containing `<topic>/ontology-map.json`, conventionally \
+                     `reports/` — then retry.",
+                    mif_problem::Applicability::HasPlaceholders,
+                ))
+                .with_code_action(mif_problem::CodeAction::new(
+                    "Point reports_dir at the reports directory",
+                    "quickfix",
+                    mif_problem::Applicability::HasPlaceholders,
                 )),
         }
     }
@@ -189,10 +225,20 @@ struct CorpusStatsResult {
     invalid: u64,
 }
 
-/// Reads every `reports/<topic>/ontology-map.json` under `reports_dir` and
-/// aggregates the same coverage buckets `review()` computes, without
-/// re-resolving anything.
-fn corpus_stats_inner(reports_dir: &Path) -> CorpusStatsResult {
+/// Reads every `<reports_dir>/<topic>/ontology-map.json` — `reports_dir`
+/// is the reports directory itself (conventionally `reports/`), not a
+/// corpus root above it — and aggregates the same coverage buckets
+/// `review()` computes, without re-resolving anything.
+///
+/// Failure semantics are deliberately asymmetric: a missing or unreadable
+/// `reports_dir` ROOT is an explicit error (a misconfigured path must not
+/// read as an empty corpus), while an individual topic whose
+/// `ontology-map.json` is missing, unreadable, or unparsable is silently
+/// skipped — an unreviewed or mid-write topic is normal corpus state, and
+/// counting it as neither a topic nor an invalid finding matches
+/// `ontology-review.sh`'s own tolerance. Do not "fix" either side into the
+/// other's behavior.
+fn corpus_stats_inner(reports_dir: &Path) -> Result<CorpusStatsResult, McpError> {
     use mif_rh::Basis;
 
     let mut topics = 0_u64;
@@ -202,16 +248,10 @@ fn corpus_stats_inner(reports_dir: &Path) -> CorpusStatsResult {
     let mut untyped = 0_u64;
     let mut invalid = 0_u64;
 
-    let Ok(entries) = std::fs::read_dir(reports_dir) else {
-        return CorpusStatsResult {
-            topics: 0,
-            findings: 0,
-            stamped: 0,
-            discovery: 0,
-            untyped: 0,
-            invalid: 0,
-        };
-    };
+    let entries = std::fs::read_dir(reports_dir).map_err(|source| McpError::ReportsDirMissing {
+        path: reports_dir.display().to_string(),
+        source,
+    })?;
 
     for entry in entries.filter_map(Result::ok) {
         let map_path = entry.path().join("ontology-map.json");
@@ -234,14 +274,14 @@ fn corpus_stats_inner(reports_dir: &Path) -> CorpusStatsResult {
         }
     }
 
-    CorpusStatsResult {
+    Ok(CorpusStatsResult {
         topics,
         findings,
         stamped,
         discovery,
         untyped,
         invalid,
-    }
+    })
 }
 
 fn search_inner(query: &str, limit: usize, index_path: &Path) -> Result<Vec<SearchHit>, McpError> {
@@ -414,8 +454,10 @@ impl MifRh {
         Parameters(CorpusStatsParams { reports_dir }): Parameters<CorpusStatsParams>,
     ) -> String {
         let reports_dir = resolve_path(reports_dir.as_deref(), DEFAULT_REPORTS_DIR);
-        let stats = corpus_stats_inner(&reports_dir);
-        serde_json::to_string(&stats).unwrap_or_else(|_| "{}".to_string())
+        match corpus_stats_inner(&reports_dir) {
+            Ok(stats) => serde_json::to_string(&stats).unwrap_or_else(|_| "{}".to_string()),
+            Err(error) => error.to_problem().to_json(),
+        }
     }
 }
 
@@ -490,7 +532,7 @@ mod tests {
         )
         .unwrap();
 
-        let stats = corpus_stats_inner(dir.path());
+        let stats = corpus_stats_inner(dir.path()).unwrap();
         assert_eq!(stats.topics, 1);
         assert_eq!(stats.findings, 3);
         assert_eq!(stats.stamped, 1);
@@ -499,10 +541,35 @@ mod tests {
     }
 
     #[test]
-    fn corpus_stats_on_a_missing_reports_dir_returns_zeroes_not_an_error() {
+    fn corpus_stats_on_a_missing_reports_dir_is_an_explicit_error() {
+        use mif_problem::ToProblem;
+
         let dir = tempfile::tempdir().unwrap();
-        let stats = corpus_stats_inner(&dir.path().join("nonexistent"));
+        let error = corpus_stats_inner(&dir.path().join("nonexistent")).unwrap_err();
+        assert!(matches!(error, super::McpError::ReportsDirMissing { .. }));
+
+        let problem = error.to_problem();
+        assert_eq!(problem.status, 404);
+        assert!(
+            problem.problem_type.contains("reports-dir-missing/v1"),
+            "type URI must carry the versioned slug: {}",
+            problem.problem_type
+        );
+        assert!(problem.suggested_fix.is_some());
+        assert!(!problem.code_actions.is_empty());
+        // The detail carries the underlying I/O cause (F1: source retained).
+        assert!(problem.detail.contains("nonexistent"));
+    }
+
+    #[test]
+    fn corpus_stats_on_an_empty_reports_dir_returns_zeroes() {
+        let dir = tempfile::tempdir().unwrap();
+        let stats = corpus_stats_inner(dir.path()).unwrap();
         assert_eq!(stats.topics, 0);
         assert_eq!(stats.findings, 0);
+        assert_eq!(stats.stamped, 0);
+        assert_eq!(stats.discovery, 0);
+        assert_eq!(stats.untyped, 0);
+        assert_eq!(stats.invalid, 0);
     }
 }
