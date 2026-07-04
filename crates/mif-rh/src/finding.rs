@@ -79,8 +79,9 @@ impl Finding {
     #[must_use]
     pub fn discovery_text(&self) -> String {
         self.extra
-            .values()
-            .filter_map(Value::as_str)
+            .iter()
+            .filter(|(key, _)| !key.starts_with('@'))
+            .filter_map(|(_, value)| value.as_str())
             .collect::<Vec<_>>()
             .join(" ")
     }
@@ -114,6 +115,15 @@ mod tests {
         let finding = Finding::load(file.path()).unwrap();
         assert!(!finding.has_typing_intent());
         assert_eq!(finding.discovery_text(), "x");
+    }
+
+    #[test]
+    fn discovery_text_excludes_at_prefixed_top_level_fields() {
+        let file = write_temp(
+            r#"{"@id":"f-context","@context":"https://mif-spec.dev/context.jsonld","content":"has an ISBN"}"#,
+        );
+        let finding = Finding::load(file.path()).unwrap();
+        assert_eq!(finding.discovery_text(), "has an ISBN");
     }
 
     #[test]

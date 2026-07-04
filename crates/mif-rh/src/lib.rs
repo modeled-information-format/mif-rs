@@ -103,13 +103,17 @@ pub fn build_search_index(
 ///
 /// # Errors
 ///
-/// Returns [`MifRhError::Io`] if the temporary file cannot be written or
+/// Returns [`MifRhError::JsonSerialize`] if `value` cannot be serialized,
+/// or [`MifRhError::Io`] if the temporary file cannot be written or
 /// renamed into place.
 pub fn write_json_atomic<T: serde::Serialize>(
     path: &std::path::Path,
     value: &T,
 ) -> Result<(), MifRhError> {
-    let json = serde_json::to_string_pretty(value).unwrap_or_else(|_| "null".to_string());
+    let json = serde_json::to_string_pretty(value).map_err(|source| MifRhError::JsonSerialize {
+        path: path.display().to_string(),
+        source,
+    })?;
     let tmp_path = path.with_extension("json.tmp");
     std::fs::write(&tmp_path, json).map_err(|source| MifRhError::Io {
         path: tmp_path.display().to_string(),

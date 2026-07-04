@@ -134,14 +134,20 @@ pub struct FollowupEntry {
     pub finding_id: String,
     /// The finding's file path, repo-relative if derivable.
     pub file: Option<String>,
-    /// `"discovery"`, `"untyped"`, or `"gap"`.
+    /// The record's `Basis` label (`"discovery"`, `"untyped"`,
+    /// `"unresolved"`, `"ambiguous"`, or any other `Basis` variant when
+    /// `!valid`), or the literal `"gap"` for a finding that could not be
+    /// processed at all.
     pub basis: String,
     /// The finding's entity type, if identified.
     pub entity_type: Option<String>,
     /// The resolved ontology, if any.
     pub resolved_ontology: Option<String>,
-    /// Whether the finding validated (always `false` for discovery/untyped/
-    /// gap entries by construction, included for shape parity).
+    /// Whether the finding validated. `true` for discovery/untyped entries
+    /// (included here because they lack a durable on-disk stamp, not
+    /// because they failed validation); `false` for any invalid/unresolved
+    /// entry and for `"gap"` entries, whose file could not even be
+    /// processed.
     pub valid: bool,
 }
 

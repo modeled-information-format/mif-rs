@@ -54,6 +54,18 @@ pub enum MifRhError {
         #[source]
         source: serde_json::Error,
     },
+    /// A value could not be serialized to JSON for an atomic write. This
+    /// indicates a bug in the value's `Serialize` implementation (e.g. a
+    /// non-finite float) rather than anything a caller can fix by changing
+    /// its input.
+    #[error("failed to serialize {path} as JSON: {source}")]
+    JsonSerialize {
+        /// The path the value was being written to.
+        path: String,
+        /// The underlying serialization error.
+        #[source]
+        source: serde_json::Error,
+    },
     /// An ontology pack YAML file failed to parse (the direct equivalent of
     /// `yq` failing to read an ontology's `extends`/`entity_types`/full
     /// YAML — a fail-closed abort, matching rht's own bash exit code 4).
@@ -131,6 +143,9 @@ pub enum MifRhError {
 }
 
 impl MifRhError {
+    // One arm per error variant, each a flat struct literal — length is
+    // inherent to the variant count, not a complexity signal.
+    #[allow(clippy::too_many_lines)]
     const fn meta(&self) -> ProblemMeta {
         match self {
             Self::FindingIo { .. } => ProblemMeta {
@@ -159,6 +174,13 @@ impl MifRhError {
                 version: "v1",
                 title: "Supporting file is not valid JSON",
                 status: 400,
+                exit_code: 1,
+            },
+            Self::JsonSerialize { .. } => ProblemMeta {
+                slug: "json-serialize-failure",
+                version: "v1",
+                title: "A value could not be serialized to JSON",
+                status: 500,
                 exit_code: 1,
             },
             Self::OntologyPackYaml { .. } => ProblemMeta {
@@ -239,6 +261,9 @@ impl MifRhError {
 /// its own static remediation text (everything except the delegated
 /// `Ontology`/`Embed` variants and the IO-classified variants, which
 /// `to_problem` handles separately).
+// One arm per error variant, each a flat struct literal — length is
+// inherent to the variant count, not a complexity signal.
+#[allow(clippy::too_many_lines)]
 fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
     match error {
         MifRhError::OntologyPackYaml { .. } => (
@@ -312,6 +337,19 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 Applicability::MaybeIncorrect,
             ),
             CodeAction::new("Wait and retry", "quickfix", Applicability::MaybeIncorrect),
+        ),
+        MifRhError::JsonSerialize { .. } => (
+            SuggestedFix::new(
+                "This indicates a bug in mif-rh: a value could not be serialized to JSON. \
+                 Report it upstream with the record that triggered it; no caller-side fix \
+                 exists.",
+                Applicability::Unspecified,
+            ),
+            CodeAction::new(
+                "Report the serialization bug",
+                "quickfix",
+                Applicability::Unspecified,
+            ),
         ),
         // FindingJson/Json carry no additional remediation beyond the
         // error message itself; the caller (`to_problem`) never invokes
