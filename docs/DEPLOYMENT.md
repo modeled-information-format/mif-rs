@@ -35,7 +35,7 @@ entity:
 
 Cut a tagged release of `mif-rs` and confirm it landed on every armed
 distribution channel: GitHub Releases (multi-platform binaries for
-`mif-cli`/`mif-mcp`), crates.io (all 9 workspace crates — none carries
+`mif-cli`/`mif-mcp`), crates.io (every workspace crate — none carries
 `publish = false`), and the container image on GHCR. For the full
 pre-release checklist, monitoring detail, rollback, and hotfix procedures,
 see [`RELEASING.md`](https://modeled-information-format.github.io/mif-rs/runbooks/releasing/); this guide covers the direct

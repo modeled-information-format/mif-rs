@@ -296,7 +296,7 @@ on a PR it builds without pushing (`push: ${{ github.event_name !=
 == 'true'` (dynamically resolved from `cargo metadata`, not hardcoded) —
 true from day one here, since `mif-cli` and `mif-mcp` both carry `[[bin]]`
 targets — so the docker job always runs; it is not tied to any crate's
-publish status (all 9 crates are already published — see
+publish status (every workspace crate is already published — see
 [RELEASING.md](https://modeled-information-format.github.io/mif-rs/runbooks/releasing/)).
 
 | Error | Cause | Fix |
