@@ -149,9 +149,9 @@ Run through this checklist before every release.
   just check    # fmt-check + lint + test + doc-build + deny
   just msrv     # cargo +1.92 check --all-features
   ```
-- [ ] Build both release binaries locally to verify:
+- [ ] Build all four release binaries locally to verify:
   ```bash
-  cargo build --release -p mif-cli -p mif-mcp
+  cargo build --release -p mif-cli -p mif-mcp -p mif-rh-cli -p mif-rh-mcp
   ```
 - [ ] Review `CHANGELOG.md` and recent commits since the last tag:
   ```bash
