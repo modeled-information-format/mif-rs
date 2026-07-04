@@ -38,10 +38,15 @@ enum McpError {
     },
     /// `corpus_stats` was pointed at a reports directory that does not
     /// exist or cannot be read.
-    #[error("reports directory not found or unreadable at {path}")]
+    #[error("cannot read reports directory at {path}: {source}")]
     ReportsDirMissing {
         /// The reports directory that could not be read.
         path: String,
+        /// The underlying I/O error — the problem `detail` distinguishes a
+        /// genuinely missing directory from a permission or I/O failure,
+        /// even though the status stays a coarse 404.
+        #[source]
+        source: std::io::Error,
     },
     /// Loading the ontology corpus, resolving, or reading the index failed.
     #[error(transparent)]
@@ -92,18 +97,21 @@ impl ToProblem for McpError {
                     "quickfix",
                     mif_problem::Applicability::MachineApplicable,
                 )),
+            // HasPlaceholders, not MachineApplicable: unlike IndexNotBuilt's
+            // concrete runnable command, this fix carries a slot (`<topic>`,
+            // the corpus root's location) the agent must fill itself.
             Self::ReportsDirMissing { .. } => self
                 .meta()
                 .into_details(env!("CARGO_PKG_NAME"), self.to_string())
                 .with_suggested_fix(mif_problem::SuggestedFix::new(
                     "Pass `reports_dir` pointing at the corpus root — the directory containing \
                      `<topic>/ontology-map.json` — then retry.",
-                    mif_problem::Applicability::MachineApplicable,
+                    mif_problem::Applicability::HasPlaceholders,
                 ))
                 .with_code_action(mif_problem::CodeAction::new(
                     "Point reports_dir at the corpus root",
                     "quickfix",
-                    mif_problem::Applicability::MachineApplicable,
+                    mif_problem::Applicability::HasPlaceholders,
                 )),
         }
     }
@@ -219,6 +227,15 @@ struct CorpusStatsResult {
 /// Reads every `reports/<topic>/ontology-map.json` under `reports_dir` and
 /// aggregates the same coverage buckets `review()` computes, without
 /// re-resolving anything.
+///
+/// Failure semantics are deliberately asymmetric: a missing or unreadable
+/// `reports_dir` ROOT is an explicit error (a misconfigured path must not
+/// read as an empty corpus), while an individual topic whose
+/// `ontology-map.json` is missing, unreadable, or unparsable is silently
+/// skipped — an unreviewed or mid-write topic is normal corpus state, and
+/// counting it as neither a topic nor an invalid finding matches
+/// `ontology-review.sh`'s own tolerance. Do not "fix" either side into the
+/// other's behavior.
 fn corpus_stats_inner(reports_dir: &Path) -> Result<CorpusStatsResult, McpError> {
     use mif_rh::Basis;
 
@@ -229,8 +246,9 @@ fn corpus_stats_inner(reports_dir: &Path) -> Result<CorpusStatsResult, McpError>
     let mut untyped = 0_u64;
     let mut invalid = 0_u64;
 
-    let entries = std::fs::read_dir(reports_dir).map_err(|_| McpError::ReportsDirMissing {
+    let entries = std::fs::read_dir(reports_dir).map_err(|source| McpError::ReportsDirMissing {
         path: reports_dir.display().to_string(),
+        source,
     })?;
 
     for entry in entries.filter_map(Result::ok) {
@@ -530,7 +548,15 @@ mod tests {
 
         let problem = error.to_problem();
         assert_eq!(problem.status, 404);
+        assert!(
+            problem.problem_type.contains("reports-dir-missing/v1"),
+            "type URI must carry the versioned slug: {}",
+            problem.problem_type
+        );
         assert!(problem.suggested_fix.is_some());
+        assert!(!problem.code_actions.is_empty());
+        // The detail carries the underlying I/O cause (F1: source retained).
+        assert!(problem.detail.contains("nonexistent"));
     }
 
     #[test]
