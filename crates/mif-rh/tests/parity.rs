@@ -8,20 +8,9 @@
 //! of this repo (e.g. a fresh CI checkout of `mif-rs` alone), so by default
 //! every test here skips cleanly (prints and returns) rather than failing
 //! when it can't find rht, instead of hard-failing or silently reporting
-//! false green. Override the path via `MIF_RH_PARITY_FIXTURES_ROOT` if rht
-//! lives somewhere other than the default sibling location; set
-//! `MIF_RH_PARITY_REQUIRED` to turn the skip into a hard failure.
+//! false green.
 //!
 //! Two environment variables control fixture discovery and skip behavior:
-//!
-//! - `MIF_RH_PARITY_FIXTURES_ROOT` — explicit path to an rht checkout,
-//!   overriding the default sibling-location probe.
-//! - `MIF_RH_PARITY_REQUIRED` — when set (any value), a missing checkout is
-//!   a hard test FAILURE instead of a skip. CI's dedicated parity job sets
-//!   this so the gate is fail-closed: a broken rht checkout step can never
-//!   silently turn the whole parity suite into a green no-op.
-//!
-//! Two environment variables control fixture discovery:
 //!
 //! - `MIF_RH_PARITY_FIXTURES_ROOT` — explicit path to an rht checkout,
 //!   overriding the default sibling-location probe.
