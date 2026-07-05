@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-05
+
+### Fixed
+
+- **Container chain: central signer pin bumped** — v0.3.0's four image
+  attest legs died in the pinned central `sign-and-attest` workflow,
+  whose SBOM action attempted a release attach under the caller's
+  read-only token; the org fixed the central workflow and this release
+  bumps the five pinned references to the fixed SHA. Source code is
+  identical to v0.3.0. The v0.3.0 GitHub release and crates.io channels
+  are fully attested; its container images remain unattested because
+  tag-triggered runs are locked to the workflow content at the tag.
+
+
 ## [0.3.0] - 2026-07-04
 
 ### Added

@@ -115,7 +115,7 @@ jobs:
       contents: read
     # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      modeled-information-format/.github/.github/workflows/pin-check.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
+      modeled-information-format/.github/.github/workflows/pin-check.yml@9de9adbfe2b8efed49cb7f666123d40ec6dd1970
 
   # Required check context: "validate-workflows / actionlint" — lints every
   # workflow file for syntax/semantic errors (separate concern from pin-check's
@@ -129,7 +129,7 @@ jobs:
       contents: read
     # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-actionlint.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
+      modeled-information-format/.github/.github/workflows/reusable-actionlint.yml@9de9adbfe2b8efed49cb7f666123d40ec6dd1970
 
   # -----------------------------------------------------------
   # Docker — after CI; PR = build-only, push on main/tags
@@ -188,7 +188,7 @@ jobs:
       contents: read
     # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      modeled-information-format/.github/.github/workflows/sign-and-attest.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
+      modeled-information-format/.github/.github/workflows/sign-and-attest.yml@9de9adbfe2b8efed49cb7f666123d40ec6dd1970
     with:
       image-name: ghcr.io/${{ github.repository }}/${{ matrix.bin }}
       image-digest: >-
@@ -213,7 +213,7 @@ jobs:
       contents: read
     # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      modeled-information-format/.github/.github/workflows/verify-attestation.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
+      modeled-information-format/.github/.github/workflows/verify-attestation.yml@9de9adbfe2b8efed49cb7f666123d40ec6dd1970
     with:
       image-ref: >-
         ghcr.io/${{ github.repository }}/${{ matrix.bin }}@${{
@@ -271,7 +271,7 @@ jobs:
       contents: read
     # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
+      modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@9de9adbfe2b8efed49cb7f666123d40ec6dd1970
     with:
       subject-name: >-
         ghcr.io/${{ github.repository }}/${{
