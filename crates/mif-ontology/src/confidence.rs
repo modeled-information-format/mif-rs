@@ -114,6 +114,14 @@ pub struct CalibrationConfig {
     /// The calibration method identifier (e.g. `stamped-quantile-v1`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
+    /// Whether curated `negative_examples` were among the candidates that
+    /// scored the samples this artifact was swept from (the
+    /// negative-demotion-v1 gate — see [`negative_demotes`]; demotion
+    /// changes tiers, never scores). `false` when no pack that scored a
+    /// swept sample carries negatives — that scoring is byte-identical to
+    /// the pre-negatives engine.
+    #[serde(default)]
+    pub negatives_active: bool,
     /// Tier-3 clustering knobs.
     #[serde(default)]
     pub expansion: ExpansionConfig,
@@ -133,6 +141,7 @@ impl Default for CalibrationConfig {
             calibrated_at: None,
             sample_size: None,
             method: None,
+            negatives_active: false,
             expansion: ExpansionConfig::default(),
         }
     }
@@ -257,6 +266,53 @@ pub fn assign_tier(
     } else {
         ConfidenceTier::TriggerExpansion
     }
+}
+
+/// Whether a candidate's curated negative evidence demotes it — the
+/// negative-demotion-v1 rule (MIF ADR-020's boundary-sharpening use of
+/// `negative_examples`).
+///
+/// `negative_similarity` is the query's maximum similarity to any of the
+/// candidate type's curated negative examples (`None` when the type
+/// carries none). A candidate is demoted when that similarity **meets or
+/// exceeds** its positive score: the query resembles what the type is NOT
+/// at least as much as what it is, so however high the raw score, the
+/// candidate must not auto-classify.
+///
+/// Deliberately a demotion *gate*, not a score penalty: raw scores stay
+/// untouched, so calibration sweeps keep measuring the same score
+/// distribution whether or not negatives participate, and a demotion is
+/// fully attributable to the curated evidence rather than folded invisibly
+/// into a mutated number. A calibrated penalty weight is a possible v2,
+/// pending the epic's before/after evidence.
+#[must_use]
+pub fn negative_demotes(score: f32, negative_similarity: Option<f32>) -> bool {
+    negative_similarity.is_some_and(|neg| neg >= score)
+}
+
+/// [`assign_tier`] extended with the negative-demotion-v1 gate.
+///
+/// A demoted candidate (see [`negative_demotes`]) is barred from
+/// [`ConfidenceTier::AutoClassifyEligible`] and lands in the same band any
+/// non-top candidate would: flag-for-review at or above `cal.tier2_floor`,
+/// trigger-expansion below it. With `negative_similarity: None` this is
+/// exactly [`assign_tier`] — the no-negatives path is byte-identical.
+#[must_use]
+pub fn assign_tier_with_negatives(
+    rank: usize,
+    score: f32,
+    second_best: Option<f32>,
+    negative_similarity: Option<f32>,
+    cal: &CalibrationConfig,
+) -> ConfidenceTier {
+    if negative_demotes(score, negative_similarity) {
+        return if score >= cal.tier2_floor {
+            ConfidenceTier::FlagForReview
+        } else {
+            ConfidenceTier::TriggerExpansion
+        };
+    }
+    assign_tier(rank, score, second_best, cal)
 }
 
 /// A similarity band: the same two floors as the classification tiers,
@@ -402,6 +458,72 @@ mod tests {
     fn below_tier_two_floor_is_trigger_expansion() {
         let tier = assign_tier(0, 0.30, Some(0.10), &cal());
         assert_eq!(tier, ConfidenceTier::TriggerExpansion);
+    }
+
+    #[test]
+    fn negative_demotes_only_when_negative_similarity_reaches_the_score() {
+        assert!(!super::negative_demotes(0.90, None));
+        assert!(!super::negative_demotes(0.90, Some(0.89)));
+        assert!(super::negative_demotes(0.90, Some(0.90)));
+        assert!(super::negative_demotes(0.90, Some(0.95)));
+    }
+
+    #[test]
+    fn a_demoted_top_candidate_caps_at_review_despite_floor_and_margin() {
+        // Clears the tier-1 floor with a comfortable margin, but the query
+        // sits closer to a curated negative than to the type itself.
+        let tier = super::assign_tier_with_negatives(0, 0.90, Some(0.70), Some(0.92), &cal());
+        assert_eq!(tier, ConfidenceTier::FlagForReview);
+    }
+
+    #[test]
+    fn a_demoted_low_scorer_still_falls_through_to_expansion() {
+        let tier = super::assign_tier_with_negatives(0, 0.30, Some(0.10), Some(0.40), &cal());
+        assert_eq!(tier, ConfidenceTier::TriggerExpansion);
+    }
+
+    #[test]
+    fn no_negative_similarity_is_byte_identical_to_assign_tier() {
+        // The unpenalized path must be exactly assign_tier across the
+        // whole score range, at both rank 0 and rank 1.
+        let cal = cal();
+        for rank in [0_usize, 1] {
+            for step in 0_i16..=200 {
+                let score = f32::from(step) / 100.0 - 1.0;
+                assert_eq!(
+                    super::assign_tier_with_negatives(rank, score, Some(score - 0.2), None, &cal),
+                    assign_tier(rank, score, Some(score - 0.2), &cal),
+                    "diverged at rank {rank} score {score}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_unpenalized_candidate_with_weak_negative_evidence_keeps_tier_one() {
+        // Negative evidence exists but sits BELOW the positive score: no
+        // demotion, tier 1 still reachable.
+        let tier = super::assign_tier_with_negatives(0, 0.90, Some(0.70), Some(0.50), &cal());
+        assert_eq!(tier, ConfidenceTier::AutoClassifyEligible);
+    }
+
+    #[test]
+    fn negatives_active_defaults_false_and_roundtrips() {
+        assert!(!CalibrationConfig::default().negatives_active);
+        // An old artifact without the field still loads (serde default)...
+        let mut value: serde_json::Value =
+            serde_json::to_value(CalibrationConfig::default()).unwrap();
+        value.as_object_mut().unwrap().remove("negatives_active");
+        let loaded: CalibrationConfig = serde_json::from_value(value).unwrap();
+        assert!(!loaded.negatives_active);
+        // ...and a new one carrying true roundtrips.
+        let written = CalibrationConfig {
+            negatives_active: true,
+            ..CalibrationConfig::default()
+        };
+        let reread: CalibrationConfig =
+            serde_json::from_value(serde_json::to_value(&written).unwrap()).unwrap();
+        assert!(reread.negatives_active);
     }
 
     #[test]

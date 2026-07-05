@@ -45,7 +45,7 @@ pub mod suggest;
 
 pub use calibrate::{
     CONFUSION_REPRESENTATIVES, CalibrateOptions, CalibrationSample, ConfusionPair, ConfusionReport,
-    collect_topic_samples, confusions, subsample, sweep,
+    collect_topic_samples, confusions, packs_carry_negatives, subsample, sweep,
 };
 pub use catalog::Catalog;
 pub use config::HarnessConfig;

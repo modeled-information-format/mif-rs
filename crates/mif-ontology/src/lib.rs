@@ -34,8 +34,8 @@ use mif_problem::{
 use serde::Deserialize;
 
 pub use confidence::{
-    CalibrationConfig, ConfidenceTier, ExpansionConfig, SimilarityBand, assign_tier, band_by_score,
-    cluster_by_mutual_similarity,
+    CalibrationConfig, ConfidenceTier, ExpansionConfig, SimilarityBand, assign_tier,
+    assign_tier_with_negatives, band_by_score, cluster_by_mutual_similarity, negative_demotes,
 };
 pub use entity_type::EntityType;
 

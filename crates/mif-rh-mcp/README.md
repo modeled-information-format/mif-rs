@@ -20,7 +20,11 @@ matches against each entity type's positive embedding document
 (`description` + `aliases` + `exemplars`), and only a top candidate that
 clears both the calibrated floor and a top-1/top-2 margin is
 `auto_classify_eligible` — which is still a hypothesis, never an
-auto-stamp. `find_similar` carries a similarity band instead
+auto-stamp. Types carrying curated `negative_examples` also pass through
+the negative-demotion-v1 gate: a candidate whose query sits at least as
+close to one of its negatives as to its positive document is barred from
+tier 1 and carries `negative_demoted: true`; types without negatives score
+exactly as before. `find_similar` carries a similarity band instead
 (`near_duplicate`/`related`/`weak`, under the same calibrated floors) —
 deliberately not the classification-tier vocabulary, because similarity
 recall is not a classification decision.
