@@ -322,10 +322,14 @@ pub fn packs_carry_negatives<'a>(packs: impl IntoIterator<Item = &'a crate::Onto
         .into_iter()
         .flat_map(|pack| &pack.entity_types)
         .any(|entity_type| {
-            entity_type
-                .negative_examples
-                .iter()
-                .any(|negative| !negative.trim().is_empty())
+            // A type with no positive embedding signal is skipped by
+            // build_candidates and never scores, so its negatives cannot
+            // have participated however curated they are.
+            entity_type.embedding_doc().is_some()
+                && entity_type
+                    .negative_examples
+                    .iter()
+                    .any(|negative| !negative.trim().is_empty())
         })
 }
 
@@ -639,6 +643,26 @@ mod tests {
         assert_eq!(report.version, "confusions-v1");
         assert_eq!(report.sample_count, 1);
         assert!(report.pairs.is_empty());
+    }
+
+    #[test]
+    fn negatives_on_a_signal_less_type_never_claim_participation() {
+        // The type carries curated negatives but no description/aliases/
+        // exemplars: build_candidates skips it, so its negatives can never
+        // score and must not flip negatives_active.
+        let signal_less = crate::ontology_pack::parse_pack(
+            "ontology:\n  id: p\n  version: \"0.1.0\"\nentity_types:\n  - name: ghost\n    negative_examples: [a near miss]\n",
+            "p.yaml",
+        )
+        .unwrap();
+        assert!(!super::packs_carry_negatives([&signal_less]));
+
+        let scorable = crate::ontology_pack::parse_pack(
+            "ontology:\n  id: q\n  version: \"0.1.0\"\nentity_types:\n  - name: real\n    description: A described type\n    negative_examples: [a near miss]\n",
+            "q.yaml",
+        )
+        .unwrap();
+        assert!(super::packs_carry_negatives([&scorable]));
     }
 
     #[test]

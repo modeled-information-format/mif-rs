@@ -164,23 +164,15 @@ pub fn suggest_from_candidates(
     cal: &CalibrationConfig,
     limit: usize,
 ) -> Vec<TypeSuggestion> {
-    let mut scored: Vec<(&str, &str, f32, Option<f32>)> = set
+    let mut scored: Vec<(&str, &str, f32, &[Vec<f32>])> = set
         .candidates
         .iter()
         .map(|candidate| {
-            // The candidate's negative evidence: the query's best
-            // similarity to any single curated near-miss (None when the
-            // type carries none — the gate then never engages).
-            let negative_similarity = candidate
-                .negative_vectors
-                .iter()
-                .map(|negative| cosine_similarity(query_vector, negative))
-                .reduce(f32::max);
             (
                 candidate.name.as_str(),
                 candidate.ontology_id.as_str(),
                 cosine_similarity(query_vector, &candidate.vector),
-                negative_similarity,
+                candidate.negative_vectors.as_slice(),
             )
         })
         .collect();
@@ -197,32 +189,46 @@ pub fn suggest_from_candidates(
             .then_with(|| a.0.cmp(b.0))
     });
     let second_best = scored.get(1).map(|(_, _, score, _)| *score);
+    // Negative evidence is computed only for the candidates actually
+    // returned: a truncated-away candidate's tier is discarded, and a
+    // demoted non-top candidate lands in the same band assign_tier would
+    // give it anyway, so scoring negatives for the full set would be pure
+    // waste on large ontologies. The margin above was already captured
+    // against the true second-best of the full ranking.
+    scored.truncate(limit);
 
-    let mut suggestions: Vec<TypeSuggestion> = scored
+    scored
         .into_iter()
         .enumerate()
         .map(
-            |(rank, (entity_type, ontology_id, score, negative_similarity))| TypeSuggestion {
-                entity_type: entity_type.to_string(),
-                ontology_id: ontology_id.to_string(),
-                score,
-                tier: assign_tier_with_negatives(
-                    rank,
+            |(rank, (entity_type, ontology_id, score, negative_vectors))| {
+                // The candidate's negative evidence: the query's best
+                // similarity to any single curated near-miss (None when the
+                // type carries none — the gate then never engages).
+                let negative_similarity = negative_vectors
+                    .iter()
+                    .map(|negative| cosine_similarity(query_vector, negative))
+                    .reduce(f32::max);
+                TypeSuggestion {
+                    entity_type: entity_type.to_string(),
+                    ontology_id: ontology_id.to_string(),
                     score,
-                    second_best,
-                    negative_similarity,
-                    cal,
-                ),
-                margin: (rank == 0)
-                    .then(|| second_best.map(|second| score - second))
-                    .flatten(),
-                calibrated: set.calibrated,
-                negative_demoted: mif_ontology::negative_demotes(score, negative_similarity),
+                    tier: assign_tier_with_negatives(
+                        rank,
+                        score,
+                        second_best,
+                        negative_similarity,
+                        cal,
+                    ),
+                    margin: (rank == 0)
+                        .then(|| second_best.map(|second| score - second))
+                        .flatten(),
+                    calibrated: set.calibrated,
+                    negative_demoted: mif_ontology::negative_demotes(score, negative_similarity),
+                }
             },
         )
-        .collect();
-    suggestions.truncate(limit);
-    suggestions
+        .collect()
 }
 
 /// Suggests candidate entity types for `text` against `ctx.topic`'s
@@ -230,10 +236,11 @@ pub fn suggest_from_candidates(
 /// tiers.
 ///
 /// Entity types with no positive embedding signal (no description, aliases,
-/// or exemplars) are skipped. Tier assignment happens over the full ranked
-/// candidate set *before* truncation to `limit`, so the top candidate's
-/// margin is always measured against the true second-best, not the best
-/// survivor of an early cut.
+/// or exemplars) are skipped. The ranking and the top candidate's margin
+/// are computed over the full candidate set *before* truncation to
+/// `limit`, so the margin is always measured against the true second-best,
+/// not the best survivor of an early cut; per-candidate negative evidence
+/// and tiers are then evaluated for the returned candidates only.
 ///
 /// The second-best candidate includes duplicate declarations of the same
 /// type name across allowed packs: two packs declaring near-identical
