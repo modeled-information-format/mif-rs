@@ -189,16 +189,17 @@ jobs:
         # dependencies (every release to date needed manual re-dispatches
         # for exactly this). Each retry publishes only what is still
         # missing (already-live versions are skipped by cargo), so the
-        # loop converges; it fails for real when an attempt makes no
-        # progress and the plan still cannot drain.
+        # loop converges; after five exhausted attempts the job fails.
         run: |
-          set -uo pipefail
+          set -euo pipefail
           for attempt in 1 2 3 4 5; do
             if cargo publish --token "$CARGO_REGISTRY_TOKEN" ${{ steps.unpublished.outputs.args }}; then
               exit 0
             fi
-            echo "publish attempt ${attempt} did not drain the plan; waiting for registry propagation"
-            sleep 60
+            if [ "$attempt" -lt 5 ]; then
+              echo "publish attempt ${attempt} did not drain the plan; waiting for registry propagation"
+              sleep 60
+            fi
           done
           echo "::error::publish plan failed to drain after 5 attempts"
           exit 1
