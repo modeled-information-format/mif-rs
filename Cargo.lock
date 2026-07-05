@@ -1471,7 +1471,7 @@ checksum = "c2a86d3146ed3995b5913c414f6664344b9617457320782e64f0bb44afd49d74"
 
 [[package]]
 name = "mif-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "clap",
@@ -1488,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "mif-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1496,7 +1496,7 @@ dependencies = [
 
 [[package]]
 name = "mif-embed"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -1511,7 +1511,7 @@ dependencies = [
 
 [[package]]
 name = "mif-frontmatter"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mif-problem",
  "mif-schema",
@@ -1523,7 +1523,7 @@ dependencies = [
 
 [[package]]
 name = "mif-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "mif-ontology"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mif-core",
  "mif-problem",
@@ -1557,7 +1557,7 @@ dependencies = [
 
 [[package]]
 name = "mif-problem"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1566,7 +1566,7 @@ dependencies = [
 
 [[package]]
 name = "mif-rh"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "jsonschema",
@@ -1586,7 +1586,7 @@ dependencies = [
 
 [[package]]
 name = "mif-rh-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "mif-embed",
@@ -1600,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "mif-rh-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "mif-embed",
@@ -1617,7 +1617,7 @@ dependencies = [
 
 [[package]]
 name = "mif-schema"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "jsonschema",
  "mif-core",
@@ -1628,7 +1628,7 @@ dependencies = [
 
 [[package]]
 name = "mif-store"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mif-problem",
  "rusqlite",
@@ -1709,9 +1709,9 @@ dependencies = [
 
 [[package]]
 name = "num-bigint"
-version = "0.4.7"
+version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c863e9ab5e7bf9c99ba75e1050f1e4d624ae87ed3532d6238ffbdc7b585dbbe6"
+checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
 dependencies = [
  "num-integer",
  "num-traits",

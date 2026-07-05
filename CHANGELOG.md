@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-04
+
+### Added
+
+- **mif-rh**: harness-ontology engine crate family (#20-#29), the Rust
+  implementation of rht's ontology classification pipeline:
+  - `mif-rh`: deterministic resolve/review classification with byte-parity
+    against rht's bash implementation (fail-closed parity gate in CI against
+    a pinned rht checkout), SQLite finding index with semantic search, a
+    tier-2 suggestion queue, tier-3 miss recording with mutual-similarity
+    clustering, and `stamped-quantile-v1` threshold calibration
+  - `mif-rh-cli`: `resolve`, `review` (`--suggest`, `--strict`,
+    `--followup`), `suggest-type`, `calibrate`, `expansion-candidates`,
+    plus binary-level parity tests and a Windows relationship-script
+    failure-path test
+  - `mif-rh-mcp`: MCP server exposing the engine read-only, with explicit
+    problem+json errors (`corpus_stats` now fails loudly on a missing
+    reports directory instead of returning zeroes)
+- **mif-ontology**: confidence-tiered entity-type classification capability
+  (MIF ADR-020): `EntityType` with `aliases`/`exemplars`/
+  `negative_examples` and `embedding_doc()`, `ConfidenceTier`,
+  `CalibrationConfig` (recalibratable artifact, fail-closed
+  `CalibrationInvalid`), `assign_tier` (TAC-KBP floor+margin gate),
+  `SimilarityBand`, and mutual-similarity clustering
+- **mif-embed**: public `MODEL_ID` constant naming the pinned embedding
+  model
+- M2 review-performance benchmark harness (`just bench-review`; 4,354
+  findings in 2.02 s seeded result) and the M3 cross-topic search eval
+  over rht's known-similar-pairs fixture, both wired fail-closed in CI
+- ADRs 0019 (mif-rh crates packaged in this workspace) and 0020
+  (mif-rh-mcp stdio-only transport)
+
+## [0.2.0] - 2026-07-04
+
 ### Added
 
 - **ingest**: MIF document ingestion, embedding, and semantic search pipeline
