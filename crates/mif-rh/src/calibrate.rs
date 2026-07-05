@@ -28,10 +28,20 @@ use crate::suggest::{SUGGESTION_DEPTH, build_candidates, suggest_from_candidates
 use crate::{Finding, index_text, review::list_finding_files};
 
 /// One labeled calibration sample: a stamped finding's scoring outcome.
+///
+/// Non-exhaustive: samples are produced by [`collect_topic_samples`], not
+/// constructed downstream, and the field set grows as calibration learns
+/// to measure more (this release added the gold/top-1 types) — downstream
+/// crates read fields and must stay compilable across such additions.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize)]
 pub struct CalibrationSample {
     /// The stamped finding.
     pub finding_id: String,
+    /// The finding's stamped (ground-truth) entity type.
+    pub entity_type_gold: String,
+    /// The entity type the top candidate named.
+    pub entity_type_top1: String,
     /// The top candidate's score.
     pub top1_score: f32,
     /// The top candidate's lead over the second-best; `None` when the
@@ -143,6 +153,8 @@ pub fn collect_topic_samples(
         };
         samples.push(CalibrationSample {
             finding_id: finding.id.clone(),
+            entity_type_gold: gold.to_string(),
+            entity_type_top1: top.entity_type.clone(),
             top1_score: top.score,
             top1_margin: top.margin,
             top1_correct: top.entity_type == gold,
@@ -273,6 +285,94 @@ pub fn sweep(
     })
 }
 
+/// Representative finding ids kept per confusion pair — enough to open a
+/// handful of real findings during curation without dumping the corpus.
+pub const CONFUSION_REPRESENTATIVES: usize = 5;
+
+/// One confusable type pair from the stamped-sample set: `count` samples
+/// stamped `gold` scored `top1` as their top candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConfusionPair {
+    /// The stamped (ground-truth) entity type the samples carry.
+    pub gold: String,
+    /// The entity type that incorrectly took top-1.
+    pub top1: String,
+    /// How many samples confused this pair.
+    pub count: usize,
+    /// Representative finding ids (lexicographically first
+    /// [`CONFUSION_REPRESENTATIVES`] of the pair's samples), for opening
+    /// real findings during curation.
+    pub finding_ids: Vec<String>,
+}
+
+/// The confusion-matrix artifact `calibrate --confusions` writes.
+///
+/// This grounds the human curation MIF ADR-020 mandates for
+/// `negative_examples`. Derived data — consumers regenerate it from their
+/// corpus and never commit it.
+///
+/// JSON shape (`version` is `"confusions-v1"`):
+///
+/// ```json
+/// {
+///   "version": "confusions-v1",
+///   "sample_count": 128,
+///   "pairs": [
+///     {"gold": "curriculum", "top1": "title", "count": 7,
+///      "finding_ids": ["f-012", "f-044", "f-051", "f-070", "f-093"]}
+///   ]
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfusionReport {
+    /// Artifact schema version, always `"confusions-v1"`.
+    pub version: &'static str,
+    /// How many calibration samples the pairs were derived from.
+    pub sample_count: usize,
+    /// Ranked confusable pairs, most frequent first.
+    pub pairs: Vec<ConfusionPair>,
+}
+
+/// Derives the ranked confusion matrix from calibration samples.
+///
+/// Every incorrect top-1 groups under its `(gold, top1)` pair, ranked by
+/// count descending, ties broken lexicographically by `(gold, top1)`.
+/// Deterministic for a fixed sample set: representative ids are the
+/// lexicographically first [`CONFUSION_REPRESENTATIVES`] of each pair.
+#[must_use]
+pub fn confusions(samples: &[CalibrationSample]) -> ConfusionReport {
+    let mut by_pair: std::collections::BTreeMap<(&str, &str), Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for s in samples.iter().filter(|s| !s.top1_correct) {
+        by_pair
+            .entry((s.entity_type_gold.as_str(), s.entity_type_top1.as_str()))
+            .or_default()
+            .push(s.finding_id.as_str());
+    }
+    let mut pairs: Vec<ConfusionPair> = by_pair
+        .into_iter()
+        .map(|((gold, top1), mut ids)| {
+            ids.sort_unstable();
+            let count = ids.len();
+            ids.truncate(CONFUSION_REPRESENTATIVES);
+            ConfusionPair {
+                gold: gold.to_string(),
+                top1: top1.to_string(),
+                count,
+                finding_ids: ids.into_iter().map(str::to_string).collect(),
+            }
+        })
+        .collect();
+    // BTreeMap iteration already yields (gold, top1) ascending, so the
+    // stable sort's tie-break order is exactly the lexicographic one.
+    pairs.sort_by_key(|p| std::cmp::Reverse(p.count));
+    ConfusionReport {
+        version: "confusions-v1",
+        sample_count: samples.len(),
+        pairs,
+    }
+}
+
 /// `num / den` as `f32`; sample counts are far below `f32`'s exact-integer
 /// range.
 fn ratio(num: usize, den: usize) -> f32 {
@@ -324,7 +424,10 @@ fn now_rfc3339() -> String {
 mod tests {
     use std::path::Path;
 
-    use super::{CalibrateOptions, CalibrationSample, subsample, sweep};
+    use super::{
+        CONFUSION_REPRESENTATIVES, CalibrateOptions, CalibrationSample, confusions, subsample,
+        sweep,
+    };
 
     fn sample(
         id: &str,
@@ -333,8 +436,35 @@ mod tests {
         correct: bool,
         gold_in: bool,
     ) -> CalibrationSample {
+        typed_sample(
+            id,
+            "gold-type",
+            "other-type",
+            score,
+            margin,
+            correct,
+            gold_in,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn typed_sample(
+        id: &str,
+        gold: &str,
+        top1: &str,
+        score: f32,
+        margin: f32,
+        correct: bool,
+        gold_in: bool,
+    ) -> CalibrationSample {
         CalibrationSample {
             finding_id: id.to_string(),
+            entity_type_gold: gold.to_string(),
+            entity_type_top1: if correct {
+                gold.to_string()
+            } else {
+                top1.to_string()
+            },
             top1_score: score,
             top1_margin: Some(margin),
             top1_correct: correct,
@@ -385,6 +515,8 @@ mod tests {
         // exclude it and overstate what the gate delivers.
         let lone = CalibrationSample {
             finding_id: "lone".to_string(),
+            entity_type_gold: "gold-type".to_string(),
+            entity_type_top1: "gold-type".to_string(),
             top1_score: 0.90,
             top1_margin: None,
             top1_correct: true,
@@ -424,6 +556,63 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("precision"));
+    }
+
+    #[test]
+    fn confusions_rank_known_pairs_by_count_then_lexicographically() {
+        // A fixture corpus with a known confusion structure: three
+        // curriculum->title misses, one title->curriculum miss, one
+        // correct sample that must not appear at all.
+        let samples = [
+            typed_sample("f-3", "curriculum", "title", 0.7, 0.05, false, true),
+            typed_sample("f-1", "curriculum", "title", 0.6, 0.04, false, true),
+            typed_sample("f-2", "curriculum", "title", 0.8, 0.06, false, true),
+            typed_sample("f-4", "title", "curriculum", 0.5, 0.02, false, true),
+            typed_sample("f-5", "title", "title", 0.9, 0.20, true, true),
+        ];
+        let report = confusions(&samples);
+
+        assert_eq!(report.version, "confusions-v1");
+        assert_eq!(report.sample_count, 5);
+        assert_eq!(report.pairs.len(), 2);
+        assert_eq!(report.pairs[0].gold, "curriculum");
+        assert_eq!(report.pairs[0].top1, "title");
+        assert_eq!(report.pairs[0].count, 3);
+        // Representatives are the lexicographically first ids, not
+        // insertion order.
+        assert_eq!(report.pairs[0].finding_ids, ["f-1", "f-2", "f-3"]);
+        assert_eq!(report.pairs[1].count, 1);
+        assert_eq!(report.pairs[1].gold, "title");
+    }
+
+    #[test]
+    fn confusions_are_deterministic_and_cap_representatives() {
+        let build = |order: &[usize]| {
+            order
+                .iter()
+                .map(|i| typed_sample(&format!("f-{i}"), "a", "b", 0.5, 0.0, false, true))
+                .collect::<Vec<_>>()
+        };
+        // Same samples in two different orders must yield identical reports.
+        let forward = confusions(&build(&[1, 2, 3, 4, 5, 6, 7, 8]));
+        let reverse = confusions(&build(&[8, 7, 6, 5, 4, 3, 2, 1]));
+        assert_eq!(forward.pairs, reverse.pairs);
+
+        assert_eq!(forward.pairs[0].count, 8);
+        assert_eq!(
+            forward.pairs[0].finding_ids.len(),
+            CONFUSION_REPRESENTATIVES
+        );
+        assert_eq!(forward.pairs[0].finding_ids[0], "f-1");
+    }
+
+    #[test]
+    fn confusions_on_an_all_correct_corpus_are_empty_but_versioned() {
+        let samples = [sample("a", 0.9, 0.1, true, true)];
+        let report = confusions(&samples);
+        assert_eq!(report.version, "confusions-v1");
+        assert_eq!(report.sample_count, 1);
+        assert!(report.pairs.is_empty());
     }
 
     #[test]

@@ -43,7 +43,10 @@ pub mod resolve;
 pub mod review;
 pub mod suggest;
 
-pub use calibrate::{CalibrateOptions, CalibrationSample, collect_topic_samples, subsample, sweep};
+pub use calibrate::{
+    CONFUSION_REPRESENTATIVES, CalibrateOptions, CalibrationSample, ConfusionPair, ConfusionReport,
+    collect_topic_samples, confusions, subsample, sweep,
+};
 pub use catalog::Catalog;
 pub use config::HarnessConfig;
 pub use error::MifRhError;
