@@ -113,7 +113,7 @@ jobs:
       || inputs.stage == 'ci'
     permissions:
       contents: read
-    # modeled-information-format/.github main @ e50b004c (2026-07-01)
+    # modeled-information-format/.github main @ 9de9adbf (2026-07-05)
     uses: >-
       modeled-information-format/.github/.github/workflows/pin-check.yml@9de9adbfe2b8efed49cb7f666123d40ec6dd1970
 
@@ -127,7 +127,7 @@ jobs:
       || inputs.stage == 'ci'
     permissions:
       contents: read
-    # modeled-information-format/.github main @ e50b004c (2026-07-01)
+    # modeled-information-format/.github main @ 9de9adbf (2026-07-05)
     uses: >-
       modeled-information-format/.github/.github/workflows/reusable-actionlint.yml@9de9adbfe2b8efed49cb7f666123d40ec6dd1970
 
@@ -186,7 +186,7 @@ jobs:
       attestations: write
       packages: write
       contents: read
-    # modeled-information-format/.github main @ e50b004c (2026-07-01)
+    # modeled-information-format/.github main @ 9de9adbf (2026-07-05)
     uses: >-
       modeled-information-format/.github/.github/workflows/sign-and-attest.yml@9de9adbfe2b8efed49cb7f666123d40ec6dd1970
     with:
@@ -211,7 +211,7 @@ jobs:
       attestations: read
       packages: read
       contents: read
-    # modeled-information-format/.github main @ e50b004c (2026-07-01)
+    # modeled-information-format/.github main @ 9de9adbf (2026-07-05)
     uses: >-
       modeled-information-format/.github/.github/workflows/verify-attestation.yml@9de9adbfe2b8efed49cb7f666123d40ec6dd1970
     with:
@@ -269,7 +269,7 @@ jobs:
       id-token: write
       attestations: write
       contents: read
-    # modeled-information-format/.github main @ e50b004c (2026-07-01)
+    # modeled-information-format/.github main @ 9de9adbf (2026-07-05)
     uses: >-
       modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@9de9adbfe2b8efed49cb7f666123d40ec6dd1970
     with:
