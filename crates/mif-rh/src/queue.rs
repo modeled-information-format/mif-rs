@@ -253,6 +253,7 @@ mod tests {
                 tier: ConfidenceTier::FlagForReview,
                 margin: None,
                 calibrated: false,
+                negative_demoted: false,
             }],
             status: status.to_string(),
         }

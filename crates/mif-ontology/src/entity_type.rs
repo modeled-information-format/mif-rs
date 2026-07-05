@@ -44,10 +44,11 @@ pub struct EntityType {
     /// Curated near-misses from the ontology's most confusable type pairs:
     /// texts that resemble this type but do NOT denote it. Never part of
     /// the positive embedding document (see [`EntityType::embedding_doc`]);
-    /// reserved for decision-boundary sharpening. Parsed and exposed since
-    /// ontology schema v1.1, not yet consumed by any scoring path in this
-    /// workspace — wiring it into scoring requires calibration data to
-    /// validate the demotion rule against, so it is deliberately deferred.
+    /// consumed by the negative-demotion-v1 gate
+    /// ([`crate::confidence::negative_demotes`]): a candidate whose query
+    /// sits at least as close to one of these as to the type's positive
+    /// document is barred from auto-classify eligibility. Types carrying
+    /// none score exactly as before the gate existed.
     #[serde(default)]
     pub negative_examples: Vec<String>,
     /// The `{required, properties}` shape a finding's `entity` payload is

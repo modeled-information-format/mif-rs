@@ -651,7 +651,30 @@ fn calibrate_cmd(args: &CalibrateArgs<'_>) -> Result<Outcome, CliError> {
         String::new()
     };
 
-    let cal = mif_rh::sweep(&samples, &opts, &out)?;
+    let mut cal = mif_rh::sweep(&samples, &opts, &out)?;
+    // Record whether curated negatives were among the candidates that
+    // scored the swept samples: only packs resolved for topics actually
+    // represented in the final (post-subsample) sample set count — an
+    // enabled-but-unbound negatives pack must not claim participation.
+    let scored_topics: std::collections::BTreeSet<&str> =
+        samples.iter().map(|s| s.topic.as_str()).collect();
+    let mut negatives_active = false;
+    for topic in &config.topics {
+        if !scored_topics.contains(topic.id.as_str()) {
+            continue;
+        }
+        let ctx = mif_rh::ResolveContext {
+            topic: &topic.id,
+            catalog: &catalog,
+            config: &config,
+            ontology_packs: &ontology_packs,
+        };
+        if mif_rh::packs_carry_negatives(mif_rh::build_allowed(&ctx)?) {
+            negatives_active = true;
+            break;
+        }
+    }
+    cal.negatives_active = negatives_active;
 
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent).map_err(|source| mif_rh::MifRhError::Io {
@@ -1191,6 +1214,9 @@ mod tests {
         assert_eq!(cal.method.as_deref(), Some("stamped-quantile-v1"));
         assert_eq!(cal.sample_size, Some(1));
         assert!(cal.tier2_floor <= cal.tier1_floor);
+        // The fixture pack carries no negative_examples, so the artifact
+        // records that the demotion gate did not participate.
+        assert!(!cal.negatives_active);
 
         // The confusion export was written alongside the artifact: the
         // fixture's one sample is correct, so the report is versioned,
@@ -1201,6 +1227,105 @@ mod tests {
         assert_eq!(report["version"], "confusions-v1");
         assert_eq!(report["sample_count"], 1);
         assert!(report["pairs"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn calibrate_records_negatives_participation_in_the_artifact() {
+        if mif_embed::Embedder::load().is_err() {
+            eprintln!("skipping: embedding model unavailable in this environment");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture(dir.path());
+        // Enrich the pack WITH a curated negative: the artifact must record
+        // that the demotion gate participated in the swept scores.
+        fs::write(
+            dir.path().join("packs/edu-fixture.yaml"),
+            "ontology:\n  id: edu-fixture\n  version: \"0.1.0\"\nentity_types:\n  - name: title\n    description: A published educational title\n    aliases: [textbook]\n    negative_examples:\n      - A lesson plan for teachers\n    schema:\n      required: [name]\n      properties: {name: {type: string}}\n",
+        )
+        .unwrap();
+
+        resolve(
+            &dir.path().join("reports/edu/findings/good.json"),
+            Some("edu"),
+            Some(&dir.path().join(".claude/enabled-packs.json")),
+            Some(&dir.path().join("harness.config.json")),
+            Some(&dir.path().join("reports/edu/ontology-map.json")),
+            Some(dir.path()),
+        )
+        .unwrap();
+
+        let out = dir.path().join("reports/_meta/confidence-calibration.json");
+        let outcome = calibrate_cmd(&CalibrateArgs {
+            reports_dir: Some(&dir.path().join("reports")),
+            config: Some(&dir.path().join("harness.config.json")),
+            catalog: Some(&dir.path().join(".claude/enabled-packs.json")),
+            root: Some(dir.path()),
+            target_precision: 1.0,
+            tier2_target: 0.5,
+            sample: None,
+            seed: 0,
+            out: Some(&out),
+            confusions: None,
+        })
+        .unwrap();
+
+        assert_eq!(outcome.exit_code, 0);
+        let cal = mif_ontology::CalibrationConfig::load_or_default(&out).unwrap();
+        assert!(cal.negatives_active);
+    }
+
+    #[test]
+    fn an_unbound_negatives_pack_never_claims_participation() {
+        if mif_embed::Embedder::load().is_err() {
+            eprintln!("skipping: embedding model unavailable in this environment");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture(dir.path());
+        enrich_fixture_pack(dir.path());
+        // A SECOND pack carrying negatives is enabled in the catalog but
+        // not core and not bound to the scored topic: it never scores a
+        // sample, so the artifact must record negatives_active: false.
+        fs::write(
+            dir.path().join("packs/unbound-fixture.yaml"),
+            "ontology:\n  id: unbound-fixture\n  version: \"0.1.0\"\nentity_types:\n  - name: lesson\n    description: A lesson plan\n    negative_examples:\n      - A published textbook\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join(".claude/enabled-packs.json"),
+            r#"{"ontologies":[{"id":"edu-fixture","version":"0.1.0","source":"packs/edu-fixture.yaml","core":false},{"id":"unbound-fixture","version":"0.1.0","source":"packs/unbound-fixture.yaml","core":false}]}"#,
+        )
+        .unwrap();
+
+        resolve(
+            &dir.path().join("reports/edu/findings/good.json"),
+            Some("edu"),
+            Some(&dir.path().join(".claude/enabled-packs.json")),
+            Some(&dir.path().join("harness.config.json")),
+            Some(&dir.path().join("reports/edu/ontology-map.json")),
+            Some(dir.path()),
+        )
+        .unwrap();
+
+        let out = dir.path().join("reports/_meta/confidence-calibration.json");
+        let outcome = calibrate_cmd(&CalibrateArgs {
+            reports_dir: Some(&dir.path().join("reports")),
+            config: Some(&dir.path().join("harness.config.json")),
+            catalog: Some(&dir.path().join(".claude/enabled-packs.json")),
+            root: Some(dir.path()),
+            target_precision: 1.0,
+            tier2_target: 0.5,
+            sample: None,
+            seed: 0,
+            out: Some(&out),
+            confusions: None,
+        })
+        .unwrap();
+
+        assert_eq!(outcome.exit_code, 0);
+        let cal = mif_ontology::CalibrationConfig::load_or_default(&out).unwrap();
+        assert!(!cal.negatives_active);
     }
 
     #[test]

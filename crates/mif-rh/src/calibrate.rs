@@ -38,6 +38,8 @@ use crate::{Finding, index_text, review::list_finding_files};
 pub struct CalibrationSample {
     /// The stamped finding.
     pub finding_id: String,
+    /// The topic whose candidate set scored this sample.
+    pub topic: String,
     /// The finding's stamped (ground-truth) entity type.
     pub entity_type_gold: String,
     /// The entity type the top candidate named.
@@ -153,6 +155,7 @@ pub fn collect_topic_samples(
         };
         samples.push(CalibrationSample {
             finding_id: finding.id.clone(),
+            topic: ctx.topic.to_string(),
             entity_type_gold: gold.to_string(),
             entity_type_top1: top.entity_type.clone(),
             top1_score: top.score,
@@ -303,6 +306,27 @@ pub struct ConfusionPair {
     /// [`CONFUSION_REPRESENTATIVES`] of the pair's samples), for opening
     /// real findings during curation.
     pub finding_ids: Vec<String>,
+}
+
+/// Whether any entity type across `packs` carries a non-empty curated
+/// negative example.
+///
+/// `calibrate` evaluates this over the packs that actually scored the
+/// swept samples (the union of `build_allowed` for topics represented in
+/// the final sample set) and records the answer as the artifact's
+/// `negatives_active` — an enabled-but-unbound pack, or one bound only to
+/// topics that contributed no samples, never claims participation.
+#[must_use]
+pub fn packs_carry_negatives<'a>(packs: impl IntoIterator<Item = &'a crate::OntologyPack>) -> bool {
+    packs
+        .into_iter()
+        .flat_map(|pack| &pack.entity_types)
+        .any(|entity_type| {
+            entity_type
+                .negative_examples
+                .iter()
+                .any(|negative| !negative.trim().is_empty())
+        })
 }
 
 /// The confusion-matrix artifact `calibrate --confusions` writes.
@@ -459,6 +483,7 @@ mod tests {
     ) -> CalibrationSample {
         CalibrationSample {
             finding_id: id.to_string(),
+            topic: "topic".to_string(),
             entity_type_gold: gold.to_string(),
             entity_type_top1: if correct {
                 gold.to_string()
@@ -515,6 +540,7 @@ mod tests {
         // exclude it and overstate what the gate delivers.
         let lone = CalibrationSample {
             finding_id: "lone".to_string(),
+            topic: "topic".to_string(),
             entity_type_gold: "gold-type".to_string(),
             entity_type_top1: "gold-type".to_string(),
             top1_score: 0.90,

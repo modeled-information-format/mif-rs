@@ -33,6 +33,13 @@ The full ADR-020 tier routing:
   not-durably-stamped findings (confirmed/rejected verdicts from
   `/ontology-review --enrich` are preserved on re-runs), and records
   tier-3 misses.
+- `suggest-type` (and `review --suggest`) apply the negative-demotion-v1
+  gate for types carrying curated `negative_examples`: a candidate whose
+  query sits at least as close to one of its negatives as to its positive
+  document is barred from tier 1 (`negative_demoted: true` on the wire);
+  corpora whose packs carry no negatives score byte-identically to the
+  pre-gate engine, and the calibration artifact records participation as
+  `negatives_active`.
 - `calibrate` derives the corpus's calibration artifact from its stamped
   findings (`stamped-quantile-v1`: loosest floor+margin gate meeting
   `--target-precision`, tier-2 floor from gold-recall quantiles). With
