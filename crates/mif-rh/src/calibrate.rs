@@ -28,6 +28,12 @@ use crate::suggest::{SUGGESTION_DEPTH, build_candidates, suggest_from_candidates
 use crate::{Finding, index_text, review::list_finding_files};
 
 /// One labeled calibration sample: a stamped finding's scoring outcome.
+///
+/// Non-exhaustive: samples are produced by [`collect_topic_samples`], not
+/// constructed downstream, and the field set grows as calibration learns
+/// to measure more (this release added the gold/top-1 types) — downstream
+/// crates read fields and must stay compilable across such additions.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize)]
 pub struct CalibrationSample {
     /// The stamped finding.
