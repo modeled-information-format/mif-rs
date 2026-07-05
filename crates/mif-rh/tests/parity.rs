@@ -5,11 +5,21 @@
 //!
 //! rht is a sibling checkout in this workspace, not a `mif-rs` dependency —
 //! its location is workspace-specific and won't exist in an isolated clone
-//! of this repo (e.g. a fresh CI checkout of `mif-rs` alone), so every test
-//! here skips cleanly (prints and returns) rather than failing when it
-//! can't find rht, instead of hard-failing or silently reporting false
-//! green. Override the path via `MIF_RH_PARITY_FIXTURES_ROOT` if rht lives
-//! somewhere other than the default sibling location.
+//! of this repo (e.g. a fresh CI checkout of `mif-rs` alone), so by default
+//! every test here skips cleanly (prints and returns) rather than failing
+//! when it can't find rht, instead of hard-failing or silently reporting
+//! false green. Override the path via `MIF_RH_PARITY_FIXTURES_ROOT` if rht
+//! lives somewhere other than the default sibling location; set
+//! `MIF_RH_PARITY_REQUIRED` to turn the skip into a hard failure.
+//!
+//! Two environment variables control fixture discovery and skip behavior:
+//!
+//! - `MIF_RH_PARITY_FIXTURES_ROOT` — explicit path to an rht checkout,
+//!   overriding the default sibling-location probe.
+//! - `MIF_RH_PARITY_REQUIRED` — when set (any value), a missing checkout is
+//!   a hard test FAILURE instead of a skip. CI's dedicated parity job sets
+//!   this so the gate is fail-closed: a broken rht checkout step can never
+//!   silently turn the whole parity suite into a green no-op.
 //!
 //! This whole file is test-only fixture-loading support (an integration
 //! test target, not library code), so it exempts itself from
@@ -77,15 +87,18 @@ impl Fixtures {
 }
 
 /// Loads the real rht fixture corpus, or `None` if no sibling checkout is
-/// available in this workspace. Every test below returns early (printing a
-/// skip notice) rather than failing when this is `None`.
+/// available in this workspace. When this is `None`, every test below
+/// returns early (printing a skip notice) — or fails hard under
+/// `MIF_RH_PARITY_REQUIRED` (see `skip_without_rht!`).
 fn load_fixtures() -> Option<Fixtures> {
     let root = rht_root()?;
     Some(Fixtures::load(&root))
 }
 
 /// Expands to a [`Fixtures`] value; `return`s out of the calling test
-/// (printing a skip notice) if no rht checkout is available. Written as an
+/// (printing a skip notice) if no rht checkout is available — unless
+/// `MIF_RH_PARITY_REQUIRED` is set, which makes a missing checkout a hard
+/// failure (fail-closed for CI). Written as an
 /// expression macro rather than one that introduces a `let` binding of its
 /// own, since `macro_rules!` hygiene would make a binding created *inside*
 /// the macro invisible to code after it — `return` (unlike an identifier)
@@ -96,6 +109,12 @@ macro_rules! skip_without_rht {
         match load_fixtures() {
             Some(fixtures) => fixtures,
             None => {
+                assert!(
+                    std::env::var_os("MIF_RH_PARITY_REQUIRED").is_none(),
+                    "MIF_RH_PARITY_REQUIRED is set but no research-harness-template \
+                     checkout was found (set MIF_RH_PARITY_FIXTURES_ROOT to a valid \
+                     rht checkout) — refusing to skip parity fail-open"
+                );
                 eprintln!(
                     "skipping: no research-harness-template checkout found (set \
                      MIF_RH_PARITY_FIXTURES_ROOT to override)"
