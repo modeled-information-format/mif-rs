@@ -206,6 +206,15 @@ enum Command {
         /// `<reports-dir>/_meta/confidence-calibration.json`.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Also write the ranked confusable type pairs from the stamped
+        /// samples here (`confusions-v1` JSON: per pair the gold type, the
+        /// type that took top-1, the count, and representative finding
+        /// ids), grounding the `negative_examples` curation MIF ADR-020
+        /// mandates. Written before the threshold sweep, so an
+        /// uncalibratable corpus still gets its confusion export. Derived
+        /// data — regenerate, never commit.
+        #[arg(long)]
+        confusions: Option<PathBuf>,
     },
     /// Cluster recorded tier-3 misses into ontology-expansion candidates
     /// (recurring, mutually-similar misses across runs — never a single
@@ -334,6 +343,7 @@ fn run(command: &Command) -> Result<Outcome, CliError> {
             sample,
             seed,
             out,
+            confusions,
         } => calibrate_cmd(&CalibrateArgs {
             reports_dir: reports_dir.as_deref(),
             config: config.as_deref(),
@@ -344,6 +354,7 @@ fn run(command: &Command) -> Result<Outcome, CliError> {
             sample: *sample,
             seed: *seed,
             out: out.as_deref(),
+            confusions: confusions.as_deref(),
         }),
         Command::ExpansionCandidates {
             index,
@@ -573,6 +584,7 @@ struct CalibrateArgs<'a> {
     sample: Option<usize>,
     seed: u64,
     out: Option<&'a Path>,
+    confusions: Option<&'a Path>,
 }
 
 /// Runs `calibrate`: collects stamped-finding samples across every
@@ -614,6 +626,31 @@ fn calibrate_cmd(args: &CalibrateArgs<'_>) -> Result<Outcome, CliError> {
         )?);
     }
     let samples = mif_rh::subsample(samples, &opts);
+
+    // The confusion export writes BEFORE the sweep: a corpus that cannot
+    // reach the precision target is exactly the corpus whose confusions
+    // curation needs to see, so a failing sweep must not take the export
+    // down with it.
+    let confusions_note = if let Some(confusions_path) = args.confusions {
+        let report = mif_rh::confusions(&samples);
+        if let Some(parent) = confusions_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|source| mif_rh::MifRhError::Io {
+                path: parent.display().to_string(),
+                source,
+            })?;
+        }
+        mif_rh::write_json_atomic(confusions_path, &report)?;
+        format!(
+            ", {} confusion pair(s) written to {}",
+            report.pairs.len(),
+            confusions_path.display()
+        )
+    } else {
+        String::new()
+    };
+
     let cal = mif_rh::sweep(&samples, &opts, &out)?;
 
     if let Some(parent) = out.parent() {
@@ -626,7 +663,7 @@ fn calibrate_cmd(args: &CalibrateArgs<'_>) -> Result<Outcome, CliError> {
 
     let message = format!(
         "calibrate: {} sample(s) -> tier1_floor={:.2} tier1_margin={:.2} tier2_floor={:.2} \
-         (method {}, written to {})",
+         (method {}, written to {}{confusions_note})",
         samples.len(),
         cal.tier1_floor,
         cal.tier1_margin,
@@ -1133,6 +1170,7 @@ mod tests {
         .unwrap();
 
         let out = dir.path().join("reports/_meta/confidence-calibration.json");
+        let confusions_path = dir.path().join("reports/_meta/confusions.json");
         let outcome = calibrate_cmd(&CalibrateArgs {
             reports_dir: Some(&dir.path().join("reports")),
             config: Some(&dir.path().join("harness.config.json")),
@@ -1143,6 +1181,7 @@ mod tests {
             sample: None,
             seed: 0,
             out: Some(&out),
+            confusions: Some(&confusions_path),
         })
         .unwrap();
 
@@ -1152,6 +1191,54 @@ mod tests {
         assert_eq!(cal.method.as_deref(), Some("stamped-quantile-v1"));
         assert_eq!(cal.sample_size, Some(1));
         assert!(cal.tier2_floor <= cal.tier1_floor);
+
+        // The confusion export was written alongside the artifact: the
+        // fixture's one sample is correct, so the report is versioned,
+        // counts the sample, and carries no pairs.
+        assert!(outcome.message.contains("confusion pair(s)"));
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&confusions_path).unwrap()).unwrap();
+        assert_eq!(report["version"], "confusions-v1");
+        assert_eq!(report["sample_count"], 1);
+        assert!(report["pairs"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn calibrate_writes_the_confusion_export_even_when_the_sweep_fails() {
+        if mif_embed::Embedder::load().is_err() {
+            eprintln!("skipping: embedding model unavailable in this environment");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture(dir.path());
+        enrich_fixture_pack(dir.path());
+        // Deliberately no resolve/stamping: zero labeled samples makes the
+        // sweep fail loud, and an uncalibratable corpus is exactly the one
+        // whose confusions curation needs — the export must survive.
+
+        let confusions_path = dir.path().join("reports/_meta/confusions.json");
+        let result = calibrate_cmd(&CalibrateArgs {
+            reports_dir: Some(&dir.path().join("reports")),
+            config: Some(&dir.path().join("harness.config.json")),
+            catalog: Some(&dir.path().join(".claude/enabled-packs.json")),
+            root: Some(dir.path()),
+            target_precision: 1.0,
+            tier2_target: 0.5,
+            sample: None,
+            seed: 0,
+            out: Some(&dir.path().join("reports/_meta/confidence-calibration.json")),
+            confusions: Some(&confusions_path),
+        });
+
+        // Outcome has no Debug impl; mapping the success side away lets
+        // unwrap_err assert the failure directly.
+        let error = result.map(|_| ()).unwrap_err();
+        assert!(error.to_string().contains("no stamped"));
+        let report: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&confusions_path).unwrap()).unwrap();
+        assert_eq!(report["version"], "confusions-v1");
+        assert_eq!(report["sample_count"], 0);
+        assert!(report["pairs"].as_array().unwrap().is_empty());
     }
 
     #[test]

@@ -35,7 +35,12 @@ The full ADR-020 tier routing:
   tier-3 misses.
 - `calibrate` derives the corpus's calibration artifact from its stamped
   findings (`stamped-quantile-v1`: loosest floor+margin gate meeting
-  `--target-precision`, tier-2 floor from gold-recall quantiles).
+  `--target-precision`, tier-2 floor from gold-recall quantiles). With
+  `--confusions <path>` it also exports the ranked confusable type pairs
+  (`confusions-v1` JSON: gold type, top-1 type, count, representative
+  finding ids) — the grounding input for `negative_examples` curation,
+  written even when the sweep itself fails to calibrate. Derived data:
+  regenerate it, never commit it.
 - `expansion-candidates` clusters recorded misses (mutual similarity,
   minimum cluster size, minimum distinct runs) into ontology-expansion
   candidates, as JSON for `author-ontology.sh --from-clusters`.
