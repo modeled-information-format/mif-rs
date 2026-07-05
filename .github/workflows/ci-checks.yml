@@ -142,7 +142,7 @@ jobs:
           # (take the current SHA of research-harness-template@main); the
           # checkout must contain evals/fixtures/ontology/ and
           # evals/fixtures/search/known-similar-pairs.json.
-          ref: e29400987745bbd263c36fbd98b0d6d3ae12e44b
+          ref: 7e2d821ef0437ad242ced2deeae772e644ff06c3
           path: rht
 
       - name: Checkout ontologies registry (pinned)
@@ -155,7 +155,7 @@ jobs:
           # fresh rht checkout lacks it. The canonical copy lives in the
           # ontologies registry; the step below vendors it byte-identically.
           # Bump alongside the rht pin above.
-          ref: a958c5f477e2cf1f0a617a325ff659eb45a065c7
+          ref: c1fcb8683293a903c38678633fd8fd113a812c22
           path: ontologies-registry
 
       - name: Vendor the fixture-referenced ontology pack into rht
