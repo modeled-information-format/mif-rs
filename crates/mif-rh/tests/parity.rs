@@ -8,9 +8,7 @@
 //! of this repo (e.g. a fresh CI checkout of `mif-rs` alone), so by default
 //! every test here skips cleanly (prints and returns) rather than failing
 //! when it can't find rht, instead of hard-failing or silently reporting
-//! false green. Override the path via `MIF_RH_PARITY_FIXTURES_ROOT` if rht
-//! lives somewhere other than the default sibling location; set
-//! `MIF_RH_PARITY_REQUIRED` to turn the skip into a hard failure.
+//! false green.
 //!
 //! Two environment variables control fixture discovery and skip behavior:
 //!

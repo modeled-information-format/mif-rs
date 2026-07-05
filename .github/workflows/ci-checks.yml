@@ -188,9 +188,9 @@ jobs:
         env:
           MIF_RH_PARITY_FIXTURES_ROOT: ${{ github.workspace }}/rht
           MIF_RH_PARITY_REQUIRED: "1"
-        run: >-
-          cargo test -p mif-rh --test parity --all-features
-          -- --nocapture
+        run: |
+          cargo test -p mif-rh --test parity --all-features -- --nocapture
+          cargo test -p mif-rh-cli --test bin_parity --all-features -- --nocapture
 
   doc:
     name: Documentation
