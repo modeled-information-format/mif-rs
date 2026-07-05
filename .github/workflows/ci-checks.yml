@@ -140,8 +140,9 @@ jobs:
           repository: modeled-information-format/research-harness-template
           # Pinned rht commit the parity suite runs against. Bump by PR
           # (take the current SHA of research-harness-template@main); the
-          # checkout must contain evals/fixtures/ontology/.
-          ref: fdb08d14fed7a8280bcff49eea5a72c3eb3afbbb
+          # checkout must contain evals/fixtures/ontology/ and
+          # evals/fixtures/search/known-similar-pairs.json.
+          ref: e29400987745bbd263c36fbd98b0d6d3ae12e44b
           path: rht
 
       - name: Checkout ontologies registry (pinned)
@@ -184,13 +185,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-parity-
 
+      - name: Cache the sentence-transformers model
+        # v5.0.3 — the search eval embeds real text; the model is a
+        # first-run network fetch (~90 MB) cached across runs. The key is
+        # static because mif-embed pins one model (mif_embed::MODEL_ID).
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2
+
       - name: Run parity tests (fixtures required, fail-closed)
         env:
           MIF_RH_PARITY_FIXTURES_ROOT: ${{ github.workspace }}/rht
           MIF_RH_PARITY_REQUIRED: "1"
+          MIF_RH_SEARCH_EVAL_REQUIRED: "1"
         run: |
           cargo test -p mif-rh --test parity --all-features -- --nocapture
           cargo test -p mif-rh-cli --test bin_parity --all-features -- --nocapture
+          cargo test -p mif-rh --test search_eval --all-features -- --nocapture
 
   doc:
     name: Documentation
