@@ -134,7 +134,19 @@ fn open_index(index_path: &Path) -> Result<FindingIndex, McpError> {
             path: index_path.display().to_string(),
         });
     }
-    Ok(FindingIndex::open(index_path)?)
+    let index = FindingIndex::open(index_path)?;
+    // File existence alone no longer proves a build: mif-rh-cli paths that
+    // record tier-3 misses (`review --suggest`, `suggest-type --record`)
+    // create the same database without indexing any findings. An index
+    // with zero findings answers every query with an empty success, which
+    // reads exactly like "nothing matches" — report it as not built so the
+    // caller learns to run `review --build-index` instead.
+    if index.stats()?.findings == 0 {
+        return Err(McpError::IndexNotBuilt {
+            path: index_path.display().to_string(),
+        });
+    }
+    Ok(index)
 }
 
 /// Parameters for the `search` tool.
@@ -518,6 +530,20 @@ mod tests {
         let hits = search_inner("textbook", 10, &index_path).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].finding_id, "f-1");
+    }
+
+    #[test]
+    fn an_index_with_zero_findings_reports_not_built() {
+        // Miss-recording CLI paths create the same database file without
+        // indexing any findings; file existence alone must not read as
+        // built, or every query would return an empty success.
+        let dir = tempfile::tempdir().unwrap();
+        let index_path = dir.path().join("index.sqlite");
+        drop(mif_rh::index::FindingIndex::open(&index_path).unwrap());
+        assert!(index_path.exists());
+
+        let error = search_inner("anything", 10, &index_path).unwrap_err();
+        assert!(matches!(error, super::McpError::IndexNotBuilt { .. }));
     }
 
     #[test]

@@ -16,14 +16,22 @@
 //! `review` never call it.
 
 use mif_ontology::{CalibrationConfig, ConfidenceTier, assign_tier};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::MifRhError;
 use crate::index::cosine_similarity;
 use crate::resolve::{ResolveContext, build_allowed};
 
+/// The shared candidate-list depth.
+///
+/// `review --suggest` queues this many ranked candidates per finding, and
+/// `calibrate` measures gold recall at exactly this depth — the two are
+/// semantically coupled (tier-2 recall is calibrated at the queue's own
+/// truncation depth), so they share one constant.
+pub const SUGGESTION_DEPTH: usize = 5;
+
 /// One ranked, tier-annotated entity-type hypothesis.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypeSuggestion {
     /// The candidate entity type's name.
     pub entity_type: String,
@@ -38,13 +46,113 @@ pub struct TypeSuggestion {
     /// The top candidate's lead over the second-best candidate. `Some`
     /// only at rank 0 when a rival exists — the margin is a property of
     /// the decision between the top two, not of every candidate.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub margin: Option<f32>,
     /// Whether the tier came from a real calibration run against the
     /// embedding model actually in use. `false` means built-in
     /// uncalibrated defaults (or a calibration for a different model) —
     /// the tier is advisory shape, not a governed threshold.
     pub calibrated: bool,
+}
+
+/// A topic's embedded candidate set: every allowed entity type with a
+/// positive embedding signal, its document pre-embedded once.
+///
+/// Callers scoring many queries against one topic (`calibrate`,
+/// `review --suggest`) build this once and reuse it — embedding the
+/// candidate documents per query would cost `O(queries x types)` forward
+/// passes where `O(queries + types)` suffices.
+#[derive(Debug)]
+pub struct CandidateSet {
+    /// `(entity type name, ontology id, embedded document)` per candidate.
+    candidates: Vec<(String, String, Vec<f32>)>,
+    /// Whether the calibration in force governs the embedding model in use.
+    calibrated: bool,
+}
+
+/// Embeds `ctx.topic`'s allowed entity-type documents once, for reuse
+/// across many queries.
+///
+/// # Errors
+///
+/// Returns [`MifRhError`] if the topic's ontology bindings cannot be
+/// resolved or a candidate document cannot be embedded.
+pub fn build_candidates(
+    ctx: &ResolveContext<'_>,
+    embedder: &mif_embed::Embedder,
+    cal: &CalibrationConfig,
+) -> Result<CandidateSet, MifRhError> {
+    let allowed = build_allowed(ctx)?;
+    let mut candidates = Vec::new();
+    for pack in &allowed {
+        for entity_type in &pack.entity_types {
+            let Some(doc) = entity_type.embedding_doc() else {
+                continue;
+            };
+            candidates.push((
+                entity_type.name.clone(),
+                pack.id.clone(),
+                embedder.embed(&doc)?,
+            ));
+        }
+    }
+    Ok(CandidateSet {
+        candidates,
+        // The calibration only governs scores produced by the model
+        // actually in use; an artifact naming any other model reads as
+        // uncalibrated.
+        calibrated: cal.governs(mif_embed::MODEL_ID),
+    })
+}
+
+/// Ranks a pre-embedded query against a topic's [`CandidateSet`] and
+/// annotates confidence tiers. Pure scoring — no embedding happens here.
+#[must_use]
+pub fn suggest_from_candidates(
+    query_vector: &[f32],
+    set: &CandidateSet,
+    cal: &CalibrationConfig,
+    limit: usize,
+) -> Vec<TypeSuggestion> {
+    let mut scored: Vec<(&str, &str, f32)> = set
+        .candidates
+        .iter()
+        .map(|(name, ontology_id, vector)| {
+            (
+                name.as_str(),
+                ontology_id.as_str(),
+                cosine_similarity(query_vector, vector),
+            )
+        })
+        .collect();
+
+    // Total order: score desc, then ontology id, then type name — exact
+    // score ties (identical embedding docs across packs) must rank
+    // deterministically, including which twin sits at rank 0 carrying the
+    // margin, since build_allowed's pack order is hash-map-dependent.
+    scored.sort_by(|a, b| {
+        b.2.total_cmp(&a.2)
+            .then_with(|| a.1.cmp(b.1))
+            .then_with(|| a.0.cmp(b.0))
+    });
+    let second_best = scored.get(1).map(|(_, _, score)| *score);
+
+    let mut suggestions: Vec<TypeSuggestion> = scored
+        .into_iter()
+        .enumerate()
+        .map(|(rank, (entity_type, ontology_id, score))| TypeSuggestion {
+            entity_type: entity_type.to_string(),
+            ontology_id: ontology_id.to_string(),
+            score,
+            tier: assign_tier(rank, score, second_best, cal),
+            margin: (rank == 0)
+                .then(|| second_best.map(|second| score - second))
+                .flatten(),
+            calibrated: set.calibrated,
+        })
+        .collect();
+    suggestions.truncate(limit);
+    suggestions
 }
 
 /// Suggests candidate entity types for `text` against `ctx.topic`'s
@@ -76,52 +184,9 @@ pub fn suggest_type(
     cal: &CalibrationConfig,
     limit: usize,
 ) -> Result<Vec<TypeSuggestion>, MifRhError> {
-    let allowed = build_allowed(ctx)?;
+    let set = build_candidates(ctx, embedder, cal)?;
     let query_vector = embedder.embed(text)?;
-
-    // The calibration only governs scores produced by the model actually
-    // in use; an artifact naming any other model reads as uncalibrated.
-    let calibrated = cal.governs(mif_embed::MODEL_ID);
-
-    let mut scored: Vec<(String, String, f32)> = Vec::new();
-    for pack in &allowed {
-        for entity_type in &pack.entity_types {
-            let Some(doc) = entity_type.embedding_doc() else {
-                continue;
-            };
-            let candidate_vector = embedder.embed(&doc)?;
-            let score = cosine_similarity(&query_vector, &candidate_vector);
-            scored.push((entity_type.name.clone(), pack.id.clone(), score));
-        }
-    }
-
-    // Total order: score desc, then ontology id, then type name — exact
-    // score ties (identical embedding docs across packs) must rank
-    // deterministically, including which twin sits at rank 0 carrying the
-    // margin, since build_allowed's pack order is hash-map-dependent.
-    scored.sort_by(|a, b| {
-        b.2.total_cmp(&a.2)
-            .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| a.0.cmp(&b.0))
-    });
-    let second_best = scored.get(1).map(|(_, _, score)| *score);
-
-    let mut suggestions: Vec<TypeSuggestion> = scored
-        .into_iter()
-        .enumerate()
-        .map(|(rank, (entity_type, ontology_id, score))| TypeSuggestion {
-            entity_type,
-            ontology_id,
-            score,
-            tier: assign_tier(rank, score, second_best, cal),
-            margin: (rank == 0)
-                .then(|| second_best.map(|second| score - second))
-                .flatten(),
-            calibrated,
-        })
-        .collect();
-    suggestions.truncate(limit);
-    Ok(suggestions)
+    Ok(suggest_from_candidates(&query_vector, &set, cal, limit))
 }
 
 #[cfg(test)]

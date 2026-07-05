@@ -137,6 +137,18 @@ pub enum MifRhError {
         /// The PID recorded in the held lock file.
         holder_pid: u32,
     },
+    /// A suggestion queue file on disk belongs to a different topic than
+    /// the one being upserted — a copied/renamed queue file or a
+    /// wrong-path caller, which must not silently mix topics' entries.
+    #[error("suggestion queue at {path} belongs to topic '{found}', not '{expected}'")]
+    QueueTopicMismatch {
+        /// The queue file path.
+        path: String,
+        /// The topic the caller is upserting.
+        expected: String,
+        /// The topic recorded inside the queue file.
+        found: String,
+    },
     /// Computing an embedding failed.
     #[error(transparent)]
     Embed(#[from] mif_embed::EmbedError),
@@ -246,6 +258,13 @@ impl MifRhError {
                 status: 409,
                 exit_code: 2,
             },
+            Self::QueueTopicMismatch { .. } => ProblemMeta {
+                slug: "queue-topic-mismatch",
+                version: "v1",
+                title: "Suggestion queue belongs to a different topic",
+                status: 409,
+                exit_code: 2,
+            },
             Self::Embed(_) => ProblemMeta {
                 slug: "delegated-embed",
                 version: "v1",
@@ -337,6 +356,19 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 Applicability::MaybeIncorrect,
             ),
             CodeAction::new("Wait and retry", "quickfix", Applicability::MaybeIncorrect),
+        ),
+        MifRhError::QueueTopicMismatch { .. } => (
+            SuggestedFix::new(
+                "Point the upsert at reports/_meta/suggestions/<topic>.json for the topic \
+                 being reviewed, or remove the stray queue file that was copied or renamed \
+                 across topics.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Use the topic's own suggestion queue path",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
         ),
         MifRhError::JsonSerialize { .. } => (
             SuggestedFix::new(
@@ -476,6 +508,11 @@ mod tests {
                 source: io_error(),
             },
             MifRhError::LockHeld { holder_pid: 1234 },
+            MifRhError::QueueTopicMismatch {
+                path: "reports/_meta/suggestions/edu.json".to_string(),
+                expected: "edu".to_string(),
+                found: "sec".to_string(),
+            },
             MifRhError::Embed(mif_embed::EmbedError::NoCacheDir {
                 model: "test-model",
             }),

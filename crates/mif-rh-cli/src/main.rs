@@ -110,6 +110,20 @@ enum Command {
         /// `<reports-dir>/_meta/search-index.sqlite`.
         #[arg(long)]
         index: Option<PathBuf>,
+        /// After classification, write tier-annotated entity-type
+        /// suggestions for this review's not-durably-stamped findings to
+        /// `<reports-dir>/_meta/suggestions/<topic>.json` (preserving any
+        /// confirmed/rejected verdicts), and record tier-3 misses in the
+        /// index for `expansion-candidates`. Off by default: suggesting
+        /// re-embeds findings, which the fail-closed classification path
+        /// must never pay for.
+        #[arg(long)]
+        suggest: bool,
+        /// Path to the confidence-calibration artifact used by
+        /// `--suggest`. Defaults to
+        /// `<reports-dir>/_meta/confidence-calibration.json`.
+        #[arg(long, requires = "suggest")]
+        calibration: Option<PathBuf>,
     },
     /// Suggest candidate entity types for a text or a finding, ranked by
     /// embedding similarity with confidence tiers (MIF ADR-020). Prints a
@@ -147,6 +161,69 @@ enum Command {
         /// `calibrated: false`.
         #[arg(long)]
         calibration: Option<PathBuf>,
+        /// Record the query as a tier-3 miss in the search index when its
+        /// best candidate is `trigger_expansion` (or no candidate exists),
+        /// feeding `expansion-candidates`. Requires `--finding` (a miss is
+        /// a property of a finding, not of ad-hoc text).
+        #[arg(long, requires = "finding")]
+        record: bool,
+        /// Path to the search index database `--record` writes to.
+        /// Defaults to `reports/_meta/search-index.sqlite`.
+        #[arg(long)]
+        index: Option<PathBuf>,
+    },
+    /// Derive the corpus's confidence-calibration artifact from its
+    /// stamped findings (`stamped-quantile-v1`, MIF ADR-020 PDD-2).
+    Calibrate {
+        /// Root `reports/` directory. Defaults to `reports`.
+        #[arg(long)]
+        reports_dir: Option<PathBuf>,
+        /// Path to the harness config. Defaults to `harness.config.json`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Path to the ontology catalog. Defaults to
+        /// `.claude/enabled-packs.json`.
+        #[arg(long)]
+        catalog: Option<PathBuf>,
+        /// Base directory ontology catalog `source` paths resolve against.
+        /// Defaults to the current directory.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Minimum empirical top-1 precision the tier-1 gate must achieve.
+        #[arg(long, default_value_t = 0.95)]
+        target_precision: f32,
+        /// Minimum gold-in-candidates rate above the tier-2 floor.
+        #[arg(long, default_value_t = 0.5)]
+        tier2_target: f32,
+        /// Cap the number of stamped samples used (deterministic,
+        /// seed-keyed). Defaults to every stamped finding.
+        #[arg(long)]
+        sample: Option<usize>,
+        /// Seed for the deterministic sample selection.
+        #[arg(long, default_value_t = 0)]
+        seed: u64,
+        /// Where to write the calibration artifact. Defaults to
+        /// `<reports-dir>/_meta/confidence-calibration.json`.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Cluster recorded tier-3 misses into ontology-expansion candidates
+    /// (recurring, mutually-similar misses across runs — never a single
+    /// miss). Prints JSON, or writes it with `--out` for
+    /// `author-ontology.sh --from-clusters`.
+    ExpansionCandidates {
+        /// Path to the search index database holding recorded misses.
+        /// Defaults to `reports/_meta/search-index.sqlite`.
+        #[arg(long)]
+        index: Option<PathBuf>,
+        /// Path to the confidence-calibration artifact carrying the
+        /// clustering knobs. Defaults to
+        /// `reports/_meta/confidence-calibration.json`.
+        #[arg(long)]
+        calibration: Option<PathBuf>,
+        /// Write the clusters JSON here instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 }
 
@@ -208,6 +285,8 @@ fn run(command: &Command) -> Result<Outcome, CliError> {
             relationship_script,
             build_index,
             index,
+            suggest,
+            calibration,
         } => review(&ReviewArgs {
             topics: topic,
             strict: *strict,
@@ -219,6 +298,8 @@ fn run(command: &Command) -> Result<Outcome, CliError> {
             relationship_script: relationship_script.as_deref(),
             build_index: *build_index,
             index: index.as_deref(),
+            suggest: *suggest,
+            calibration: calibration.as_deref(),
         }),
         Command::SuggestType {
             text,
@@ -229,6 +310,8 @@ fn run(command: &Command) -> Result<Outcome, CliError> {
             root,
             limit,
             calibration,
+            record,
+            index,
         } => suggest_type_cmd(&SuggestTypeArgs {
             text: text.as_deref(),
             finding: finding.as_deref(),
@@ -238,7 +321,35 @@ fn run(command: &Command) -> Result<Outcome, CliError> {
             root: root.as_deref(),
             limit: *limit,
             calibration: calibration.as_deref(),
+            record: *record,
+            index: index.as_deref(),
         }),
+        Command::Calibrate {
+            reports_dir,
+            config,
+            catalog,
+            root,
+            target_precision,
+            tier2_target,
+            sample,
+            seed,
+            out,
+        } => calibrate_cmd(&CalibrateArgs {
+            reports_dir: reports_dir.as_deref(),
+            config: config.as_deref(),
+            catalog: catalog.as_deref(),
+            root: root.as_deref(),
+            target_precision: *target_precision,
+            tier2_target: *tier2_target,
+            sample: *sample,
+            seed: *seed,
+            out: out.as_deref(),
+        }),
+        Command::ExpansionCandidates {
+            index,
+            calibration,
+            out,
+        } => expansion_candidates_cmd(index.as_deref(), calibration.as_deref(), out.as_deref()),
     }
 }
 
@@ -344,9 +455,30 @@ struct SuggestTypeArgs<'a> {
     root: Option<&'a Path>,
     limit: usize,
     calibration: Option<&'a Path>,
+    record: bool,
+    index: Option<&'a Path>,
 }
 
 const DEFAULT_CALIBRATION: &str = "reports/_meta/confidence-calibration.json";
+const DEFAULT_INDEX: &str = "reports/_meta/search-index.sqlite";
+
+/// A run identifier for miss recording: wall-clock seconds plus pid —
+/// distinct across real runs (what tier-3 recurrence counts), stable
+/// within one invocation.
+fn run_id() -> String {
+    let epoch_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    format!("{epoch_secs}-{}", std::process::id())
+}
+
+/// Whether a suggestion outcome is a tier-3 miss worth recording: no
+/// candidate at all, or a best candidate in the `trigger_expansion` band.
+fn is_expansion_miss(suggestions: &[mif_rh::TypeSuggestion]) -> bool {
+    suggestions
+        .first()
+        .is_none_or(|top| top.tier == mif_ontology::ConfidenceTier::TriggerExpansion)
+}
 
 /// Runs `suggest-type`: derives the query text (given directly, or a
 /// finding's indexed text), loads the topic's ontology context and the
@@ -362,18 +494,19 @@ fn suggest_type_cmd(args: &SuggestTypeArgs<'_>) -> Result<Outcome, CliError> {
     // clap guarantees exactly one of text/--finding, and --topic whenever
     // text is given; with --finding the topic may still derive from the
     // finding's reports/<topic>/... path, mirroring `resolve`.
-    let (query, topic) = if let Some(finding_path) = args.finding {
+    let (query, topic, finding_id) = if let Some(finding_path) = args.finding {
         let finding = mif_rh::Finding::load(finding_path)?;
         let topic = args
             .topic
             .map(str::to_string)
             .or_else(|| topic_from_path(finding_path))
             .unwrap_or_default();
-        (mif_rh::index_text(&finding), topic)
+        (mif_rh::index_text(&finding), topic, Some(finding.id))
     } else {
         (
             args.text.unwrap_or_default().to_string(),
             args.topic.unwrap_or_default().to_string(),
+            None,
         )
     };
 
@@ -389,10 +522,172 @@ fn suggest_type_cmd(args: &SuggestTypeArgs<'_>) -> Result<Outcome, CliError> {
     let cal = mif_ontology::CalibrationConfig::load_or_default(&calibration_path)
         .map_err(mif_rh::MifRhError::from)?;
     let embedder = mif_embed::Embedder::load()?;
-    let suggestions = mif_rh::suggest_type(&query, &ctx, &embedder, &cal, args.limit)?;
+    // Embed the query once; the vector serves both the ranking and — on a
+    // tier-3 miss — the recorded miss, with no second forward pass.
+    let candidates = mif_rh::suggest::build_candidates(&ctx, &embedder, &cal)?;
+    let query_vector = embedder.embed(&query)?;
+    let suggestions =
+        mif_rh::suggest::suggest_from_candidates(&query_vector, &candidates, &cal, args.limit);
+
+    if args.record && is_expansion_miss(&suggestions) {
+        // clap's `requires = "finding"` guarantees the id was captured above.
+        if let Some(finding_id) = finding_id {
+            let index_path = effective_path(args.index, DEFAULT_INDEX);
+            if let Some(parent) = index_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|source| mif_rh::MifRhError::Io {
+                    path: parent.display().to_string(),
+                    source,
+                })?;
+            }
+            let index = mif_rh::FindingIndex::open(&index_path)?;
+            index.record_miss(&mif_rh::Miss {
+                finding_id,
+                topic: topic.clone(),
+                content: query,
+                vector: query_vector,
+                run_id: run_id(),
+                model: mif_embed::MODEL_ID.to_string(),
+            })?;
+        }
+    }
 
     let message =
         serde_json::to_string_pretty(&suggestions).map_err(|source| CliError::JsonSerialize {
+            path: "<stdout>".to_string(),
+            source,
+        })?;
+    Ok(Outcome {
+        message,
+        exit_code: 0,
+    })
+}
+
+/// Arguments for the `calibrate` subcommand.
+struct CalibrateArgs<'a> {
+    reports_dir: Option<&'a Path>,
+    config: Option<&'a Path>,
+    catalog: Option<&'a Path>,
+    root: Option<&'a Path>,
+    target_precision: f32,
+    tier2_target: f32,
+    sample: Option<usize>,
+    seed: u64,
+    out: Option<&'a Path>,
+}
+
+/// Runs `calibrate`: collects stamped-finding samples across every
+/// configured topic, sweeps the threshold grid, and atomically writes the
+/// calibration artifact.
+fn calibrate_cmd(args: &CalibrateArgs<'_>) -> Result<Outcome, CliError> {
+    let reports_dir = effective_path(args.reports_dir, DEFAULT_REPORTS_DIR);
+    let config_path = effective_path(args.config, DEFAULT_CONFIG);
+    let catalog_path = effective_path(args.catalog, DEFAULT_CATALOG);
+    let root = effective_path(args.root, ".");
+    let out = args.out.map_or_else(
+        || reports_dir.join("_meta/confidence-calibration.json"),
+        Path::to_path_buf,
+    );
+
+    let catalog = mif_rh::Catalog::load(&catalog_path)?;
+    let config = mif_rh::HarnessConfig::load(&config_path)?;
+    let ontology_packs = mif_rh::ontology_pack::load_packs_via_catalog(&catalog, &root)?;
+    let embedder = mif_embed::Embedder::load()?;
+
+    let opts = mif_rh::CalibrateOptions {
+        target_precision: args.target_precision,
+        tier2_target: args.tier2_target,
+        sample: args.sample,
+        seed: args.seed,
+    };
+    let mut samples = Vec::new();
+    for topic in &config.topics {
+        let ctx = mif_rh::ResolveContext {
+            topic: &topic.id,
+            catalog: &catalog,
+            config: &config,
+            ontology_packs: &ontology_packs,
+        };
+        samples.extend(mif_rh::collect_topic_samples(
+            &reports_dir,
+            &ctx,
+            &embedder,
+        )?);
+    }
+    let samples = mif_rh::subsample(samples, &opts);
+    let cal = mif_rh::sweep(&samples, &opts, &out)?;
+
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| mif_rh::MifRhError::Io {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+    mif_rh::write_json_atomic(&out, &cal)?;
+
+    let message = format!(
+        "calibrate: {} sample(s) -> tier1_floor={:.2} tier1_margin={:.2} tier2_floor={:.2} \
+         (method {}, written to {})",
+        samples.len(),
+        cal.tier1_floor,
+        cal.tier1_margin,
+        cal.tier2_floor,
+        cal.method.as_deref().unwrap_or("-"),
+        out.display()
+    );
+    Ok(Outcome {
+        message,
+        exit_code: 0,
+    })
+}
+
+/// Runs `expansion-candidates`: clusters recorded tier-3 misses under the
+/// calibration artifact's expansion knobs and emits the candidates as
+/// JSON (stdout, or `--out` for `author-ontology.sh --from-clusters`).
+fn expansion_candidates_cmd(
+    index: Option<&Path>,
+    calibration: Option<&Path>,
+    out: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let index_path = effective_path(index, DEFAULT_INDEX);
+    let calibration_path = effective_path(calibration, DEFAULT_CALIBRATION);
+
+    let cal = mif_ontology::CalibrationConfig::load_or_default(&calibration_path)
+        .map_err(mif_rh::MifRhError::from)?;
+    // A read-only query must not create the index as a side effect: a
+    // missing index simply means no misses were ever recorded.
+    let misses = if index_path.exists() {
+        let idx = mif_rh::FindingIndex::open(&index_path)?;
+        idx.misses()?
+    } else {
+        Vec::new()
+    };
+    // Vectors from different embedding models share no space; cluster
+    // only what the model in use produced.
+    let misses: Vec<mif_rh::Miss> = misses
+        .into_iter()
+        .filter(|m| m.model == mif_embed::MODEL_ID)
+        .collect();
+    let candidates = mif_rh::expansion_candidates(&misses, &cal.expansion);
+
+    let payload = serde_json::json!({
+        "clusters": candidates,
+        "misses_considered": misses.len(),
+        "expansion": cal.expansion,
+    });
+    if let Some(out_path) = out {
+        mif_rh::write_json_atomic(out_path, &payload)?;
+        return Ok(Outcome {
+            message: format!(
+                "expansion-candidates: {} cluster(s) from {} miss(es) written to {}",
+                candidates.len(),
+                misses.len(),
+                out_path.display()
+            ),
+            exit_code: 0,
+        });
+    }
+    let message =
+        serde_json::to_string_pretty(&payload).map_err(|source| CliError::JsonSerialize {
             path: "<stdout>".to_string(),
             source,
         })?;
@@ -416,6 +711,121 @@ struct ReviewArgs<'a> {
     relationship_script: Option<&'a Path>,
     build_index: bool,
     index: Option<&'a Path>,
+    suggest: bool,
+    calibration: Option<&'a Path>,
+}
+
+/// Inputs for `review --suggest`'s post-classification suggestion pass.
+struct SuggestPassInputs<'a> {
+    backlog: &'a mif_rh::FollowupBacklog,
+    catalog: &'a mif_rh::Catalog,
+    config: &'a mif_rh::HarnessConfig,
+    ontology_packs: &'a std::collections::HashMap<String, mif_rh::OntologyPack>,
+    meta_dir: &'a Path,
+    index: Option<&'a Path>,
+    calibration: Option<&'a Path>,
+}
+
+/// Runs the opt-in `--suggest` pass over a review's followup findings:
+/// writes tier-annotated suggestion queues under
+/// `<meta_dir>/suggestions/<topic>.json` (preserving human verdicts) and
+/// records tier-3 misses in the index. Returns the confirmation line.
+fn run_suggest_pass(inputs: &SuggestPassInputs<'_>) -> Result<String, CliError> {
+    let calibration_path = inputs.calibration.map_or_else(
+        || inputs.meta_dir.join("confidence-calibration.json"),
+        Path::to_path_buf,
+    );
+    let cal = mif_ontology::CalibrationConfig::load_or_default(&calibration_path)
+        .map_err(mif_rh::MifRhError::from)?;
+    let embedder = mif_embed::Embedder::load()?;
+    let index_path = inputs.index.map_or_else(
+        || inputs.meta_dir.join("search-index.sqlite"),
+        Path::to_path_buf,
+    );
+    let index = mif_rh::FindingIndex::open(&index_path)?;
+    let run = run_id();
+
+    let mut topic_ids: Vec<&String> = inputs.backlog.topics.keys().collect();
+    topic_ids.sort();
+
+    let (mut total_entries, mut topics_written, mut misses_recorded) = (0_usize, 0_usize, 0_usize);
+    for topic_id in topic_ids {
+        let ctx = mif_rh::ResolveContext {
+            topic: topic_id,
+            catalog: inputs.catalog,
+            config: inputs.config,
+            ontology_packs: inputs.ontology_packs,
+        };
+        // One embedding pass over this topic's candidate documents,
+        // reused for every followup finding below.
+        let candidates = mif_rh::suggest::build_candidates(&ctx, &embedder, &cal)?;
+        let mut fresh = Vec::new();
+        for followup_entry in &inputs.backlog.topics[topic_id] {
+            // A "gap" entry's file could not even be parsed by review;
+            // skipping it here mirrors that — the followup backlog still
+            // carries it for a human.
+            let Some(file) = &followup_entry.file else {
+                continue;
+            };
+            let Ok(finding) = mif_rh::Finding::load(Path::new(file)) else {
+                continue;
+            };
+            let query = mif_rh::index_text(&finding);
+            if query.is_empty() {
+                continue;
+            }
+            let query_vector = embedder.embed(&query)?;
+            let suggestions = mif_rh::suggest::suggest_from_candidates(
+                &query_vector,
+                &candidates,
+                &cal,
+                mif_rh::suggest::SUGGESTION_DEPTH,
+            );
+            if is_expansion_miss(&suggestions) {
+                index.record_miss(&mif_rh::Miss {
+                    finding_id: finding.id.clone(),
+                    topic: topic_id.clone(),
+                    vector: query_vector,
+                    content: query,
+                    run_id: run.clone(),
+                    model: mif_embed::MODEL_ID.to_string(),
+                })?;
+                misses_recorded += 1;
+            }
+            fresh.push(mif_rh::SuggestionEntry {
+                finding_id: finding.id,
+                file: followup_entry.file.clone(),
+                basis: followup_entry.basis.clone(),
+                run_id: run.clone(),
+                candidates: suggestions,
+                status: mif_rh::queue::STATUS_PENDING.to_string(),
+            });
+        }
+        if fresh.is_empty() {
+            continue;
+        }
+        total_entries += fresh.len();
+        topics_written += 1;
+        let queue_path = inputs
+            .meta_dir
+            .join("suggestions")
+            .join(format!("{topic_id}.json"));
+        mif_rh::upsert_suggestions(&queue_path, topic_id, fresh)?;
+    }
+
+    if total_entries == 0 {
+        return Ok(format!(
+            "ontology-review: no findings needed suggestions; {misses_recorded} miss(es) recorded"
+        ));
+    }
+    Ok(format!(
+        "ontology-review: suggestions written to {} ({} finding(s) across {} topic(s); {} \
+         miss(es) recorded)",
+        inputs.meta_dir.join("suggestions").display(),
+        total_entries,
+        topics_written,
+        misses_recorded,
+    ))
 }
 
 /// Formats the `TOPIC BOUND FIND STAMPED DISCOVERY UNTYPED INVALID` table
@@ -517,6 +927,21 @@ fn review(args: &ReviewArgs<'_>) -> Result<Outcome, CliError> {
         );
     }
 
+    // Like the followup confirmation above: prints before the final
+    // summary line, which callers treat as the last line of output.
+    if args.suggest {
+        message.push('\n');
+        message.push_str(&run_suggest_pass(&SuggestPassInputs {
+            backlog: &backlog,
+            catalog: &catalog,
+            config: &config,
+            ontology_packs: &ontology_packs,
+            meta_dir: &meta_dir,
+            index: args.index,
+            calibration: args.calibration,
+        })?);
+    }
+
     message.push('\n');
     message.push_str(&report.summary_line());
 
@@ -549,7 +974,10 @@ fn review(args: &ReviewArgs<'_>) -> Result<Outcome, CliError> {
 mod tests {
     use std::fs;
 
-    use super::{ReviewArgs, SuggestTypeArgs, resolve, review, suggest_type_cmd, topic_from_path};
+    use super::{
+        CalibrateArgs, ReviewArgs, SuggestTypeArgs, calibrate_cmd, expansion_candidates_cmd,
+        resolve, review, suggest_type_cmd, topic_from_path,
+    };
 
     fn write_fixture(dir: &std::path::Path) {
         fs::create_dir_all(dir.join(".claude")).unwrap();
@@ -640,6 +1068,8 @@ mod tests {
             root: Some(dir.path()),
             limit: 10,
             calibration: Some(&dir.path().join("absent-calibration.json")),
+            record: false,
+            index: None,
         })
         .unwrap();
 
@@ -650,6 +1080,131 @@ mod tests {
         // exemplars — no positive embedding signal, so it is skipped and the
         // hypothesis list is empty, which is still a successful outcome.
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn expansion_candidates_on_a_fresh_index_emit_an_empty_cluster_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let index_path = dir.path().join("index.sqlite");
+
+        let outcome = expansion_candidates_cmd(
+            Some(&index_path),
+            Some(&dir.path().join("absent-calibration.json")),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.exit_code, 0);
+        let payload: serde_json::Value = serde_json::from_str(&outcome.message).unwrap();
+        assert!(payload["clusters"].as_array().unwrap().is_empty());
+        assert_eq!(payload["misses_considered"], 0);
+    }
+
+    /// Enriches the fixture pack with a described entity type so suggest/
+    /// calibrate paths have a positive embedding signal to work with.
+    fn enrich_fixture_pack(dir: &std::path::Path) {
+        fs::write(
+            dir.join("packs/edu-fixture.yaml"),
+            "ontology:\n  id: edu-fixture\n  version: \"0.1.0\"\nentity_types:\n  - name: title\n    description: A published educational title\n    aliases: [textbook]\n    schema:\n      required: [name]\n      properties: {name: {type: string}}\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn calibrate_derives_a_wellformed_artifact_from_stamped_findings() {
+        if mif_embed::Embedder::load().is_err() {
+            eprintln!("skipping: embedding model unavailable in this environment");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture(dir.path());
+        enrich_fixture_pack(dir.path());
+
+        // Stamp the valid finding into the topic map first — stamped
+        // findings are calibrate's labeled sample.
+        resolve(
+            &dir.path().join("reports/edu/findings/good.json"),
+            Some("edu"),
+            Some(&dir.path().join(".claude/enabled-packs.json")),
+            Some(&dir.path().join("harness.config.json")),
+            Some(&dir.path().join("reports/edu/ontology-map.json")),
+            Some(dir.path()),
+        )
+        .unwrap();
+
+        let out = dir.path().join("reports/_meta/confidence-calibration.json");
+        let outcome = calibrate_cmd(&CalibrateArgs {
+            reports_dir: Some(&dir.path().join("reports")),
+            config: Some(&dir.path().join("harness.config.json")),
+            catalog: Some(&dir.path().join(".claude/enabled-packs.json")),
+            root: Some(dir.path()),
+            target_precision: 1.0,
+            tier2_target: 0.5,
+            sample: None,
+            seed: 0,
+            out: Some(&out),
+        })
+        .unwrap();
+
+        assert_eq!(outcome.exit_code, 0);
+        let cal = mif_ontology::CalibrationConfig::load_or_default(&out).unwrap();
+        assert!(cal.calibrated);
+        assert_eq!(cal.method.as_deref(), Some("stamped-quantile-v1"));
+        assert_eq!(cal.sample_size, Some(1));
+        assert!(cal.tier2_floor <= cal.tier1_floor);
+    }
+
+    #[test]
+    fn review_suggest_writes_a_topic_queue_for_followup_findings() {
+        if mif_embed::Embedder::load().is_err() {
+            eprintln!("skipping: embedding model unavailable in this environment");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        write_fixture(dir.path());
+        enrich_fixture_pack(dir.path());
+        // An untyped finding WITH content: suggestable (the fixture's
+        // invalid finding has no indexable text and is skipped).
+        fs::write(
+            dir.path().join("reports/edu/findings/untyped.json"),
+            r#"{"@id":"f-untyped","content":"A fascinating textbook about geometry"}"#,
+        )
+        .unwrap();
+
+        let outcome = review(&ReviewArgs {
+            topics: &[],
+            strict: false,
+            reports_dir: Some(&dir.path().join("reports")),
+            config: Some(&dir.path().join("harness.config.json")),
+            catalog: Some(&dir.path().join(".claude/enabled-packs.json")),
+            followup: None,
+            root: Some(dir.path()),
+            relationship_script: None,
+            build_index: false,
+            index: None,
+            suggest: true,
+            calibration: None,
+        })
+        .unwrap();
+
+        // The suggestions confirmation prints before the final summary line.
+        let lines: Vec<&str> = outcome.message.lines().collect();
+        let confirmation = lines
+            .iter()
+            .position(|l| l.starts_with("ontology-review: suggestions written"))
+            .expect("suggestions confirmation line present");
+        assert!(confirmation < lines.len() - 1);
+
+        // The untyped finding (not durably stamped) got queued.
+        let queue_path = dir.path().join("reports/_meta/suggestions/edu.json");
+        let queue: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&queue_path).unwrap()).unwrap();
+        let entries = queue["entries"].as_array().unwrap();
+        assert!(
+            entries
+                .iter()
+                .any(|e| e["finding_id"] == "f-untyped" && e["status"] == "pending")
+        );
     }
 
     #[test]
@@ -677,6 +1232,8 @@ mod tests {
             root: Some(dir.path()),
             limit: 10,
             calibration: Some(&dir.path().join("absent-calibration.json")),
+            record: false,
+            index: None,
         })
         .unwrap();
 
@@ -705,6 +1262,8 @@ mod tests {
             relationship_script: None,
             build_index: false,
             index: None,
+            suggest: false,
+            calibration: None,
         })
         .unwrap();
         assert_eq!(strict_outcome.exit_code, 1);
@@ -721,6 +1280,8 @@ mod tests {
             relationship_script: None,
             build_index: false,
             index: None,
+            suggest: false,
+            calibration: None,
         })
         .unwrap();
         assert_eq!(lenient_outcome.exit_code, 0);
@@ -742,6 +1303,8 @@ mod tests {
             relationship_script: None,
             build_index: false,
             index: None,
+            suggest: false,
+            calibration: None,
         })
         .unwrap();
 
@@ -774,6 +1337,8 @@ mod tests {
             relationship_script: None,
             build_index: false,
             index: None,
+            suggest: false,
+            calibration: None,
         })
         .unwrap();
 
@@ -808,6 +1373,8 @@ mod tests {
             relationship_script: None,
             build_index: true,
             index: None,
+            suggest: false,
+            calibration: None,
         })
         .unwrap();
 

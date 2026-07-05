@@ -30,6 +30,7 @@
 //! never-authoritative: it never writes to `ontology-map.json`, and
 //! `resolve`/`review` never call into it.
 
+pub mod calibrate;
 pub mod catalog;
 pub mod config;
 mod error;
@@ -37,17 +38,23 @@ pub mod finding;
 pub mod index;
 pub mod lock;
 pub mod ontology_pack;
+pub mod queue;
 pub mod resolve;
 pub mod review;
 pub mod suggest;
 
+pub use calibrate::{CalibrateOptions, CalibrationSample, collect_topic_samples, subsample, sweep};
 pub use catalog::Catalog;
 pub use config::HarnessConfig;
 pub use error::MifRhError;
 pub use finding::Finding;
-pub use index::{FindingIndex, IndexStats, IndexedFinding, SearchMatch, SimilarFinding};
+pub use index::{FindingIndex, IndexStats, IndexedFinding, Miss, SearchMatch, SimilarFinding};
 pub use lock::ReviewLock;
 pub use ontology_pack::{EntityType, OntologyPack};
+pub use queue::{
+    ClusterMember, ExpansionCandidate, SuggestionEntry, SuggestionQueue, expansion_candidates,
+    upsert_suggestions,
+};
 pub use resolve::{Basis, MapRecord, ResolveContext, build_allowed, resolve_finding};
 pub use review::{
     FollowupBacklog, FollowupEntry, ReviewOptions, ReviewReport, TopicSummary, review,
