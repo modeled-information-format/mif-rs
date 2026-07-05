@@ -188,10 +188,12 @@ jobs:
       - name: Cache the sentence-transformers model
         # v5.0.3 — the search eval embeds real text; the model is a
         # first-run network fetch (~90 MB) cached across runs. The key is
-        # static because mif-embed pins one model (mif_embed::MODEL_ID).
+        # static because mif-embed pins one model (mif_embed::MODEL_ID),
+        # and the path is mif-embed's own hf-hub cache dir
+        # (dirs::cache_dir()/mif/models), NOT the default ~/.cache/huggingface.
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
-          path: ~/.cache/huggingface
+          path: ~/.cache/mif/models
           key: hf-all-MiniLM-L6-v2
 
       - name: Run parity tests (fixtures required, fail-closed)
