@@ -204,7 +204,7 @@ git push
 - Can this be done with `std` or an existing workspace dependency instead?
 - Is the license in the `deny.toml` allow-list above?
 - Does it avoid pulling in `openssl` or `atty` (check `cargo tree -i`)?
-- Does it support the workspace MSRV, Rust 1.92 (`rust-version.workspace = true`
+- Does it support the workspace MSRV, Rust 1.95 (`rust-version.workspace = true`
   in every crate's `Cargo.toml`)?
 - Is it actively maintained, tested, documented?
 

@@ -4,7 +4,7 @@ Thank you for your interest in contributing to mif-rs!
 
 ## Prerequisites
 
-- [Rust](https://rustup.rs/) 1.92 or later — install via `rustup`, **not** Homebrew
+- [Rust](https://rustup.rs/) 1.95 or later — install via `rustup`, **not** Homebrew
 - [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) for supply chain checks
 
 ## Getting Started

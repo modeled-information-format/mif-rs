@@ -35,7 +35,7 @@ allow-unwrap-in-tests = true
 allow-print-in-tests = true
 
 # MSRV for lint behavior
-msrv = "1.92"
+msrv = "1.95"
 
 # Type complexity threshold
 type-complexity-threshold = 250

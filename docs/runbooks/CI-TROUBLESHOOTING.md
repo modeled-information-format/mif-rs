@@ -38,8 +38,8 @@ fix.
 ## Prerequisites
 
 - `gh` CLI authenticated against `modeled-information-format/mif-rs`.
-- A local clone with the same Rust toolchain CI uses (`stable`, plus `1.92`
-  for MSRV checks: `rustup install 1.92`).
+- A local clone with the same Rust toolchain CI uses (`stable`, plus `1.95`
+  for MSRV checks: `rustup install 1.95`).
 - `just` installed (the local task runner; run `just` with no arguments to
   list every recipe).
 
@@ -71,7 +71,7 @@ reusable workflows. Reproduce the core gate locally in one command:
 
 ```bash
 just check    # = fmt-check + lint + test + doc-build + deny (matches CI, minus msrv)
-just msrv     # separate recipe: cargo +1.92 check --all-features
+just msrv     # separate recipe: cargo +1.95 check --all-features
 ```
 
 Raw `cargo` equivalents, if you need to run one check in isolation:
@@ -82,7 +82,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features --verbose
 cargo doc --workspace --no-deps --all-features
 cargo deny check
-cargo +1.92 check --all-features
+cargo +1.95 check --all-features
 ```
 
 ## Clippy failures
@@ -143,19 +143,19 @@ are commented out and only apply under `cargo +nightly fmt`.
 ## MSRV failures
 
 **Workflow:** `pipeline.yml` → `ci-checks.yml` (`msrv` job)
-**Command:** `cargo check --all-features` on toolchain `1.92`
-**MSRV:** Rust 1.92 (`rust-version.workspace = true` in every crate)
+**Command:** `cargo check --all-features` on toolchain `1.95`
+**MSRV:** Rust 1.95 (`rust-version.workspace = true` in every crate)
 
 ```bash
-rustup install 1.92
-cargo +1.92 check --all-features    # matches `just msrv`
+rustup install 1.95
+cargo +1.95 check --all-features    # matches `just msrv`
 ```
 
 | Cause | Fix |
 |---|---|
-| Used a language feature newer than 1.92 | Rewrite with MSRV-compatible syntax, or check which version stabilized it |
+| Used a language feature newer than 1.95 | Rewrite with MSRV-compatible syntax, or check which version stabilized it |
 | A dependency bumped its own MSRV | Pin it to the last compatible version in the relevant crate's `Cargo.toml` |
-| Used a std API newer than 1.92 | Use a polyfill or feature-gate it |
+| Used a std API newer than 1.95 | Use a polyfill or feature-gate it |
 
 If the MSRV genuinely needs to move: update `rust-version` in
 `[workspace.package]` (`Cargo.toml`), update the `msrv` input default in
@@ -378,7 +378,7 @@ major version`, `@dependabot ignore this dependency`.
 | Test (ubuntu/macos/windows) | `cargo test --workspace --all-features --verbose` | Yes |
 | Documentation | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` | Yes |
 | Cargo Deny | `cargo deny check` | Yes |
-| MSRV | `cargo +1.92 check --all-features` | Yes |
+| MSRV | `cargo +1.95 check --all-features` | Yes |
 | Coverage | `cargo llvm-cov --workspace --all-features` (90% threshold) | No — separate workflow (`ci-coverage.yml`) |
 | CodeQL (SAST) | Static analysis, no local equivalent | No — separate workflow (`quality-gates.yml`) |
 | Security Audit | `cargo audit --deny warnings` | No — separate workflow (`security-audit.yml`) |

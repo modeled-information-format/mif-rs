@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **MSRV bumped from 1.92 to 1.95**, a potentially breaking change for consumers on an older toolchain. Unblocks taking `rusqlite` 0.40.1 (previously pinned to `=0.39.0`), whose transitive `libsqlite3-sys` 0.38.1 dependency requires the `cfg_select!` macro, stable since Rust 1.95 (#55).
+
 ## [0.4.0] - 2026-07-06
 
 ### Added

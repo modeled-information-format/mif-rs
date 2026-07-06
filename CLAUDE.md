@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `mif-rs` is a Cargo **workspace** implementing the [MIF (Modeled Information
 Format)](https://mif-spec.dev) specification in Rust (edition 2024, MSRV
-1.92). Twelve members, in dependency order:
+1.95). Twelve members, in dependency order:
 
 | Crate | Kind | Purpose |
 |---|---|---|

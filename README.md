@@ -10,7 +10,7 @@
 
 <!-- Badges -->
 [![CI](https://github.com/modeled-information-format/mif-rs/actions/workflows/pipeline.yml/badge.svg)](https://github.com/modeled-information-format/mif-rs/actions/workflows/pipeline.yml)
-[![Rust Version](https://img.shields.io/badge/rust-1.92%2B-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![Rust Version](https://img.shields.io/badge/rust-1.95%2B-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/modeled-information-format/mif-rs/blob/main/LICENSE)
 [![Clippy](https://img.shields.io/badge/linting-clippy-orange?logo=rust&logoColor=white)](https://github.com/rust-lang/rust-clippy)
 [![cargo-deny](https://img.shields.io/badge/security-cargo--deny-blue?logo=rust&logoColor=white)](https://github.com/EmbarkStudios/cargo-deny)
@@ -101,7 +101,7 @@ standards. Please also review [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md),
 
 ## MSRV policy
 
-The Minimum Supported Rust Version (MSRV) is **1.92**. Raising the MSRV is a
+The Minimum Supported Rust Version (MSRV) is **1.95**. Raising the MSRV is a
 minor breaking change.
 
 ## License

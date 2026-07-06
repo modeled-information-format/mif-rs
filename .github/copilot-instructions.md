@@ -5,7 +5,7 @@ This document provides context for GitHub Copilot when working with this Rust pr
 ## Project Context
 
 This is a Rust Cargo workspace using modern tooling:
-- **Rust**: 1.92+ (2024 edition)
+- **Rust**: 1.95+ (2024 edition)
 - **Build System**: Cargo (virtual workspace, `crates/*` members)
 - **Linting**: clippy with the pedantic, nursery, and cargo lint groups; `unsafe_code = "forbid"` workspace-wide
 - **Formatting**: rustfmt
