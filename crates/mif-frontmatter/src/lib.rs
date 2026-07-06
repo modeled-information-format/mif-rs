@@ -376,13 +376,19 @@ pub fn serialize_markdown(
 /// frontmatter key passes through under its own name.
 const FRONTMATTER_SPECIAL_KEYS: &[&str] = &["id", "type"];
 
-/// JSON-LD keys excluded from the generic pass-through in [`jsonld_to_md`]
-/// under [`FrontmatterShape::V1Canonical`]: `@context`/`@type`/`@id`/
-/// `conceptType`/`content` get their own special frontmatter mapping (or are
-/// JSON-LD-only framing), and `timestamp`/`description` are derived-only
-/// mirrors of `created`/`modified`/`summary` computed by [`md_to_jsonld`] —
-/// writing them back to frontmatter would invent a field the original
-/// document never had.
+/// JSON-LD keys unconditionally excluded from the generic pass-through in
+/// [`jsonld_to_md`] under [`FrontmatterShape::V1Canonical`]:
+/// `@context`/`@type`/`@id`/`conceptType`/`content` get their own special
+/// frontmatter mapping (or are JSON-LD-only framing), and `timestamp` is
+/// always a derived-only mirror of `created`/`modified` computed by
+/// [`md_to_jsonld`] — writing it back to frontmatter would invent a field
+/// the original document never had. `description` is deliberately **not**
+/// listed here: unlike `timestamp`, it is only a derived mirror when the
+/// frontmatter had a `summary` field; when it didn't, `description` is a
+/// genuine pass-through key that `md_to_jsonld`'s generic loop carried
+/// over verbatim, and must round-trip like any other field. See
+/// [`jsonld_to_md`]'s handling of the `summary` key for how that
+/// distinction is made.
 const JSONLD_SPECIAL_KEYS: &[&str] = &[
     "@context",
     "@type",
@@ -390,7 +396,6 @@ const JSONLD_SPECIAL_KEYS: &[&str] = &[
     "conceptType",
     "content",
     "timestamp",
-    "description",
 ];
 
 /// JSON-LD keys excluded from the generic pass-through in [`jsonld_to_md`]
@@ -588,13 +593,20 @@ pub fn jsonld_to_md(
         }
     }
 
-    let excluded = if shape == FrontmatterShape::V1Canonical {
-        JSONLD_SPECIAL_KEYS
-    } else {
-        PRE_PROJECTED_EXCLUDED_KEYS
-    };
+    // `description` is only a derived mirror of `summary` when `summary`
+    // itself is present in `jsonld` (see JSONLD_SPECIAL_KEYS's doc comment);
+    // otherwise it is a genuine pass-through key that must round-trip.
+    let description_is_derived =
+        shape == FrontmatterShape::V1Canonical && object.contains_key("summary");
     for (key, value) in object {
-        if excluded.contains(&key.as_str()) {
+        let is_excluded = match shape {
+            FrontmatterShape::V1Canonical => {
+                JSONLD_SPECIAL_KEYS.contains(&key.as_str())
+                    || (key == "description" && description_is_derived)
+            },
+            FrontmatterShape::PreProjected => PRE_PROJECTED_EXCLUDED_KEYS.contains(&key.as_str()),
+        };
+        if is_excluded {
             continue;
         }
         frontmatter.insert(key.as_str().into(), json_value_to_yaml(key, value)?);
@@ -1095,6 +1107,22 @@ This exec-summary synthesis covers example findings.
         let jsonld = md_to_jsonld(&frontmatter, &body).unwrap();
         assert_eq!(jsonld["timestamp"], "2026-01-01T00:00:00Z");
         assert_eq!(jsonld["description"], "A summary.");
+    }
+
+    #[test]
+    fn v1_canonical_shape_round_trips_a_literal_description_field_without_summary() {
+        // Regression test for the mif-rs#38 bug: a V1Canonical document
+        // carrying its own literal `description` frontmatter key (no
+        // `summary` field to derive it from) failed roundtrip_lossless
+        // because jsonld_to_md unconditionally treated `description` as a
+        // derived-only mirror and dropped it.
+        let md = "---\nid: memory:drift-a\ntype: semantic\ncreated: 2026-07-05T00:00:00Z\ndescription: any description here\ntags:\n- x\n---\n\nBody A.\n";
+        roundtrip_lossless(md).unwrap();
+
+        let (frontmatter, body) = parse_markdown(md).unwrap();
+        let jsonld = md_to_jsonld(&frontmatter, &body).unwrap();
+        assert_eq!(jsonld["description"], "any description here");
+        assert!(jsonld.get("summary").is_none());
     }
 
     #[test]
