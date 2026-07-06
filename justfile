@@ -98,7 +98,7 @@ coverage-summary:
 
 # Check against minimum supported Rust version
 msrv:
-    cargo +1.92 check --all-features
+    cargo +1.95 check --all-features
 
 # Run tests under Miri for undefined behavior detection
 miri:

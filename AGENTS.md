@@ -4,7 +4,7 @@ Instructions for AI coding agents working on this Rust project.
 
 ## Project Context
 
-- **Language**: Rust (edition 2024, MSRV 1.92)
+- **Language**: Rust (edition 2024, MSRV 1.95)
 - **Build System**: Cargo
 - **Linting**: clippy with pedantic and nursery lints
 - **Formatting**: rustfmt (100-char lines, 4-space indent)

@@ -147,7 +147,7 @@ Run through this checklist before every release.
 - [ ] Run the full local check suite:
   ```bash
   just check    # fmt-check + lint + test + doc-build + deny
-  just msrv     # cargo +1.92 check --all-features
+  just msrv     # cargo +1.95 check --all-features
   ```
 - [ ] Build all four release binaries locally to verify:
   ```bash
