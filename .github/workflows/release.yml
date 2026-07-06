@@ -377,7 +377,7 @@ jobs:
       pull-requests: write   # reusable's (skipped) dependency-review job declares it
     # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-sca-osv.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
+      modeled-information-format/.github/.github/workflows/reusable-sca-osv.yml@1b416b97ff3ded8a49ae6873cc350eb1efb389bf
     with:
       fail-on-severity: high
       scan-args: |-
