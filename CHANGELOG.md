@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.1] - 2026-07-05
+## [0.4.0] - 2026-07-06
+
+### Added
+
+- **`mif-rh-cli calibrate --confusions`**: exports a ranked confusion matrix (gold/top1/count/finding_ids) from a calibration run, the grounding input for human-curating MIF ADR-020's `negative_examples` field (#42).
+- **`negative_examples` scoring**: the `negative-demotion-v1` policy-gated demotion gate scores curated `negative_examples` in the candidate pipeline (`mif-ontology::confidence::negative_demotes`, `mif-rh::suggest`). A candidate whose query similarity to any curated negative example meets or exceeds its positive score is barred from tier 1; demotion never reorders candidate ranking, only gates its confidence tier (#43).
+
+### Fixed
+
+- **CI**: the workspace `cargo publish` retries until the publish plan drains, instead of failing on transient registry propagation delays (#33).
 
 ### Fixed
 
