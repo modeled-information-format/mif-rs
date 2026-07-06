@@ -38,9 +38,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Validate a MIF document against the canonical schema.
+    /// Validate a MIF document against the canonical schema. No side
+    /// effects: no embedding model load, no vector store write.
     Validate {
-        /// Path to the MIF document (JSON-LD projection) to validate.
+        /// Path to the MIF document (markdown with frontmatter, or a
+        /// JSON-LD projection) to validate.
         file: PathBuf,
     },
     /// Ontology-related operations.
@@ -275,17 +277,24 @@ fn format_matches(matches: &[mif_store::SimilarityMatch]) -> String {
         .join("\n")
 }
 
+/// Validates one MIF document: projects markdown-with-frontmatter or
+/// JSON-LD input to JSON-LD via [`project_to_jsonld`] (proving the
+/// markdown <-> JSON-LD round trip is lossless either way), then
+/// schema-checks the result. Unlike [`ingest`], this has no side effects:
+/// no embedding model load, no vector store write.
+///
+/// # Errors
+///
+/// Returns [`CliError`] if the file cannot be read, is not valid
+/// JSON-LD/frontmatter, does not round-trip losslessly, or does not
+/// conform to the canonical MIF schema.
 fn validate(file: &Path) -> Result<String, CliError> {
     let contents = std::fs::read_to_string(file).map_err(|source| CliError::Io {
         path: file.display().to_string(),
         source,
     })?;
-    let instance: serde_json::Value =
-        serde_json::from_str(&contents).map_err(|source| CliError::Json {
-            path: file.display().to_string(),
-            source,
-        })?;
-    mif_schema::validate_document(&instance)?;
+    let jsonld = project_to_jsonld(file, &contents)?;
+    mif_schema::validate_document(&jsonld)?;
     Ok(format!("{}: valid", file.display()))
 }
 
@@ -301,8 +310,11 @@ fn resolve(id: &str, ontologies_dir: &Path) -> Result<String, CliError> {
 
 /// Projects `contents` to a JSON-LD document and proves the markdown <->
 /// JSON-LD round trip is lossless, dispatching on whether `contents` is
-/// markdown-with-frontmatter (starts with `---`) or already JSON-LD.
+/// markdown-with-frontmatter (starts with `---`) or already JSON-LD. A
+/// leading UTF-8 BOM (common in files saved by some Windows editors) is
+/// stripped first so it doesn't defeat that dispatch.
 fn project_to_jsonld(path: &Path, contents: &str) -> Result<serde_json::Value, CliError> {
+    let contents = contents.strip_prefix('\u{feff}').unwrap_or(contents);
     if contents.trim_start().starts_with("---") {
         mif_frontmatter::roundtrip_lossless(contents)?;
         let (frontmatter, body) = mif_frontmatter::parse_markdown(contents)?;
@@ -494,6 +506,32 @@ mod tests {
                 "created": "2026-07-02T00:00:00Z"
             }"#,
         );
+        assert_eq!(
+            validate(file.path()).unwrap(),
+            format!("{}: valid", file.path().display())
+        );
+    }
+
+    #[test]
+    fn validate_accepts_a_conformant_markdown_document() {
+        // Regression test for mif-rs#39: `validate` must accept
+        // markdown-with-frontmatter directly. `validate`'s own code path
+        // never references `mif_embed`/`mif_store`, so the absence of
+        // side effects (unlike `ingest`) is a structural property, not
+        // one this test runs an assertion against.
+        let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
+        assert_eq!(
+            validate(file.path()).unwrap(),
+            format!("{}: valid", file.path().display())
+        );
+    }
+
+    #[test]
+    fn validate_accepts_a_markdown_document_with_a_leading_byte_order_mark() {
+        // Regression test: a leading UTF-8 BOM (common in files saved by
+        // some Windows editors) must not defeat project_to_jsonld's
+        // markdown-vs-JSON-LD dispatch.
+        let file = write_temp_file(&format!("\u{feff}{VALID_MARKDOWN_FIXTURE}"));
         assert_eq!(
             validate(file.path()).unwrap(),
             format!("{}: valid", file.path().display())
