@@ -38,9 +38,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Validate a MIF document against the canonical schema.
+    /// Validate a MIF document against the canonical schema. No side
+    /// effects: no embedding model load, no vector store write.
     Validate {
-        /// Path to the MIF document (JSON-LD projection) to validate.
+        /// Path to the MIF document (markdown with frontmatter, or a
+        /// JSON-LD projection) to validate.
         file: PathBuf,
     },
     /// Ontology-related operations.
@@ -275,17 +277,24 @@ fn format_matches(matches: &[mif_store::SimilarityMatch]) -> String {
         .join("\n")
 }
 
+/// Validates one MIF document: schema-checks a JSON-LD file directly, or
+/// projects a markdown-with-frontmatter file to JSON-LD (proving the
+/// round trip is lossless) before schema-checking it. Unlike [`ingest`],
+/// this has no side effects: no embedding model load, no vector store
+/// write.
+///
+/// # Errors
+///
+/// Returns [`CliError`] if the file cannot be read, is not valid JSON-LD
+/// (or, for markdown input, not valid frontmatter), does not round-trip
+/// losslessly, or does not conform to the canonical MIF schema.
 fn validate(file: &Path) -> Result<String, CliError> {
     let contents = std::fs::read_to_string(file).map_err(|source| CliError::Io {
         path: file.display().to_string(),
         source,
     })?;
-    let instance: serde_json::Value =
-        serde_json::from_str(&contents).map_err(|source| CliError::Json {
-            path: file.display().to_string(),
-            source,
-        })?;
-    mif_schema::validate_document(&instance)?;
+    let jsonld = project_to_jsonld(file, &contents)?;
+    mif_schema::validate_document(&jsonld)?;
     Ok(format!("{}: valid", file.display()))
 }
 
@@ -494,6 +503,18 @@ mod tests {
                 "created": "2026-07-02T00:00:00Z"
             }"#,
         );
+        assert_eq!(
+            validate(file.path()).unwrap(),
+            format!("{}: valid", file.path().display())
+        );
+    }
+
+    #[test]
+    fn validate_accepts_a_conformant_markdown_document_with_no_side_effects() {
+        // Regression test for mif-rs#39: `validate` must accept
+        // markdown-with-frontmatter directly, without loading the
+        // embedding model or writing to a vector store (unlike `ingest`).
+        let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
         assert_eq!(
             validate(file.path()).unwrap(),
             format!("{}: valid", file.path().display())
