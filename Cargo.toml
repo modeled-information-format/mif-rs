@@ -49,7 +49,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 # sysinfo >=0.38 requires Rust 1.95, newer than this workspace's MSRV of
 # 1.92 and would fail the MSRV Check CI job (same reasoning as the rusqlite
 # pin above).
-sysinfo = { version = "=0.37.2", default-features = false, features = ["system"] }
+sysinfo = { version = "=0.38.4", default-features = false, features = ["system"] }
 # Discovery-pattern content matching for mif-rh (the direct equivalent of
 # rht's bash `[[ =~ ]]` regex fallback classifier).
 regex = "1.12.4"
