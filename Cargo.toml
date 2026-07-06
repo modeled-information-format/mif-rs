@@ -44,7 +44,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 # (this workspace forbids unsafe_code workspace-wide). Pinned below 0.38:
 # previously believed sysinfo >=0.38 required a newer Rust than this
 # workspace's MSRV; empirically this pin's rationale doesn't hold (see
-# mif-rs#55) — tracked as a follow-up to verify and possibly unpin.
+# mif-rs#56) — tracked as a follow-up to verify and possibly unpin.
 sysinfo = { version = "=0.37.2", default-features = false, features = ["system"] }
 # Discovery-pattern content matching for mif-rh (the direct equivalent of
 # rht's bash `[[ =~ ]]` regex fallback classifier).
