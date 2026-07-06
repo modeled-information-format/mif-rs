@@ -385,8 +385,8 @@ const FRONTMATTER_SPECIAL_KEYS: &[&str] = &["id", "type"];
 /// the original document never had. `description` is deliberately **not**
 /// listed here: unlike `timestamp`, it is only a derived mirror when the
 /// frontmatter had a `summary` field; when it didn't, `description` is a
-/// genuine pass-through key `md_to_jsonld`'s generic loop carried over
-/// verbatim, and must round-trip like any other field. See
+/// genuine pass-through key that `md_to_jsonld`'s generic loop carried
+/// over verbatim, and must round-trip like any other field. See
 /// [`jsonld_to_md`]'s handling of the `summary` key for how that
 /// distinction is made.
 const JSONLD_SPECIAL_KEYS: &[&str] = &[
