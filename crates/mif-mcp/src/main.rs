@@ -257,11 +257,17 @@ impl ToProblem for McpError {
     }
 }
 
-/// Validates one MIF document: schema-checks a JSON-LD file directly, or
-/// projects a markdown-with-frontmatter file to JSON-LD (proving the
-/// round trip is lossless) before schema-checking it. Unlike
-/// [`ingest_mif_document_inner`], this has no side effects: no embedding
-/// model load, no vector store write.
+/// Validates one MIF document: projects markdown-with-frontmatter or
+/// JSON-LD input to JSON-LD via [`project_to_jsonld`] (proving the
+/// markdown <-> JSON-LD round trip is lossless either way), then
+/// schema-checks the result. Unlike [`ingest_mif_document_inner`], this
+/// has no side effects: no embedding model load, no vector store write.
+///
+/// # Errors
+///
+/// Returns [`McpError`] if the file cannot be read, is not valid
+/// JSON-LD/frontmatter, does not round-trip losslessly, or does not
+/// conform to the canonical MIF schema.
 fn validate_mif_document_inner(file: &Path) -> Result<String, McpError> {
     let contents = std::fs::read_to_string(file).map_err(|source| McpError::Io {
         path: file.display().to_string(),
@@ -284,8 +290,11 @@ fn resolve_ontology_reference_inner(id: &str, ontologies_dir: &Path) -> Result<S
 
 /// Projects `contents` to a JSON-LD document and proves the markdown <->
 /// JSON-LD round trip is lossless, dispatching on whether `contents` is
-/// markdown-with-frontmatter (starts with `---`) or already JSON-LD.
+/// markdown-with-frontmatter (starts with `---`) or already JSON-LD. A
+/// leading UTF-8 BOM (common in files saved by some Windows editors) is
+/// stripped first so it doesn't defeat that dispatch.
 fn project_to_jsonld(path: &Path, contents: &str) -> Result<serde_json::Value, McpError> {
+    let contents = contents.strip_prefix('\u{feff}').unwrap_or(contents);
     if contents.trim_start().starts_with("---") {
         mif_frontmatter::roundtrip_lossless(contents)?;
         let (frontmatter, body) = mif_frontmatter::parse_markdown(contents)?;
@@ -595,12 +604,25 @@ mod tests {
     }
 
     #[test]
-    fn validate_tool_accepts_a_conformant_markdown_document_with_no_side_effects() {
+    fn validate_tool_accepts_a_conformant_markdown_document() {
         // Regression test for mif-rs#39: `validate_mif_document` must
-        // accept markdown-with-frontmatter directly, without loading the
-        // embedding model or writing to a vector store (unlike
-        // `ingest_mif_document`).
+        // accept markdown-with-frontmatter directly. Its code path never
+        // references `mif_embed`/`mif_store`, so the absence of side
+        // effects (unlike `ingest_mif_document`) is a structural
+        // property, not one this test runs an assertion against.
         let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
+        let result = Mif.validate_mif_document(Parameters(ValidateParams {
+            file: file.path().to_path_buf(),
+        }));
+        assert!(result.ends_with(": valid"));
+    }
+
+    #[test]
+    fn validate_tool_accepts_a_markdown_document_with_a_leading_byte_order_mark() {
+        // Regression test: a leading UTF-8 BOM (common in files saved by
+        // some Windows editors) must not defeat project_to_jsonld's
+        // markdown-vs-JSON-LD dispatch.
+        let file = write_temp_file(&format!("\u{feff}{VALID_MARKDOWN_FIXTURE}"));
         let result = Mif.validate_mif_document(Parameters(ValidateParams {
             file: file.path().to_path_buf(),
         }));
