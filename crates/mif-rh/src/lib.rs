@@ -49,6 +49,7 @@ pub mod harness_project;
 pub mod harness_reconcile;
 pub mod harness_release;
 pub mod harness_render;
+pub mod harness_shippable_typing;
 pub mod harness_synthesize;
 pub mod harness_toggle;
 pub mod harness_topic_metadata;
@@ -86,6 +87,7 @@ pub use harness_release::{
     check_version_bump, goal_version_id,
 };
 pub use harness_render::{RenderInputs, render_artifact};
+pub use harness_shippable_typing::{ShippableTypingReport, check_shippable_typing};
 pub use harness_synthesize::synthesize_artifact;
 pub use harness_toggle::{SITE_PLUGINS, pack_toggle, site_toggle_plugin, site_toggle_primary};
 pub use harness_topic_metadata::{TopicMetadata, topic_metadata};

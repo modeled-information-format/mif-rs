@@ -221,6 +221,23 @@ pub enum MifRhError {
         /// The invalid concordance path.
         path: String,
     },
+    /// The shippable-typing gate's `ontology-map.json` is missing or
+    /// present-but-unparseable (not a JSON array of records) — the gate
+    /// cannot prove any shippable finding is typed, so it fails closed
+    /// rather than passing vacuously (every per-finding lookup would
+    /// otherwise silently resolve to "no record").
+    #[error(
+        "ontology-map.json {reason} for topic '{topic}' — synthesis BLOCKED (fail closed): {path}"
+    )]
+    OntologyMapUnusable {
+        /// The ontology-map path checked.
+        path: String,
+        /// The topic (derived from the reports-dir name) named in the
+        /// operator unblock hint.
+        topic: String,
+        /// Either `"is missing"` or `"is unparseable or not a record array"`.
+        reason: String,
+    },
     /// Building a dynamic `jsonschema` validator for a resolved entity
     /// type's `schema` field failed. Indicates a malformed ontology pack,
     /// not a bug in the finding being validated.
@@ -639,6 +656,13 @@ impl MifRhError {
                 title: "Concordance is not a valid graph",
                 status: 422,
                 exit_code: 2,
+            },
+            Self::OntologyMapUnusable { .. } => ProblemMeta {
+                slug: "ontology-map-unusable",
+                version: "v1",
+                title: "ontology-map.json is missing or unparseable — cannot prove typing",
+                status: 422,
+                exit_code: 3,
             },
             Self::EntityTypeSchemaInvalid { .. } => ProblemMeta {
                 slug: "entity-type-schema-invalid",
@@ -1294,6 +1318,19 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 Applicability::MaybeIncorrect,
             ),
         ),
+        MifRhError::OntologyMapUnusable { topic, .. } => (
+            SuggestedFix::new(
+                format!(
+                    "Regenerate the ontology map: /ontology-review --topic {topic} --enrich, then /resume --topic {topic}."
+                ),
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Regenerate the ontology map",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
         MifRhError::FindingIo { .. }
         | MifRhError::Io { .. }
         | MifRhError::LockIo { .. }
@@ -1537,6 +1574,11 @@ mod tests {
             },
             MifRhError::InvalidConcordance {
                 path: "reports/concordance.json".to_string(),
+            },
+            MifRhError::OntologyMapUnusable {
+                path: "reports/edu/ontology-map.json".to_string(),
+                topic: "edu".to_string(),
+                reason: "is missing".to_string(),
             },
         ]
     }

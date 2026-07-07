@@ -638,6 +638,12 @@ enum HarnessCommand {
         #[arg(long)]
         config: Option<PathBuf>,
     },
+    /// Fail-closed pre-synthesis typing gate (ADR-0011): every shippable
+    /// (survived/weakened) finding must resolve to a valid ontology type.
+    CheckShippableTyping {
+        /// The topic's reports directory (e.g. `reports/<topic>`).
+        reports_dir: PathBuf,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -1145,6 +1151,9 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
         HarnessCommand::CheckCitationIntegrity { findings, config } => Ok(
             harness_check_citation_integrity_cmd(findings, config.as_deref()),
         ),
+        HarnessCommand::CheckShippableTyping { reports_dir } => {
+            harness_check_shippable_typing_cmd(reports_dir)
+        },
     }
 }
 
@@ -1190,6 +1199,34 @@ fn harness_check_citation_integrity_cmd(findings: &[PathBuf], config: Option<&Pa
         message: lines.join("\n"),
         exit_code: u8::from(!report.ok()),
     }
+}
+
+fn harness_check_shippable_typing_cmd(reports_dir: &Path) -> Result<Outcome, CliError> {
+    let report = mif_rh::check_shippable_typing(reports_dir)?;
+    let topic = reports_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    let message = if report.ok() {
+        "check-shippable-typing: all shippable findings carry a valid ontology type — ok"
+            .to_string()
+    } else {
+        let mut lines = vec![format!(
+            "check-shippable-typing: {} shippable finding(s) lack a valid ontology type — \
+             synthesis BLOCKED (fail closed):",
+            report.blockers.len()
+        )];
+        lines.extend(report.blockers.iter().cloned());
+        lines.push(format!(
+            "check-shippable-typing: unblock with  /ontology-review --topic {topic} --enrich  \
+             then  /resume --topic {topic}"
+        ));
+        lines.join("\n")
+    };
+    Ok(Outcome {
+        message,
+        exit_code: u8::from(!report.ok()),
+    })
 }
 
 fn harness_goal_version_cmd(goal_path: &Path) -> Result<Outcome, CliError> {

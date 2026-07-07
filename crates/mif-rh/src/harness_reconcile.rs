@@ -55,7 +55,7 @@ pub struct ReconcileReport {
 /// `findings/*.json` plus a defensive flat `finding-*.json`, sorted and
 /// deduplicated by path. Hidden (`.`-prefixed) and `*.tmp` files are
 /// in-flight partial writes and are excluded.
-fn list_finding_paths(reports_dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn list_finding_paths(reports_dir: &Path) -> Vec<PathBuf> {
     let mut paths: HashSet<PathBuf> = HashSet::new();
     let findings_dir = reports_dir.join("findings");
     if let Ok(entries) = std::fs::read_dir(&findings_dir) {
@@ -302,6 +302,13 @@ fn project_concordance_status(reports_dir: &Path, finding_paths: &[PathBuf]) -> 
 /// gate too, so it counts here as untyped (keyed by path so it's never
 /// dropped). A missing/unparseable map means EVERY shippable finding is
 /// untyped (fail-closed).
+///
+/// A well-formed finding with no verdict at all (a raw/in-progress finding,
+/// not yet through the falsification gate) is neither shippable nor
+/// unreadable — `check-shippable-typing.sh`'s `jq -er '... // ""'` reads a
+/// missing verdict as `""`, which is not an error, and `""` never matches
+/// `survived|weakened`, so it is skipped, not blocked. Only a finding whose
+/// JSON itself fails to parse counts as unreadable.
 fn count_untyped_shippable(finding_paths: &[PathBuf], ontology_map: Option<&[Value]>) -> usize {
     let mut keys: HashSet<String> = HashSet::new();
     for path in finding_paths {
@@ -309,13 +316,10 @@ fn count_untyped_shippable(finding_paths: &[PathBuf], ontology_map: Option<&[Val
             keys.insert(format!("unreadable:{}", path.display()));
             continue;
         };
-        let Some(verdict) = finding
+        let verdict = finding
             .pointer("/extensions/harness/verification/verdict")
             .and_then(Value::as_str)
-        else {
-            keys.insert(format!("unreadable:{}", path.display()));
-            continue;
-        };
+            .unwrap_or_default();
         if verdict != "survived" && verdict != "weakened" {
             continue;
         }
@@ -578,5 +582,31 @@ mod tests {
         assert_eq!(report.state["concordance"]["built"], true);
         assert_eq!(report.state["concordance"]["nodes"], 3);
         assert_eq!(report.state["concordance"]["edges"], 1);
+    }
+
+    #[test]
+    fn untyped_shippable_does_not_count_a_raw_finding_with_no_verdict() {
+        // check-shippable-typing.sh reads a missing verdict as "" (jq's `// ""`
+        // on a nonexistent path is not an error) and "" never matches
+        // survived|weakened, so a raw/in-progress finding is skipped, not
+        // blocked. untyped_shippable must mirror that, not over-count it as
+        // unreadable.
+        let dir = tempfile::tempdir().unwrap();
+        let (schema_path, sample_path) = setup(dir.path());
+        let reports_dir = dir.path().join("reports/topic");
+        fs::create_dir_all(reports_dir.join("findings")).unwrap();
+        fs::write(
+            reports_dir.join("findings/raw.json"),
+            r#"{"@id": "urn:mif:raw"}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("reports/concordance.json"),
+            r#"{"nodes": [], "edges": []}"#,
+        )
+        .unwrap();
+
+        let report = reconcile_session(&reports_dir, &schema_path, &[], &sample_path).unwrap();
+        assert_eq!(report.state["concordance"]["untyped_shippable"], 0);
     }
 }
