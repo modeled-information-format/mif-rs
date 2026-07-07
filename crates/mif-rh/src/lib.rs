@@ -38,9 +38,11 @@ mod error;
 pub mod finding;
 pub mod harness_graph;
 pub mod harness_index;
+pub mod harness_markdown;
 pub mod harness_membership;
 pub mod harness_project;
 pub mod harness_release;
+pub mod harness_render;
 pub mod harness_toggle;
 pub mod harness_wrap;
 pub mod index;
@@ -69,6 +71,7 @@ pub use harness_release::{
     BumpOptions, BumpReport, VersionGateFailure, VersionGateReport, bump_version,
     check_version_bump, goal_version_id,
 };
+pub use harness_render::{RenderInputs, render_artifact};
 pub use harness_toggle::{SITE_PLUGINS, pack_toggle, site_toggle_plugin, site_toggle_primary};
 pub use harness_wrap::{WrapSourceInputs, read_source_content, wrap_source};
 pub use index::{FindingIndex, IndexStats, IndexedFinding, Miss, SearchMatch, SimilarFinding};

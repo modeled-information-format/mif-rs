@@ -507,6 +507,34 @@ enum HarnessCommand {
         /// Path to a `knowledge-graph.json` file.
         graph: PathBuf,
     },
+    /// Render one typed Artifact to an output channel (`report`, `blog`,
+    /// or `book`). Composition only — write-then-validate (`report`'s L3
+    /// conformance check) stays the bash wrapper's job, via
+    /// `mif-project.sh`.
+    RenderArtifact {
+        /// Path to the `artifact.json` file.
+        artifact: PathBuf,
+        /// `report`, `blog`, or `book`.
+        channel: String,
+        /// Write the rendered markdown here.
+        out: PathBuf,
+        /// The output file's slug (its basename, minus `.md`).
+        #[arg(long)]
+        slug: String,
+        /// The output file's repo-root-relative path.
+        #[arg(long)]
+        slugpath: String,
+        /// The RFC 3339 `created` timestamp.
+        #[arg(long)]
+        created: String,
+        /// This revision's version number.
+        #[arg(long)]
+        version: u64,
+        /// A `verification.json` falsification verdict to fold into the
+        /// `report` channel's frontmatter.
+        #[arg(long)]
+        verification: Option<PathBuf>,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -942,6 +970,25 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
             root,
         } => harness_resolve_membership_cmd(topic, version.as_deref(), root.as_deref()),
         HarnessCommand::GraphStats { graph } => harness_graph_stats_cmd(graph),
+        HarnessCommand::RenderArtifact {
+            artifact,
+            channel,
+            out,
+            slug,
+            slugpath,
+            created,
+            version,
+            verification,
+        } => harness_render_artifact_cmd(&RenderArtifactArgs {
+            artifact,
+            channel,
+            out,
+            slug,
+            slugpath,
+            created,
+            version: *version,
+            verification: verification.as_deref(),
+        }),
     }
 }
 
@@ -1328,6 +1375,83 @@ fn harness_graph_stats_cmd(graph: &Path) -> Result<Outcome, CliError> {
     let edges = value["edges"].as_array().map_or(0, Vec::len);
     Ok(Outcome {
         message: format!("{nodes} {edges}"),
+        exit_code: 0,
+    })
+}
+
+/// Bundles [`HarnessCommand::RenderArtifact`]'s fields for
+/// [`harness_render_artifact_cmd`] to stay under this workspace's
+/// too-many-arguments threshold.
+struct RenderArtifactArgs<'a> {
+    artifact: &'a Path,
+    channel: &'a str,
+    out: &'a Path,
+    slug: &'a str,
+    slugpath: &'a str,
+    created: &'a str,
+    version: u64,
+    verification: Option<&'a Path>,
+}
+
+fn harness_render_artifact_cmd(args: &RenderArtifactArgs<'_>) -> Result<Outcome, CliError> {
+    let contents =
+        std::fs::read_to_string(args.artifact).map_err(|source| mif_rh::MifRhError::Io {
+            path: args.artifact.display().to_string(),
+            source,
+        })?;
+    let artifact: serde_json::Value =
+        serde_json::from_str(&contents).map_err(|source| mif_rh::MifRhError::Json {
+            path: args.artifact.display().to_string(),
+            source,
+        })?;
+
+    let verification = args
+        .verification
+        .map(|path| {
+            let text = std::fs::read_to_string(path).map_err(|source| mif_rh::MifRhError::Io {
+                path: path.display().to_string(),
+                source,
+            })?;
+            serde_json::from_str::<serde_json::Value>(&text).map_err(|source| {
+                mif_rh::MifRhError::Json {
+                    path: path.display().to_string(),
+                    source,
+                }
+            })
+        })
+        .transpose()?;
+
+    let rendered = mif_rh::render_artifact(
+        &mif_rh::RenderInputs {
+            artifact: &artifact,
+            slug: args.slug,
+            slugpath: args.slugpath,
+            created: args.created,
+            version: args.version,
+            verification: verification.as_ref(),
+        },
+        args.channel,
+    )?;
+
+    if let Some(parent) = args.out.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| mif_rh::MifRhError::Io {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+    std::fs::write(args.out, &rendered).map_err(|source| mif_rh::MifRhError::Io {
+        path: args.out.display().to_string(),
+        source,
+    })?;
+
+    let line_count = rendered.lines().count();
+    Ok(Outcome {
+        message: format!(
+            "render: wrote {} ({}, {line_count} lines) from {}",
+            args.out.display(),
+            args.channel,
+            args.artifact.display()
+        ),
         exit_code: 0,
     })
 }
