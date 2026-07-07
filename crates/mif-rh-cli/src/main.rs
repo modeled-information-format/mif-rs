@@ -644,6 +644,16 @@ enum HarnessCommand {
         /// The topic's reports directory (e.g. `reports/<topic>`).
         reports_dir: PathBuf,
     },
+    /// Falsification gate substrate (SPEC §6b): assigns an ordinal verdict
+    /// to a finding from an offline evidence fixture and writes it back,
+    /// enforcing the one-round rule. Prints the updated finding JSON.
+    Falsify {
+        /// The finding file to grade.
+        finding: PathBuf,
+        /// The evidence fixture (JSON object keyed by finding `@id`); omit
+        /// for a placeholder `inconclusive` verdict.
+        fixture: Option<PathBuf>,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -1154,6 +1164,9 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
         HarnessCommand::CheckShippableTyping { reports_dir } => {
             harness_check_shippable_typing_cmd(reports_dir)
         },
+        HarnessCommand::Falsify { finding, fixture } => {
+            harness_falsify_cmd(finding, fixture.as_deref())
+        },
     }
 }
 
@@ -1226,6 +1239,27 @@ fn harness_check_shippable_typing_cmd(reports_dir: &Path) -> Result<Outcome, Cli
     Ok(Outcome {
         message,
         exit_code: u8::from(!report.ok()),
+    })
+}
+
+fn harness_falsify_cmd(
+    finding_path: &Path,
+    fixture_path: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let result = mif_rh::falsify(finding_path, fixture_path)?;
+    // The log line is a direct stderr side effect, not part of the Outcome:
+    // callers redirect stdout (the finding JSON) and stderr (this line) to
+    // separate destinations and assert on each independently.
+    eprintln!("{}", result.log_line);
+    let json_text = serde_json::to_string_pretty(&result.finding).map_err(|source| {
+        mif_rh::MifRhError::JsonSerialize {
+            path: finding_path.display().to_string(),
+            source,
+        }
+    })?;
+    Ok(Outcome {
+        message: json_text,
+        exit_code: 0,
     })
 }
 
