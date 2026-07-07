@@ -680,6 +680,15 @@ enum HarnessCommand {
         #[arg(long)]
         root: PathBuf,
     },
+    /// Whole-registry ontology reference integrity: every relationship
+    /// `from`/`to` endpoint and every `subtype_of` parent, across every
+    /// ontology in the registry, must name a declared entity type.
+    CheckOntologyRegistry {
+        /// The repo root (`schemas/ontologies/*/*.yaml` and
+        /// `packs/ontologies/*/*.ontology.yaml` are scanned beneath it).
+        #[arg(long)]
+        root: PathBuf,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -697,7 +706,35 @@ struct Outcome {
     exit_code: u8,
 }
 
+/// The stack size the real work runs on (see [`main`]'s doc comment for why).
+const MAIN_STACK_SIZE: usize = 16 * 1024 * 1024;
+
 fn main() -> ExitCode {
+    // `HarnessCommand`'s clap-derive expansion has grown large enough (18+
+    // subcommand variants) that building/parsing it overflows Windows'
+    // small default main-thread stack (1 MiB, vs. 8 MiB on Linux/macOS) —
+    // even for a trivial invocation like an unrecognized subcommand, which
+    // never reaches any of this binary's own logic. Run the real work on a
+    // thread with an explicit larger stack instead, matching the standard
+    // Rust idiom for this exact class of Windows crash (e.g. rustc/cargo
+    // do the same).
+    let handle = match std::thread::Builder::new()
+        .stack_size(MAIN_STACK_SIZE)
+        .spawn(run_main)
+    {
+        Ok(handle) => handle,
+        Err(source) => {
+            eprintln!("mif-rh-cli: failed to spawn the main worker thread: {source}");
+            return ExitCode::FAILURE;
+        },
+    };
+    handle.join().unwrap_or_else(|_| {
+        eprintln!("mif-rh-cli: main worker thread panicked");
+        ExitCode::FAILURE
+    })
+}
+
+fn run_main() -> ExitCode {
     let cli = Cli::parse();
     let format = OutputFormat::select(cli.format.as_deref(), std::io::stderr().is_terminal());
     match run(&cli.command) {
@@ -1202,6 +1239,9 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
             catalog,
             root,
         } => harness_validate_concordance_cmd(concordance, config, catalog, root),
+        HarnessCommand::CheckOntologyRegistry { root } => {
+            Ok(harness_check_ontology_registry_cmd(root))
+        },
     }
 }
 
@@ -1346,6 +1386,29 @@ fn harness_validate_concordance_cmd(
         message,
         exit_code: u8::from(!result.ok()),
     })
+}
+
+fn harness_check_ontology_registry_cmd(root: &Path) -> Outcome {
+    let result = mif_rh::validate_ontology_registry(root);
+    let render = |orphans: &[String]| {
+        if orphans.is_empty() {
+            "none".to_string()
+        } else {
+            orphans.join(" ")
+        }
+    };
+    let message = format!(
+        "ontology-registry: {} type(s) across the registry\n\
+         ontology-registry: relationship-endpoint orphans: {}\n\
+         ontology-registry: subtype_of-parent orphans: {}",
+        result.registry_type_count,
+        render(&result.relationship_endpoint_orphans),
+        render(&result.subtype_of_orphans),
+    );
+    Outcome {
+        message,
+        exit_code: u8::from(!result.ok()),
+    }
 }
 
 fn harness_check_relationship_targets_cmd(reports_dir: &Path) -> Result<Outcome, CliError> {
