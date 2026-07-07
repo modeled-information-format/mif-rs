@@ -719,10 +719,29 @@ impl VersionGateReport {
     }
 }
 
-fn run_git(root: &Path, args: &[&str]) -> Result<String, MifRhError> {
-    let output = Command::new("git")
-        .args(args)
+/// Builds a `git` [`Command`] rooted at `root`, with `GIT_DIR`/
+/// `GIT_WORK_TREE`/`GIT_INDEX_FILE`/`GIT_CEILING_DIRECTORIES` explicitly
+/// cleared.
+///
+/// Without this, a caller invoked from inside another git hook (e.g. a
+/// pre-push hook wrapping this very test suite) can have those variables
+/// set in its environment; git honors an inherited `GIT_DIR` over
+/// `current_dir`, silently redirecting every git call here to the
+/// *caller's* repository instead of `root`.
+fn git_command(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
         .current_dir(root)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_CEILING_DIRECTORIES");
+    command
+}
+
+fn run_git(root: &Path, args: &[&str]) -> Result<String, MifRhError> {
+    let output = git_command(root)
+        .args(args)
         .output()
         .map_err(|source| MifRhError::Io {
             path: "git".to_string(),
@@ -732,9 +751,8 @@ fn run_git(root: &Path, args: &[&str]) -> Result<String, MifRhError> {
 }
 
 fn git_show_json_version(root: &Path, rev: &str, path: &str) -> Option<String> {
-    let output = Command::new("git")
+    let output = git_command(root)
         .args(["show", &format!("{rev}:{path}")])
-        .current_dir(root)
         .output()
         .ok()?;
     if !output.status.success() {
@@ -746,9 +764,8 @@ fn git_show_json_version(root: &Path, rev: &str, path: &str) -> Option<String> {
 }
 
 fn git_show_frontmatter_version(root: &Path, rev: &str, path: &str) -> Option<String> {
-    let output = Command::new("git")
+    let output = git_command(root)
         .args(["show", &format!("{rev}:{path}")])
-        .current_dir(root)
         .output()
         .ok()?;
     if !output.status.success() {
@@ -1151,14 +1168,9 @@ mod tests {
     }
 
     use super::{VersionGateFailure, check_version_bump};
-    use std::process::Command;
 
     fn git(root: &std::path::Path, args: &[&str]) {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .status()
-            .unwrap();
+        let status = super::git_command(root).args(args).status().unwrap();
         assert!(status.success(), "git {args:?} failed");
     }
 
