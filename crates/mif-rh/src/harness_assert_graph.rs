@@ -68,15 +68,26 @@ pub fn assert_graph_mif(graph: &Value) -> GraphAssertion {
         .filter_map(|n| n.get("id").and_then(Value::as_str))
         .collect();
 
-    let has_entity_mention_edge = edges
+    let entity_node_ids: std::collections::HashSet<&str> = nodes
         .iter()
-        .any(|e| e.get("via").and_then(Value::as_str) == Some("entity"));
-    let has_matching_entity_node = nodes.iter().any(|n| {
-        n.get("kind").and_then(Value::as_str) == Some("entity")
-            && n.get("id")
+        .filter(|n| n.get("kind").and_then(Value::as_str) == Some("entity"))
+        .filter_map(|n| n.get("id").and_then(Value::as_str))
+        .filter(|id| id.starts_with("urn:mif:entity:"))
+        .collect();
+    // Stricter than the original bash+jq check this ports, which only asked
+    // "does ANY conforming entity node exist anywhere" — that let some
+    // entity-mention edges point at missing/non-entity targets as long as
+    // one other edge's target happened to resolve. Checking EVERY
+    // entity-mention edge's OWN target only tightens the gate: any graph
+    // that passed the old check still passes this one.
+    let every_entity_edge_resolves = edges
+        .iter()
+        .filter(|e| e.get("via").and_then(Value::as_str) == Some("entity"))
+        .all(|e| {
+            e.get("target")
                 .and_then(Value::as_str)
-                .is_some_and(|id| id.starts_with("urn:mif:entity:"))
-    });
+                .is_some_and(|t| entity_node_ids.contains(t))
+        });
 
     let checks = vec![
         check("graph has nodes", !nodes.is_empty()),
@@ -101,7 +112,7 @@ pub fn assert_graph_mif(graph: &Value) -> GraphAssertion {
         ),
         check(
             "every referenced MIF entity is an entity node",
-            !has_entity_mention_edge || has_matching_entity_node,
+            every_entity_edge_resolves,
         ),
         check(
             "every edge target resolves to a node in the graph",
@@ -195,6 +206,26 @@ mod tests {
             "edges": [
                 {"source": "urn:mif:f1", "target": "urn:mif:f1", "via": "relationship"},
                 {"source": "urn:mif:f1", "target": "urn:mif:entity:missing", "via": "entity"}
+            ]
+        });
+        let assertion = assert_graph_mif(&graph);
+        assert!(!assertion.checks[6].passed);
+    }
+
+    #[test]
+    fn fails_when_one_of_several_entity_mention_edges_targets_a_non_entity_node() {
+        // A valid entity node exists (satisfying a loose "does any entity node
+        // exist" check), but a SECOND entity-mention edge targets a node that
+        // is not an entity at all — this must still fail, not pass on the
+        // strength of the first edge's valid target.
+        let graph = json!({
+            "nodes": [
+                {"id": "urn:mif:f1", "kind": "concept"},
+                {"id": "urn:mif:entity:acme", "kind": "entity"}
+            ],
+            "edges": [
+                {"source": "urn:mif:f1", "target": "urn:mif:entity:acme", "via": "entity"},
+                {"source": "urn:mif:f1", "target": "urn:mif:f1", "via": "entity"}
             ]
         });
         let assertion = assert_graph_mif(&graph);

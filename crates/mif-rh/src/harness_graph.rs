@@ -227,7 +227,7 @@ mod tests {
             dir.path(),
             "f1.json",
             r#"{"@id": "urn:mif:f1", "title": "Finding One",
-                "entities": [{"entity": {"@id": "urn:mif:e1"}, "name": "Widget", "entityType": "tool"}]}"#,
+                "entities": [{"entity": {"@id": "urn:mif:entity:tool:widget"}, "name": "Widget", "entityType": "tool"}]}"#,
         );
 
         let graph = build_graph(dir.path()).unwrap();
@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0]["type"], "mentions");
         assert_eq!(edges[0]["source"], "urn:mif:f1");
-        assert_eq!(edges[0]["target"], "urn:mif:e1");
+        assert_eq!(edges[0]["target"], "urn:mif:entity:tool:widget");
     }
 
     #[test]
@@ -246,12 +246,12 @@ mod tests {
         write_finding(
             dir.path(),
             "f1.json",
-            r#"{"@id": "urn:mif:f1", "entities": [{"entity": {"@id": "urn:mif:e1"}, "name": "Widget"}]}"#,
+            r#"{"@id": "urn:mif:f1", "entities": [{"entity": {"@id": "urn:mif:entity:tool:widget"}, "name": "Widget"}]}"#,
         );
         write_finding(
             dir.path(),
             "f2.json",
-            r#"{"@id": "urn:mif:f2", "entities": [{"entity": {"@id": "urn:mif:e1"}, "name": "Widget"}]}"#,
+            r#"{"@id": "urn:mif:f2", "entities": [{"entity": {"@id": "urn:mif:entity:tool:widget"}, "name": "Widget"}]}"#,
         );
 
         let graph = build_graph(dir.path()).unwrap();

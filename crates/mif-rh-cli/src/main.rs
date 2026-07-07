@@ -3739,10 +3739,17 @@ mod tests {
         assert!(outcome.message.contains("no files written"));
     }
 
+    // Isolated the same way `harness_release.rs`'s own `git_command` is:
+    // `-C` alone does not override an inherited `GIT_DIR`/`GIT_WORK_TREE`,
+    // which would silently redirect these calls onto whatever real repo the
+    // test process happens to be running inside instead of `root`.
     fn git(root: &std::path::Path, args: &[&str]) {
         let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(root)
+            .current_dir(root)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_CEILING_DIRECTORIES")
             .args(args)
             .status()
             .unwrap();
@@ -4135,8 +4142,9 @@ mod tests {
     fn ontology_lock_check_cmd_passes_with_no_lock_file() {
         let dir = tempfile::tempdir().unwrap();
         write_ontology_root(dir.path());
+        let config = dir.path().join("harness.config.json");
 
-        let outcome = ontology_lock_check_cmd(Some(dir.path()), None).unwrap();
+        let outcome = ontology_lock_check_cmd(Some(dir.path()), Some(&config)).unwrap();
         assert_eq!(outcome.exit_code, 0);
     }
 
@@ -4145,6 +4153,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_ontology_root(dir.path());
         let config = dir.path().join("harness.config.json");
+        let catalog = dir.path().join(".claude/enabled-packs.json");
         let registry = dir.path().join("registry");
         fs::create_dir_all(&registry).unwrap();
         fs::write(registry.join("index.json"), r#"{"ontologies":{}}"#).unwrap();
@@ -4152,7 +4161,7 @@ mod tests {
         let outcome = ontology_sync_registry_cmd(
             Some(dir.path()),
             Some(&config),
-            None,
+            Some(&catalog),
             Some(&registry.display().to_string()),
         )
         .unwrap();

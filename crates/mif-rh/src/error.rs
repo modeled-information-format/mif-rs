@@ -77,6 +77,16 @@ pub enum MifRhError {
         #[source]
         source: serde_norway::Error,
     },
+    /// A rendered artifact's MIF concept frontmatter could not be serialized
+    /// to YAML. This indicates a bug in the concept's `Serialize`
+    /// implementation (e.g. a non-finite float) rather than anything a
+    /// caller can fix by changing its input.
+    #[error("failed to serialize report frontmatter as YAML: {source}")]
+    FrontmatterYamlSerialize {
+        /// The underlying serialization error.
+        #[source]
+        source: serde_norway::Error,
+    },
     /// The catalog file (`.claude/enabled-packs.json`) is missing.
     #[error("catalog file {path} does not exist")]
     CatalogMissing {
@@ -550,6 +560,13 @@ impl MifRhError {
                 status: 422,
                 exit_code: 4,
             },
+            Self::FrontmatterYamlSerialize { .. } => ProblemMeta {
+                slug: "frontmatter-yaml-serialize-failure",
+                version: "v1",
+                title: "Report frontmatter could not be serialized to YAML",
+                status: 500,
+                exit_code: 1,
+            },
             Self::CatalogMissing { .. } => ProblemMeta {
                 slug: "catalog-missing",
                 version: "v1",
@@ -982,6 +999,19 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 "This indicates a bug in mif-rh: a value could not be serialized to JSON. \
                  Report it upstream with the record that triggered it; no caller-side fix \
                  exists.",
+                Applicability::Unspecified,
+            ),
+            CodeAction::new(
+                "Report the serialization bug",
+                "quickfix",
+                Applicability::Unspecified,
+            ),
+        ),
+        MifRhError::FrontmatterYamlSerialize { .. } => (
+            SuggestedFix::new(
+                "This indicates a bug in mif-rh: a report's concept frontmatter could not be \
+                 serialized to YAML. Report it upstream with the artifact that triggered it; \
+                 no caller-side fix exists.",
                 Applicability::Unspecified,
             ),
             CodeAction::new(
@@ -1474,6 +1504,9 @@ mod tests {
             },
             MifRhError::OntologyPackYaml {
                 path: "x.yaml".to_string(),
+                source: yaml_error(),
+            },
+            MifRhError::FrontmatterYamlSerialize {
                 source: yaml_error(),
             },
             MifRhError::CatalogMissing {

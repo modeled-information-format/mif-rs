@@ -49,7 +49,7 @@ pub struct RenderInputs<'a> {
 /// the three recognized values.
 pub fn render_artifact(inputs: &RenderInputs<'_>, channel: &str) -> Result<String, MifRhError> {
     match channel {
-        "report" => Ok(render_report(inputs)),
+        "report" => render_report(inputs),
         "blog" => Ok(render_blog(inputs)),
         "book" => Ok(render_book(inputs)),
         other => Err(MifRhError::InvalidToggleValue {
@@ -92,7 +92,7 @@ fn sources_list_block(artifact: &Value) -> Vec<String> {
     lines
 }
 
-fn render_report(inputs: &RenderInputs<'_>) -> String {
+fn render_report(inputs: &RenderInputs<'_>) -> Result<String, MifRhError> {
     let artifact = inputs.artifact;
     let namespace = namespace_of(artifact);
     let genre = artifact
@@ -157,8 +157,9 @@ fn render_report(inputs: &RenderInputs<'_>) -> String {
     // serde_json::Value's Serialize impl is format-agnostic, so serializing
     // it through serde_norway's Serializer produces the same YAML a
     // dedicated YAML type would, matching `yq -p=json -o=yaml`.
-    let frontmatter_yaml = serde_norway::to_string(&concept).unwrap_or_default();
-    format!("---\n{frontmatter_yaml}---\n\n{body}\n")
+    let frontmatter_yaml = serde_norway::to_string(&concept)
+        .map_err(|source| MifRhError::FrontmatterYamlSerialize { source })?;
+    Ok(format!("---\n{frontmatter_yaml}---\n\n{body}\n"))
 }
 
 fn render_blog(inputs: &RenderInputs<'_>) -> String {

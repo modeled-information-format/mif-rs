@@ -304,7 +304,8 @@ fn render_purpose(goal: &Value, title: &str) -> String {
 /// # Errors
 ///
 /// Returns [`MifRhError::TopicNotRegistered`] if `topic` has no entry in
-/// `config_path`'s `topics[]`.
+/// `config_path`'s `topics[]`, or [`MifRhError::Io`]/[`MifRhError::Json`] if
+/// a finding file under `findings_dir` cannot be read or parsed.
 pub fn topic_metadata(
     topic: &str,
     config_path: &Path,
@@ -343,8 +344,8 @@ pub fn topic_metadata(
     paths.sort();
     let findings: Vec<Value> = paths
         .iter()
-        .filter_map(|path| read_json(path).ok())
-        .collect();
+        .map(|path| read_json(path))
+        .collect::<Result<Vec<_>, _>>()?;
 
     let roll = compute_roll(&findings);
     let goal = read_json(goal_path).unwrap_or_else(|_| Value::Object(serde_json::Map::new()));

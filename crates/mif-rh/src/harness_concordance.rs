@@ -357,13 +357,13 @@ mod tests {
             dir.path(),
             "topic-a",
             "f1.json",
-            r#"{"@id": "urn:mif:f1", "entities": [{"entity": {"@id": "urn:mif:e1"}, "name": "Widget"}]}"#,
+            r#"{"@id": "urn:mif:f1", "entities": [{"entity": {"@id": "urn:mif:entity:tool:widget"}, "name": "Widget"}]}"#,
         );
         write_finding(
             dir.path(),
             "topic-b",
             "f2.json",
-            r#"{"@id": "urn:mif:f2", "entities": [{"entity": {"@id": "urn:mif:e1"}, "name": "Widget"}]}"#,
+            r#"{"@id": "urn:mif:f2", "entities": [{"entity": {"@id": "urn:mif:entity:tool:widget"}, "name": "Widget"}]}"#,
         );
 
         let concordance = build_concordance(dir.path()).unwrap();
@@ -371,7 +371,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|n| n["id"] == "urn:mif:e1")
+            .find(|n| n["id"] == "urn:mif:entity:tool:widget")
             .unwrap();
         assert_eq!(entity["topics"], serde_json::json!(["topic-a", "topic-b"]));
     }
