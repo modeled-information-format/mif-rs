@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-07
+
+### Added
+
+- **`mif-rh-cli ontology` subcommand surface** (`fetch`, `sync`, `lock-check`, `sync-registry`, `author`): on-demand ontology pack vendoring, cataloging, lock-file drift checking, registry sync, and drafting a new ontology from expansion clusters or a topic's ontology map — the compiled-engine replacement for research-harness-template's `fetch-ontology.sh`, `sync-packs.sh`, `check-ontology-lock.sh`, `sync-registry-ontologies.sh`, and `author-ontology.sh` (research-harness-template#276, Story #277, mif-rs#58).
+- **`mif-rh-cli harness` subcommand surface**: corpus/concordance synthesis (`build-concordance`, `reconcile-session`, `topic-metadata`, `synthesize-corpus`, `import-corpus`, `synthesize-artifact`), validation gates (`assert-graph-mif`, `check-citation-integrity`, `check-shippable-typing`, `falsify`, `check-relationship-targets`, `validate-concordance`, `check-ontology-registry`), graph/index/membership/rendering (`build-graph`, `build-index`, `resolve-membership`, `render-artifact`), versioning/release orchestration (`goal-version`, `bump-version`, `check-version-bump`, `mif-project`), and feature toggles/packaging (`site-toggle-primary`, `site-toggle-plugin`, `pack-toggle`, `wrap-source`) — the compiled-engine replacement for the remaining jq-based scripts audited in research-harness-template#274 (Stories #282, #287, #293, #298, #302, mif-rs#58).
+
+### Fixed
+
+- **`mif-rh-cli` Windows crash**: the growing `HarnessCommand` subcommand enum's clap-derive expansion overflowed Windows' small default main-thread stack even for a trivial invocation; the real work now runs on a thread with an explicit larger stack, matching the standard fix for this class of issue.
+
 ### Changed
 
 - **MSRV bumped from 1.92 to 1.95**, a potentially breaking change for consumers on an older toolchain. Unblocks taking `rusqlite` 0.40.1 (previously pinned to `=0.39.0`), whose transitive `libsqlite3-sys` 0.38.1 dependency requires the `cfg_select!` macro, stable since Rust 1.95 (#55).
