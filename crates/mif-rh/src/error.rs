@@ -167,6 +167,32 @@ pub enum MifRhError {
         /// The empty findings directory.
         path: String,
     },
+    /// Every finding in a directory is falsified — nothing to synthesize.
+    #[error("no surviving findings to synthesize in {path}")]
+    NoSurvivingFindings {
+        /// The findings directory with no surviving findings.
+        path: String,
+    },
+    /// A synthesized artifact has no sections, finding refs, or sources —
+    /// there is nothing publishable to render.
+    #[error(
+        "artifact from {path} has no publishable content (no surviving findings, or no citations to cite)"
+    )]
+    ArtifactNotPublishable {
+        /// The findings directory the artifact was synthesized from.
+        path: String,
+    },
+    /// One or more findings in a corpus import lack a provenance block
+    /// (SPEC §8a: provenance must survive an import).
+    #[error(
+        "{count} finding(s) lack a provenance block; import aborted (provenance must be preserved)"
+    )]
+    MissingProvenance {
+        /// How many findings lack provenance.
+        count: usize,
+        /// The paths of the findings missing provenance.
+        paths: Vec<String>,
+    },
     /// Building a dynamic `jsonschema` validator for a resolved entity
     /// type's `schema` field failed. Indicates a malformed ontology pack,
     /// not a bug in the finding being validated.
@@ -543,6 +569,27 @@ impl MifRhError {
                 title: "Findings directory has no finding JSON",
                 status: 404,
                 exit_code: 2,
+            },
+            Self::NoSurvivingFindings { .. } => ProblemMeta {
+                slug: "no-surviving-findings",
+                version: "v1",
+                title: "Every finding is falsified — nothing to synthesize",
+                status: 422,
+                exit_code: 1,
+            },
+            Self::ArtifactNotPublishable { .. } => ProblemMeta {
+                slug: "artifact-not-publishable",
+                version: "v1",
+                title: "Synthesized artifact has no publishable content",
+                status: 422,
+                exit_code: 1,
+            },
+            Self::MissingProvenance { .. } => ProblemMeta {
+                slug: "missing-provenance",
+                version: "v1",
+                title: "Corpus import contains findings with no provenance block",
+                status: 422,
+                exit_code: 1,
             },
             Self::EntityTypeSchemaInvalid { .. } => ProblemMeta {
                 slug: "entity-type-schema-invalid",
@@ -1131,6 +1178,39 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 Applicability::MaybeIncorrect,
             ),
         ),
+        MifRhError::NoSurvivingFindings { .. } => (
+            SuggestedFix::new(
+                "Nothing to do until at least one finding survives falsification.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Wait for a surviving finding",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::ArtifactNotPublishable { .. } => (
+            SuggestedFix::new(
+                "Ensure at least one surviving finding carries a citation before synthesizing.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Add a citation to a surviving finding",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::MissingProvenance { .. } => (
+            SuggestedFix::new(
+                "Add a provenance block to every listed finding before retrying the import.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Add the missing provenance blocks",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
         MifRhError::FindingIo { .. }
         | MifRhError::Io { .. }
         | MifRhError::LockIo { .. }
@@ -1354,6 +1434,16 @@ mod tests {
             },
             MifRhError::NoFindingsFound {
                 path: "reports/x/findings".to_string(),
+            },
+            MifRhError::NoSurvivingFindings {
+                path: "reports/x/findings".to_string(),
+            },
+            MifRhError::ArtifactNotPublishable {
+                path: "reports/x/findings".to_string(),
+            },
+            MifRhError::MissingProvenance {
+                count: 1,
+                paths: vec!["src/findings/f1.json".to_string()],
             },
         ]
     }

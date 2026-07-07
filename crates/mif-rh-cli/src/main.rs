@@ -535,6 +535,36 @@ enum HarnessCommand {
         #[arg(long)]
         verification: Option<PathBuf>,
     },
+    /// Synthesize an Artifact from a findings directory's surviving
+    /// (non-falsified) findings.
+    SynthesizeArtifact {
+        /// Directory of finding JSON files.
+        findings_dir: PathBuf,
+        /// The artifact's genre. Defaults to `general`.
+        genre: Option<String>,
+        /// Write the artifact here. Defaults to `<findings-dir>/../artifact.json`.
+        out: Option<PathBuf>,
+    },
+    /// Validate and import a corpus's findings into a topic, refusing
+    /// anything that fails schema validation or lacks a provenance block.
+    ImportCorpus {
+        /// Directory of source finding JSON files to import.
+        src_findings_dir: PathBuf,
+        /// Destination findings directory.
+        dest_dir: PathBuf,
+        /// The topic id to register the corpus under.
+        topic: String,
+        /// Path to `schemas/findings.schema.json`.
+        #[arg(long)]
+        schema: PathBuf,
+        /// A `$ref` dependency schema (repeatable). Each must declare its
+        /// own `$id`.
+        #[arg(long = "ref")]
+        refs: Vec<PathBuf>,
+        /// `harness.config.json`, to register the topic in.
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -901,6 +931,9 @@ fn ontology_author_cmd(
     })
 }
 
+// One arm per subcommand variant, each a thin dispatch call — length is
+// inherent to the variant count, not a complexity signal.
+#[allow(clippy::too_many_lines)]
 fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
     match action {
         HarnessCommand::GoalVersion { goal } => harness_goal_version_cmd(goal),
@@ -988,6 +1021,26 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
             created,
             version: *version,
             verification: verification.as_deref(),
+        }),
+        HarnessCommand::SynthesizeArtifact {
+            findings_dir,
+            genre,
+            out,
+        } => harness_synthesize_artifact_cmd(findings_dir, genre.as_deref(), out.as_deref()),
+        HarnessCommand::ImportCorpus {
+            src_findings_dir,
+            dest_dir,
+            topic,
+            schema,
+            refs,
+            config,
+        } => harness_import_corpus_cmd(&ImportCorpusArgs {
+            src_findings_dir,
+            dest_dir,
+            topic,
+            schema,
+            refs,
+            config: config.as_deref(),
         }),
     }
 }
@@ -1452,6 +1505,72 @@ fn harness_render_artifact_cmd(args: &RenderArtifactArgs<'_>) -> Result<Outcome,
             args.channel,
             args.artifact.display()
         ),
+        exit_code: 0,
+    })
+}
+
+fn harness_synthesize_artifact_cmd(
+    findings_dir: &Path,
+    genre: Option<&str>,
+    out: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let genre = genre.unwrap_or("general");
+    let out_path = out.map_or_else(|| findings_dir.join("../artifact.json"), Path::to_path_buf);
+    let artifact = mif_rh::synthesize_artifact(findings_dir, genre)?;
+    let section_count = artifact["sections"].as_array().map_or(0, Vec::len);
+    let source_count = artifact["sources"].as_array().map_or(0, Vec::len);
+    let text = serde_json::to_string_pretty(&artifact).map_err(|source| {
+        mif_rh::MifRhError::JsonSerialize {
+            path: out_path.display().to_string(),
+            source,
+        }
+    })?;
+    std::fs::write(&out_path, format!("{text}\n")).map_err(|source| mif_rh::MifRhError::Io {
+        path: out_path.display().to_string(),
+        source,
+    })?;
+    Ok(Outcome {
+        message: format!(
+            "synthesize: wrote {} (genre={genre}, {section_count} sections, {source_count} sources)",
+            out_path.display()
+        ),
+        exit_code: 0,
+    })
+}
+
+/// Bundles [`HarnessCommand::ImportCorpus`]'s fields for
+/// [`harness_import_corpus_cmd`] to stay under this workspace's
+/// too-many-arguments threshold.
+struct ImportCorpusArgs<'a> {
+    src_findings_dir: &'a Path,
+    dest_dir: &'a Path,
+    topic: &'a str,
+    schema: &'a Path,
+    refs: &'a [PathBuf],
+    config: Option<&'a Path>,
+}
+
+fn harness_import_corpus_cmd(args: &ImportCorpusArgs<'_>) -> Result<Outcome, CliError> {
+    let report = mif_rh::import_corpus(
+        args.src_findings_dir,
+        args.dest_dir,
+        args.topic,
+        args.config,
+        args.schema,
+        args.refs,
+    )?;
+    let mut message = format!(
+        "import: imported {} finding(s) into {} (namespace {})",
+        report.imported,
+        args.dest_dir.display(),
+        report.namespace
+    );
+    if report.topic_registered {
+        use std::fmt::Write as _;
+        let _ = write!(message, "; registered topic '{}'", args.topic);
+    }
+    Ok(Outcome {
+        message,
         exit_code: 0,
     })
 }
