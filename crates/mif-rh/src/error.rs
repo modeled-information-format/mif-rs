@@ -238,6 +238,16 @@ pub enum MifRhError {
         /// Either `"is missing"` or `"is unparseable or not a record array"`.
         reason: String,
     },
+    /// A finding under `<topic>/findings/` failed to parse while building
+    /// the corpus-wide active-`@id`/relationship-target universes for the
+    /// relationship-targets gate. Hard-fails the whole gate (never silently
+    /// dropped) — an unparseable file could otherwise hide a real dangling
+    /// target elsewhere in the corpus.
+    #[error("finding is not valid JSON, cannot check its relationship targets: {path}")]
+    RelationshipTargetFindingUnparseable {
+        /// The unparseable finding path.
+        path: String,
+    },
     /// Building a dynamic `jsonschema` validator for a resolved entity
     /// type's `schema` field failed. Indicates a malformed ontology pack,
     /// not a bug in the finding being validated.
@@ -663,6 +673,13 @@ impl MifRhError {
                 title: "ontology-map.json is missing or unparseable — cannot prove typing",
                 status: 422,
                 exit_code: 3,
+            },
+            Self::RelationshipTargetFindingUnparseable { .. } => ProblemMeta {
+                slug: "relationship-target-finding-unparseable",
+                version: "v1",
+                title: "A finding failed to parse while checking relationship targets",
+                status: 400,
+                exit_code: 2,
             },
             Self::EntityTypeSchemaInvalid { .. } => ProblemMeta {
                 slug: "entity-type-schema-invalid",
@@ -1331,6 +1348,17 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 Applicability::MaybeIncorrect,
             ),
         ),
+        MifRhError::RelationshipTargetFindingUnparseable { .. } => (
+            SuggestedFix::new(
+                "Fix the invalid JSON in this finding before re-running the relationship-targets gate.",
+                Applicability::MachineApplicable,
+            ),
+            CodeAction::new(
+                "Fix the malformed finding JSON",
+                "quickfix",
+                Applicability::MachineApplicable,
+            ),
+        ),
         MifRhError::FindingIo { .. }
         | MifRhError::Io { .. }
         | MifRhError::LockIo { .. }
@@ -1579,6 +1607,9 @@ mod tests {
                 path: "reports/edu/ontology-map.json".to_string(),
                 topic: "edu".to_string(),
                 reason: "is missing".to_string(),
+            },
+            MifRhError::RelationshipTargetFindingUnparseable {
+                path: "reports/edu/findings/bad.json".to_string(),
             },
         ]
     }

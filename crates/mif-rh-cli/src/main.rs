@@ -654,6 +654,14 @@ enum HarnessCommand {
         /// for a placeholder `inconclusive` verdict.
         fixture: Option<PathBuf>,
     },
+    /// Corpus-wide relationship-target integrity gate: every
+    /// `relationships[].target` in the active corpus must resolve to a
+    /// real, active finding `@id`.
+    CheckRelationshipTargets {
+        /// The corpus-wide reports directory (spans every topic).
+        #[arg(long)]
+        reports_dir: PathBuf,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -1167,6 +1175,9 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
         HarnessCommand::Falsify { finding, fixture } => {
             harness_falsify_cmd(finding, fixture.as_deref())
         },
+        HarnessCommand::CheckRelationshipTargets { reports_dir } => {
+            harness_check_relationship_targets_cmd(reports_dir)
+        },
     }
 }
 
@@ -1260,6 +1271,33 @@ fn harness_falsify_cmd(
     Ok(Outcome {
         message: json_text,
         exit_code: 0,
+    })
+}
+
+fn harness_check_relationship_targets_cmd(reports_dir: &Path) -> Result<Outcome, CliError> {
+    let report = mif_rh::check_relationship_targets(reports_dir)?;
+    let message = if report.ok() {
+        format!(
+            "check-relationship-targets: ok ({} relationship target(s) checked across {} \
+             active finding(s), 0 orphans)",
+            report.checked, report.active_findings
+        )
+    } else {
+        let mut lines: Vec<String> = report
+            .orphans
+            .iter()
+            .map(|o| format!("ORPHAN\t{}\t{}", o.source_file, o.target))
+            .collect();
+        lines.push(
+            "check-relationship-targets: one or more relationships[].target values do not \
+             resolve to any active finding @id (see ORPHAN lines above)"
+                .to_string(),
+        );
+        lines.join("\n")
+    };
+    Ok(Outcome {
+        message,
+        exit_code: u8::from(!report.ok()),
     })
 }
 
