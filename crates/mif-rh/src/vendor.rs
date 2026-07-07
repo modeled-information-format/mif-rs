@@ -232,6 +232,16 @@ fn resolve_fetch_set(
     while cursor < queue.len() {
         let id = queue[cursor].clone();
         cursor += 1;
+        // Every id reaching this point — whether directly requested or
+        // discovered via a registry entry's `extends` — ends up joined onto
+        // a filesystem path in `fetch()` (`packs_dir.join(id)`). A
+        // compromised registry could otherwise smuggle a path-traversal id
+        // (e.g. `../../../etc`) through `extends`, which is fully
+        // attacker-controlled index content, the same threat model as the
+        // `entry.file` bare-filename check below.
+        if !is_wellformed_id(&id) {
+            return Err(MifRhError::MalformedOntologyId { id });
+        }
         if is_committed_base(root, &id) {
             continue;
         }
@@ -319,6 +329,15 @@ pub fn fetch(root: &Path, source: &str, ids: &[String]) -> Result<FetchReport, M
     let fetch_list = resolve_fetch_set(root, &index, ids)?;
     let mut vendored = Vec::new();
     let packs_dir = root.join("packs/ontologies");
+    // Set before the loop (not after) and persisted incrementally per id
+    // below: if a later id in this same request fails
+    // (checksum/unsafe-path/IO), the ontologies successfully vendored
+    // earlier in the loop must still end up pinned in the lock — otherwise
+    // they sit on disk, sha256-verified once, permanently invisible to
+    // `lock_check` (which only walks `lock.ontologies`, never the packs
+    // directory).
+    lock.index_sha256 = Some(index_sha256);
+    lock.source = source.to_string();
     for id in &fetch_list {
         // Present in `index` by construction: `resolve_fetch_set` already
         // resolved every entry in `fetch_list` through a successful lookup.
@@ -360,7 +379,7 @@ pub fn fetch(root: &Path, source: &str, ids: &[String]) -> Result<FetchReport, M
             "name": id,
             "version": entry.version,
             "kind": "ontology",
-            "description": pack.description,
+            "description": pack.description.as_deref().unwrap_or(""),
             "provides": {"ontologies": [id]},
         });
         crate::write_json_atomic(&dest_dir.join("ontology.pack.json"), &sidecar)?;
@@ -372,15 +391,19 @@ pub fn fetch(root: &Path, source: &str, ids: &[String]) -> Result<FetchReport, M
                 sha256: entry.sha256.clone(),
             },
         );
+        crate::write_json_atomic(&lock_path, &lock)?;
         vendored.push(VendoredOntology {
             id: id.clone(),
             version: entry.version.clone(),
         });
     }
-
-    lock.index_sha256 = Some(index_sha256);
-    lock.source = source.to_string();
-    crate::write_json_atomic(&lock_path, &lock)?;
+    if fetch_list.is_empty() {
+        // Nothing to vendor (every requested id was a committed base
+        // layer) — still worth persisting the pin so a later fetch from
+        // this source has one to compare against, but no per-id write
+        // happened above to do it.
+        crate::write_json_atomic(&lock_path, &lock)?;
+    }
 
     Ok(FetchReport { vendored })
 }
@@ -623,6 +646,22 @@ pub fn sync_registry(
             registry_source: source.to_string(),
             detail: err.to_string(),
         })?;
+    // Check the trust-on-first-use pin BEFORE mutating harness.config.json
+    // below: `fetch()` (called later in this function) re-fetches and
+    // re-checks the same index independently, but if that later check
+    // fails, config.json must not have already been durably rewritten to
+    // enable ontologies discovered from an index whose trust root moved.
+    let lock = LockFile::load_or_default(&root.join("ontologies.lock.json"))?;
+    if let Some(pinned) = &lock.index_sha256
+        && lock.source == source
+        && *pinned != sha256_hex(&index_bytes)
+    {
+        return Err(MifRhError::IndexPinMismatch {
+            registry_source: source.to_string(),
+            pinned: pinned.clone(),
+            got: sha256_hex(&index_bytes),
+        });
+    }
 
     let mut config = load_config_json(config_path)?;
     let known = known_ontology_ids(&config);
@@ -923,6 +962,71 @@ mod tests {
             error,
             super::MifRhError::OntologyNotInRegistry { .. }
         ));
+    }
+
+    #[test]
+    fn fetch_rejects_a_path_traversal_id_reached_via_an_extends_ancestor() {
+        // A compromised registry can name anything in an `extends` array —
+        // it is fully attacker-controlled index content, just like a
+        // requested id. A malformed ancestor id must be rejected before it
+        // is ever joined onto a filesystem path, not just at discovery time
+        // in `sync_registry`.
+        let dir = tempfile::tempdir().unwrap();
+        let registry = dir.path().join("registry");
+        fs::create_dir_all(&registry).unwrap();
+        let sha = sha256_of(EDU_YAML.as_bytes());
+        let malicious_index = format!(
+            r#"{{"ontologies":{{"edu-fixture":{{"version":"0.1.0","sha256":"{sha}","file":"edu-fixture.ontology.yaml","extends":["../../../etc"]}}}}}}"#
+        );
+        fs::write(registry.join("index.json"), malicious_index).unwrap();
+        fs::write(registry.join("edu-fixture.ontology.yaml"), EDU_YAML).unwrap();
+
+        let error = fetch(
+            dir.path(),
+            &registry.display().to_string(),
+            &["edu-fixture".to_string()],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            super::MifRhError::MalformedOntologyId { .. }
+        ));
+        assert!(!dir.path().join("packs/ontologies/edu-fixture").exists());
+    }
+
+    #[test]
+    fn a_failure_partway_through_a_batch_still_pins_the_ontologies_already_vendored() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = dir.path().join("registry");
+        fs::create_dir_all(&registry).unwrap();
+        let good_sha = sha256_of(EDU_YAML.as_bytes());
+        let index = format!(
+            r#"{{"ontologies":{{
+                "edu-fixture":{{"version":"0.1.0","sha256":"{good_sha}","file":"edu-fixture.ontology.yaml","extends":[]}},
+                "bad-fixture":{{"version":"0.1.0","sha256":"0000000000000000000000000000000000000000000000000000000000000000","file":"edu-fixture.ontology.yaml","extends":[]}}
+            }}}}"#
+        );
+        fs::write(registry.join("index.json"), index).unwrap();
+        fs::write(registry.join("edu-fixture.ontology.yaml"), EDU_YAML).unwrap();
+
+        let source = registry.display().to_string();
+        let error = fetch(
+            dir.path(),
+            &source,
+            &["edu-fixture".to_string(), "bad-fixture".to_string()],
+        )
+        .unwrap_err();
+        assert!(matches!(error, super::MifRhError::ChecksumMismatch { .. }));
+
+        // edu-fixture was vendored successfully before bad-fixture failed;
+        // it must be pinned in the lock, not left as an untracked,
+        // unverifiable file on disk.
+        let lock: super::LockFile = serde_json::from_str(
+            &fs::read_to_string(dir.path().join("ontologies.lock.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(lock.ontologies.contains_key("edu-fixture"));
+        assert!(dir.path().join("packs/ontologies/edu-fixture").is_dir());
     }
 
     #[test]

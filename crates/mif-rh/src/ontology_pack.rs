@@ -59,7 +59,7 @@ struct OntologyBlock {
     #[serde(default)]
     extends: Vec<String>,
     #[serde(default)]
-    description: String,
+    description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,7 +82,7 @@ pub struct OntologyPack {
     /// Ontology ids this ontology directly extends.
     pub extends: Vec<String>,
     /// The ontology's human-readable description, if declared.
-    pub description: String,
+    pub description: Option<String>,
     /// Entity types this ontology declares.
     pub entity_types: Vec<EntityType>,
     /// Discovery-fallback configuration.

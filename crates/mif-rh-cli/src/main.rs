@@ -251,8 +251,7 @@ enum OntologyCommand {
     /// Vendor one or more ontologies (and their `extends` closure) from the
     /// registry, sha256-verified and pinned in `ontologies.lock.json`.
     Fetch {
-        /// Ontology ids to fetch. Ignored (and may be omitted) with
-        /// `--all-enabled`.
+        /// Ontology ids to fetch. Mutually exclusive with `--all-enabled`.
         ids: Vec<String>,
         /// Fetch every ontology enabled in `harness.config.json`, instead
         /// of the ids given positionally.
