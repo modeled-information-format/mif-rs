@@ -9,7 +9,7 @@
 //! `scripts/sync-registry-ontologies.sh` to the compiled engine (Epic
 //! research-harness-template#276, Story #277).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -344,7 +344,18 @@ pub fn fetch(root: &Path, source: &str, ids: &[String]) -> Result<FetchReport, M
         let Some(entry) = index.ontologies.get(id) else {
             continue;
         };
-        if entry.file.contains('/') || entry.file.contains("..") {
+        // `entry.file` is later joined onto a filesystem path, so it must be
+        // exactly one normal path component (a bare filename) — checking
+        // only for `/` and `..` still lets a Windows-style separator
+        // (`..\..\etc`) or an absolute path (`C:\...`) through unchecked.
+        let is_bare_filename = matches!(
+            std::path::Path::new(&entry.file)
+                .components()
+                .collect::<Vec<_>>()
+                .as_slice(),
+            [std::path::Component::Normal(_)]
+        ) && !entry.file.contains('\\');
+        if !is_bare_filename {
             return Err(MifRhError::UnsafeIndexPath {
                 id: id.clone(),
                 file: entry.file.clone(),
@@ -361,20 +372,24 @@ pub fn fetch(root: &Path, source: &str, ids: &[String]) -> Result<FetchReport, M
             });
         }
         let dest_dir = packs_dir.join(id);
-        std::fs::create_dir_all(&dest_dir).map_err(|source| MifRhError::Io {
-            path: dest_dir.display().to_string(),
-            source,
-        })?;
         let out_yaml = dest_dir.join(format!("{id}.ontology.yaml"));
-        std::fs::write(&out_yaml, &bytes).map_err(|source| MifRhError::Io {
-            path: out_yaml.display().to_string(),
-            source,
-        })?;
-
+        // Parse BEFORE writing to disk: a parse failure must never leave a
+        // malformed/wrong-shape YAML behind under packs/ontologies/ (that
+        // would violate the fail-closed "no partial vendoring on error"
+        // contract and confuse a later `lock_check`/`load_packs_via_catalog`
+        // scan that finds the file but doesn't know it was never vendored).
         let pack = parse_pack(
             &String::from_utf8_lossy(&bytes),
             &out_yaml.display().to_string(),
         )?;
+        std::fs::create_dir_all(&dest_dir).map_err(|source| MifRhError::Io {
+            path: dest_dir.display().to_string(),
+            source,
+        })?;
+        std::fs::write(&out_yaml, &bytes).map_err(|source| MifRhError::Io {
+            path: out_yaml.display().to_string(),
+            source,
+        })?;
         let sidecar = serde_json::json!({
             "name": id,
             "version": entry.version,
@@ -781,13 +796,17 @@ pub fn lock_check(root: &Path, config_path: &Path) -> Result<LockCheckReport, Mi
     let config = load_config_json(config_path)?;
 
     let mut report = LockCheckReport::default();
+    // A BTreeSet, not a HashSet: `missing_pins` is built by iterating this
+    // set, and its order should stay deterministic rather than depend on
+    // hash iteration order.
+    let enabled: BTreeSet<String> = enabled_ontology_ids(&config).into_iter().collect();
 
-    for id in enabled_ontology_ids(&config) {
-        if is_committed_base(root, &id) {
+    for id in &enabled {
+        if is_committed_base(root, id) {
             continue;
         }
-        if !lock.ontologies.contains_key(&id) {
-            report.missing_pins.push(id);
+        if !lock.ontologies.contains_key(id) {
+            report.missing_pins.push(id.clone());
         }
     }
 
@@ -797,7 +816,7 @@ pub fn lock_check(root: &Path, config_path: &Path) -> Result<LockCheckReport, Mi
             .join(id)
             .join(format!("{id}.ontology.yaml"));
         if !yaml.is_file() {
-            if enabled_ontology_ids(&config).contains(id) {
+            if enabled.contains(id) {
                 report.not_vendored.push(id.clone());
             }
             continue;
@@ -944,6 +963,66 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, super::MifRhError::ChecksumMismatch { .. }));
+        assert!(!dir.path().join("packs/ontologies/edu-fixture").exists());
+    }
+
+    #[test]
+    fn fetch_rejects_a_windows_style_or_absolute_index_file_path() {
+        let dir = tempfile::tempdir().unwrap();
+        write_base_layer(dir.path());
+        let registry = dir.path().join("registry");
+        fs::create_dir_all(&registry).unwrap();
+        for unsafe_file in [
+            "..\\..\\etc\\passwd",
+            "C:\\Windows\\evil.yaml",
+            "/etc/passwd",
+        ] {
+            // Substitute via a JSON-escaped literal (not a raw string replace)
+            // so a literal backslash in `unsafe_file` doesn't itself produce
+            // invalid JSON.
+            let index = EDU_INDEX
+                .replace("REPLACED", &sha256_of(EDU_YAML.as_bytes()))
+                .replace(
+                    "\"edu-fixture.ontology.yaml\"",
+                    &serde_json::to_string(unsafe_file).unwrap(),
+                );
+            fs::write(registry.join("index.json"), index).unwrap();
+
+            let error = fetch(
+                dir.path(),
+                &registry.display().to_string(),
+                &["edu-fixture".to_string()],
+            )
+            .unwrap_err();
+            assert!(
+                matches!(error, super::MifRhError::UnsafeIndexPath { .. }),
+                "expected UnsafeIndexPath for {unsafe_file:?}, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fetch_leaves_no_file_behind_when_the_vendored_yaml_fails_to_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        write_base_layer(dir.path());
+        let registry = dir.path().join("registry");
+        fs::create_dir_all(&registry).unwrap();
+        let malformed = b"not: [valid, yaml, ontology shape";
+        let index = EDU_INDEX.replace("REPLACED", &sha256_of(malformed));
+        fs::write(registry.join("index.json"), index).unwrap();
+        fs::write(registry.join("edu-fixture.ontology.yaml"), malformed).unwrap();
+
+        let error = fetch(
+            dir.path(),
+            &registry.display().to_string(),
+            &["edu-fixture".to_string()],
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(error, super::MifRhError::OntologyPackYaml { .. }),
+            "{error:?}"
+        );
         assert!(!dir.path().join("packs/ontologies/edu-fixture").exists());
     }
 
