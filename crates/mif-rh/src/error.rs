@@ -103,6 +103,37 @@ pub enum MifRhError {
     /// directory, or the `extends` graph is cyclic).
     #[error(transparent)]
     Ontology(#[from] mif_ontology::OntologyError),
+    /// Splitting a report's frontmatter/body failed (missing frontmatter,
+    /// malformed YAML, or a non-mapping frontmatter document).
+    #[error(transparent)]
+    Frontmatter(#[from] mif_frontmatter::FrontmatterError),
+    /// A report schema (or one of its `$ref` dependencies) was not valid
+    /// JSON, or the `jsonschema` validator could not be compiled from it.
+    #[error("failed to compile schema {path}: {detail}")]
+    SchemaCompilation {
+        /// The schema file that failed to compile.
+        path: String,
+        /// The underlying compilation error, stringified (the original
+        /// `jsonschema` error type is not `'static`).
+        detail: String,
+    },
+    /// A `$ref` dependency schema has no `$id`, so it cannot be registered
+    /// for the main schema to resolve references against.
+    #[error("schema {path} has no $id — it cannot be registered as a $ref target")]
+    RefSchemaMissingId {
+        /// The dependency schema file with no `$id`.
+        path: String,
+    },
+    /// A projected report failed validation against its schema.
+    #[error("{path} failed schema validation against {schema_path}: {detail}")]
+    SchemaValidationFailed {
+        /// The report file that failed validation.
+        path: String,
+        /// The schema it was validated against.
+        schema_path: String,
+        /// Every validation error, joined for display.
+        detail: String,
+    },
     /// Building a dynamic `jsonschema` validator for a resolved entity
     /// type's `schema` field failed. Indicates a malformed ontology pack,
     /// not a bug in the finding being validated.
@@ -265,6 +296,87 @@ pub enum MifRhError {
         /// The clusters file with no clusters.
         path: String,
     },
+    /// A version string is not well-formed `X.Y.Z` semver.
+    #[error("version is not well-formed semver: {value}")]
+    VersionNotSemver {
+        /// The offending value.
+        value: String,
+    },
+    /// A file expected to carry a `.version` field has none.
+    #[error("{path} has no .version")]
+    VersionMissing {
+        /// The file with no version.
+        path: String,
+    },
+    /// The requested new version equals the current one.
+    #[error("new version equals current ({value}); nothing to bump")]
+    VersionUnchanged {
+        /// The unchanged value.
+        value: String,
+    },
+    /// A `--pack` component name resolves to no directory under
+    /// `packs/<family>/`.
+    #[error(
+        "pack '{name}' not found under packs/<family>/ (ontology packs version independently and are not bumpable here)"
+    )]
+    PackNotFound {
+        /// The unresolved component name.
+        name: String,
+    },
+    /// A `--pack` component name resolves to more than one directory.
+    #[error("pack '{name}' is ambiguous: more than one packs/<family>/{name} directory exists")]
+    PackAmbiguous {
+        /// The ambiguous component name.
+        name: String,
+    },
+    /// A pack is missing a file `bump_version` needs (its `plugin.json`,
+    /// `SKILL.md`, or family doc section/row).
+    #[error("pack '{name}': missing or malformed {path}")]
+    PackFileMissing {
+        /// The pack's component name.
+        name: String,
+        /// The missing or malformed file/section.
+        path: String,
+    },
+    /// A pack's declared version is not well-formed semver.
+    #[error("pack '{name}' {path} has no valid semver .version (got '{value}')")]
+    PackVersionInvalid {
+        /// The pack's component name.
+        name: String,
+        /// The pack's `plugin.json` path.
+        path: String,
+        /// The malformed value found.
+        value: String,
+    },
+    /// A pack's current version is already ahead of the release being cut —
+    /// bumping it would move it backward.
+    #[error(
+        "pack '{name}' is at {pack_version}, ahead of the new release {new_version} — refusing to move it backward"
+    )]
+    PackAheadOfRelease {
+        /// The pack's component name.
+        name: String,
+        /// The pack's current version.
+        pack_version: String,
+        /// The release version being cut.
+        new_version: String,
+    },
+    /// `CHANGELOG.md` has neither an `## [Unreleased]` anchor to insert a
+    /// new section under, nor an existing section for the new version.
+    #[error(
+        "{path} has no '## [Unreleased]' anchor to insert the new version under (nor an existing section for it)"
+    )]
+    ChangelogAnchorMissing {
+        /// The CHANGELOG path.
+        path: String,
+    },
+    /// A post-write self-verification found a file that did not update to
+    /// the expected new value.
+    #[error("verification failed: {path} was not updated as expected")]
+    VerificationFailed {
+        /// The file that failed verification.
+        path: String,
+    },
 }
 
 impl MifRhError {
@@ -342,6 +454,34 @@ impl MifRhError {
                 title: "Delegated ontology error",
                 status: 500,
                 exit_code: 4,
+            },
+            Self::Frontmatter(_) => ProblemMeta {
+                slug: "delegated-frontmatter",
+                version: "v1",
+                title: "Delegated frontmatter error",
+                status: 500,
+                exit_code: 4,
+            },
+            Self::SchemaCompilation { .. } => ProblemMeta {
+                slug: "schema-compilation-failed",
+                version: "v1",
+                title: "Report schema failed to compile",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::RefSchemaMissingId { .. } => ProblemMeta {
+                slug: "ref-schema-missing-id",
+                version: "v1",
+                title: "Ref-target schema has no $id",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::SchemaValidationFailed { .. } => ProblemMeta {
+                slug: "schema-validation-failed",
+                version: "v1",
+                title: "Report failed schema validation",
+                status: 422,
+                exit_code: 1,
             },
             Self::EntityTypeSchemaInvalid { .. } => ProblemMeta {
                 slug: "entity-type-schema-invalid",
@@ -454,6 +594,76 @@ impl MifRhError {
                 title: "Expansion-candidates file carries no clusters to draft from",
                 status: 422,
                 exit_code: 1,
+            },
+            Self::VersionNotSemver { .. } => ProblemMeta {
+                slug: "version-not-semver",
+                version: "v1",
+                title: "Version is not well-formed semver",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::VersionMissing { .. } => ProblemMeta {
+                slug: "version-missing",
+                version: "v1",
+                title: "File has no .version field",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::VersionUnchanged { .. } => ProblemMeta {
+                slug: "version-unchanged",
+                version: "v1",
+                title: "New version equals the current version",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::PackNotFound { .. } => ProblemMeta {
+                slug: "pack-not-found",
+                version: "v1",
+                title: "Pack component not found",
+                status: 404,
+                exit_code: 2,
+            },
+            Self::PackAmbiguous { .. } => ProblemMeta {
+                slug: "pack-ambiguous",
+                version: "v1",
+                title: "Pack component name is ambiguous",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::PackFileMissing { .. } => ProblemMeta {
+                slug: "pack-file-missing",
+                version: "v1",
+                title: "Pack is missing a required file or section",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::PackVersionInvalid { .. } => ProblemMeta {
+                slug: "pack-version-invalid",
+                version: "v1",
+                title: "Pack's declared version is not well-formed semver",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::PackAheadOfRelease { .. } => ProblemMeta {
+                slug: "pack-ahead-of-release",
+                version: "v1",
+                title: "Pack's current version is ahead of the release being cut",
+                status: 409,
+                exit_code: 2,
+            },
+            Self::ChangelogAnchorMissing { .. } => ProblemMeta {
+                slug: "changelog-anchor-missing",
+                version: "v1",
+                title: "CHANGELOG has no anchor to insert the new version under",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::VerificationFailed { .. } => ProblemMeta {
+                slug: "verification-failed",
+                version: "v1",
+                title: "Post-write self-verification found an unexpected file",
+                status: 500,
+                exit_code: 2,
             },
         }
     }
@@ -665,6 +875,99 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 Applicability::MaybeIncorrect,
             ),
         ),
+        MifRhError::VersionNotSemver { .. } | MifRhError::PackVersionInvalid { .. } => (
+            SuggestedFix::new(
+                "Correct the version to well-formed X.Y.Z semver, then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Fix the malformed version",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::VersionMissing { .. } => (
+            SuggestedFix::new(
+                "Add a .version field to the file, then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Add the missing .version field",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::VersionUnchanged { .. } => (
+            SuggestedFix::new(
+                "Pass a different version or bump keyword — the requested version matches the \
+                 current one, so there is nothing to bump.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Choose a different version",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::PackNotFound { .. } | MifRhError::PackAmbiguous { .. } => (
+            SuggestedFix::new(
+                "Check the component name against packs/<family>/<name>/ and retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Correct the pack component name",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::PackFileMissing { .. } => (
+            SuggestedFix::new(
+                "Add the missing file or section the pack's own conventions require \
+                 (plugin.json .version, SKILL.md version: frontmatter, or the family doc's \
+                 **Version:** row), then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Add the missing pack file/section",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::PackAheadOfRelease { .. } => (
+            SuggestedFix::new(
+                "Cut a release at or above the pack's current version, or leave this pack out \
+                 of this bump.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Reconcile the release version with the pack's version",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::ChangelogAnchorMissing { .. } => (
+            SuggestedFix::new(
+                "Add an '## [Unreleased]' section to the CHANGELOG, then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Add the Unreleased anchor",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::VerificationFailed { .. } => (
+            SuggestedFix::new(
+                "Inspect the named file directly — the write may have partially applied. This \
+                 indicates a bug in the bump logic, not a caller-side fix.",
+                Applicability::Unspecified,
+            ),
+            CodeAction::new(
+                "Inspect the file that failed verification",
+                "quickfix",
+                Applicability::Unspecified,
+            ),
+        ),
         MifRhError::ConfigMalformed { .. } => (
             SuggestedFix::new(
                 "Fix harness.config.json so its .ontologies field is an array, then retry.",
@@ -688,10 +991,46 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 Applicability::Unspecified,
             ),
         ),
+        MifRhError::SchemaCompilation { .. } => (
+            SuggestedFix::new(
+                "Fix the schema (or its $ref dependency) so it is valid JSON Schema, then \
+                 retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Fix the malformed schema",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::RefSchemaMissingId { .. } => (
+            SuggestedFix::new(
+                "Add a $id to the dependency schema, then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Add the missing $id",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::SchemaValidationFailed { .. } => (
+            SuggestedFix::new(
+                "Fix the report to conform to its schema (see the listed validation errors), \
+                 then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Fix the schema violations",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
         MifRhError::FindingIo { .. }
         | MifRhError::Io { .. }
         | MifRhError::LockIo { .. }
         | MifRhError::Ontology(_)
+        | MifRhError::Frontmatter(_)
         | MifRhError::Embed(_) => unreachable!(
             "to_problem handles the IO-classified and delegated variants before calling \
              fix_and_action"
@@ -703,6 +1042,7 @@ impl ToProblem for MifRhError {
     fn to_problem(&self) -> ProblemDetails {
         match self {
             Self::Ontology(inner) => inner.to_problem(),
+            Self::Frontmatter(inner) => inner.to_problem(),
             Self::Embed(inner) => inner.to_problem(),
             Self::FindingIo { source, .. }
             | Self::Io { source, .. }
@@ -747,6 +1087,9 @@ mod tests {
         serde_norway::from_str::<serde_json::Value>("- a\n  bad: [unterminated").unwrap_err()
     }
 
+    // One entry per error variant, each a flat struct literal — length is
+    // inherent to the variant count, not a complexity signal.
+    #[allow(clippy::too_many_lines)]
     fn every_variant() -> Vec<MifRhError> {
         vec![
             MifRhError::FindingIo {
@@ -845,6 +1188,54 @@ mod tests {
             },
             MifRhError::NoClustersFound {
                 path: "clusters.json".to_string(),
+            },
+            MifRhError::VersionNotSemver {
+                value: "1.0".to_string(),
+            },
+            MifRhError::VersionMissing {
+                path: "harness.config.json".to_string(),
+            },
+            MifRhError::VersionUnchanged {
+                value: "1.0.0".to_string(),
+            },
+            MifRhError::PackNotFound {
+                name: "pdf".to_string(),
+            },
+            MifRhError::PackAmbiguous {
+                name: "pdf".to_string(),
+            },
+            MifRhError::PackFileMissing {
+                name: "pdf".to_string(),
+                path: "packs/x/pdf/.claude-plugin/plugin.json".to_string(),
+            },
+            MifRhError::PackVersionInvalid {
+                name: "pdf".to_string(),
+                path: "packs/x/pdf/.claude-plugin/plugin.json".to_string(),
+                value: "not-semver".to_string(),
+            },
+            MifRhError::PackAheadOfRelease {
+                name: "pdf".to_string(),
+                pack_version: "2.0.0".to_string(),
+                new_version: "1.5.0".to_string(),
+            },
+            MifRhError::ChangelogAnchorMissing {
+                path: "CHANGELOG.md".to_string(),
+            },
+            MifRhError::VerificationFailed {
+                path: "harness.config.json".to_string(),
+            },
+            MifRhError::Frontmatter(mif_frontmatter::FrontmatterError::MissingFrontmatter),
+            MifRhError::SchemaCompilation {
+                path: "findings.schema.json".to_string(),
+                detail: "not valid JSON".to_string(),
+            },
+            MifRhError::RefSchemaMissingId {
+                path: "entity-reference.schema.json".to_string(),
+            },
+            MifRhError::SchemaValidationFailed {
+                path: "reports/x/findings/1.md".to_string(),
+                schema_path: "schemas/findings.schema.json".to_string(),
+                detail: "missing required field 'title'".to_string(),
             },
         ]
     }

@@ -244,6 +244,13 @@ enum Command {
         #[command(subcommand)]
         action: OntologyCommand,
     },
+    /// Harness-native release/versioning tooling (rht Category B, Story
+    /// #298): the compiled replacement for `goal-version.sh`,
+    /// `bump-version.sh`, and `check-version-bump.sh` (ADR-0010).
+    Harness {
+        #[command(subcommand)]
+        action: HarnessCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -343,6 +350,63 @@ enum OntologyCommand {
         /// `reports`.
         #[arg(long)]
         reports_dir: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum HarnessCommand {
+    /// Print a goal's content-hash identity (`gv-<sha256(...)[:12]>`).
+    GoalVersion {
+        /// Path to `goal.json`.
+        goal: PathBuf,
+    },
+    /// Change-driven version bump (ADR-0010): the release pointer, the
+    /// marketplace catalog, a dated CHANGELOG section, and (with `--pack`)
+    /// a component's own plugin/skill/doc stamps.
+    BumpVersion {
+        /// `patch`, `minor`, `major`, or an explicit `X.Y.Z`.
+        spec: String,
+        /// Also bump this pack component (repeatable).
+        #[arg(long = "pack")]
+        packs: Vec<String>,
+        /// CHANGELOG date for the new section (`YYYY-MM-DD`). Defaults to
+        /// today (UTC).
+        #[arg(long)]
+        date: Option<String>,
+        /// Dry run: report what would change, write nothing.
+        #[arg(long)]
+        check: bool,
+        /// Repo root. Defaults to the current directory.
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Enforce ADR-0010's change-driven versioning invariants (the PR-only
+    /// CI gate): a changed pack/core-skill must move its own version, and
+    /// the release pointer must stay ahead of the last release tag.
+    CheckVersionBump {
+        /// The base ref to diff against. Defaults to `origin/main`.
+        base: Option<String>,
+        /// Repo root. Defaults to the current directory.
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Project a MIF-L3 report's frontmatter + body into JSON and validate
+    /// it against a schema (with `$ref` dependencies). Does not run
+    /// citation-integrity — that stays a separate check until it is
+    /// migrated in its own story.
+    ProjectReport {
+        /// Path to the report markdown file.
+        report: PathBuf,
+        /// Path to the schema to validate against.
+        #[arg(long)]
+        schema: PathBuf,
+        /// A `$ref` dependency schema (repeatable). Each must declare its
+        /// own `$id`.
+        #[arg(long = "ref")]
+        refs: Vec<PathBuf>,
+        /// Write the projected JSON here.
+        #[arg(long = "json-out")]
+        json_out: Option<PathBuf>,
     },
 }
 
@@ -472,6 +536,7 @@ fn run(command: &Command) -> Result<Outcome, CliError> {
             out,
         } => expansion_candidates_cmd(index.as_deref(), calibration.as_deref(), out.as_deref()),
         Command::Ontology { action } => ontology_cmd(action),
+        Command::Harness { action } => harness_cmd(action),
     }
 }
 
@@ -704,6 +769,154 @@ fn ontology_author_cmd(
             "ontology author: drafted '{new_id}' with {} candidate type(s) -> {}",
             report.type_count,
             out_path.display()
+        ),
+        exit_code: 0,
+    })
+}
+
+fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
+    match action {
+        HarnessCommand::GoalVersion { goal } => harness_goal_version_cmd(goal),
+        HarnessCommand::BumpVersion {
+            spec,
+            packs,
+            date,
+            check,
+            root,
+        } => harness_bump_version_cmd(spec, packs, date.as_deref(), *check, root.as_deref()),
+        HarnessCommand::CheckVersionBump { base, root } => {
+            harness_check_version_bump_cmd(base.as_deref(), root.as_deref())
+        },
+        HarnessCommand::ProjectReport {
+            report,
+            schema,
+            refs,
+            json_out,
+        } => harness_project_report_cmd(report, schema, refs, json_out.as_deref()),
+    }
+}
+
+fn harness_goal_version_cmd(goal_path: &Path) -> Result<Outcome, CliError> {
+    let contents = std::fs::read_to_string(goal_path).map_err(|source| mif_rh::MifRhError::Io {
+        path: goal_path.display().to_string(),
+        source,
+    })?;
+    let goal: serde_json::Value =
+        serde_json::from_str(&contents).map_err(|source| mif_rh::MifRhError::Json {
+            path: goal_path.display().to_string(),
+            source,
+        })?;
+    Ok(Outcome {
+        message: mif_rh::goal_version_id(&goal),
+        exit_code: 0,
+    })
+}
+
+fn harness_bump_version_cmd(
+    spec: &str,
+    packs: &[String],
+    date: Option<&str>,
+    check: bool,
+    root: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let root = effective_path(root, ".");
+    let report = mif_rh::bump_version(&mif_rh::BumpOptions {
+        root: &root,
+        spec,
+        packs,
+        date,
+        check,
+    })?;
+    let message = if report.applied {
+        format!(
+            "bump-version: {} -> {} (date {}){}",
+            report.old_version,
+            report.new_version,
+            report.date,
+            if report.packs.is_empty() {
+                String::new()
+            } else {
+                format!("; packs: {}", report.packs.join(", "))
+            }
+        )
+    } else {
+        format!(
+            "bump-version: --check, {} -> {} (date {}) — no files written",
+            report.old_version, report.new_version, report.date
+        )
+    };
+    Ok(Outcome {
+        message,
+        exit_code: 0,
+    })
+}
+
+fn harness_check_version_bump_cmd(
+    base: Option<&str>,
+    root: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let root = effective_path(root, ".");
+    let base = base.unwrap_or("origin/main");
+    let report = mif_rh::check_version_bump(&root, base)?;
+
+    let mut lines: Vec<String> = report
+        .failures
+        .iter()
+        .map(|failure| match failure {
+            mif_rh::VersionGateFailure::PackNotBumped { pack, version } => format!(
+                "FAIL: {pack} changed but its plugin.json .version stayed at {version} — bump it"
+            ),
+            mif_rh::VersionGateFailure::SkillNotBumped { skill, version } => format!(
+                "FAIL: {skill} changed but its SKILL.md version stayed at {version} — bump it"
+            ),
+            mif_rh::VersionGateFailure::PointerNotAhead {
+                current,
+                last_release,
+            } => format!(
+                "FAIL: harness.config.json .version ({current}) is not ahead of the last \
+                 release (v{last_release}) — someone needs to bump it before the next release"
+            ),
+            mif_rh::VersionGateFailure::PointerMissing => {
+                "FAIL: harness.config.json has no .version".to_string()
+            },
+        })
+        .collect();
+    if lines.is_empty() {
+        lines.push(format!(
+            "check-version-bump: changed components moved their own version, and the release \
+             pointer ({}) is ahead of the last release",
+            report.pointer_at_head.as_deref().unwrap_or("-")
+        ));
+    }
+    Ok(Outcome {
+        message: lines.join("\n"),
+        exit_code: u8::from(!report.failures.is_empty()),
+    })
+}
+
+fn harness_project_report_cmd(
+    report: &Path,
+    schema: &Path,
+    refs: &[PathBuf],
+    json_out: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let projected = mif_rh::project_report(report, schema, refs)?;
+    if let Some(out_path) = json_out {
+        let text = serde_json::to_string_pretty(&projected).map_err(|source| {
+            mif_rh::MifRhError::JsonSerialize {
+                path: out_path.display().to_string(),
+                source,
+            }
+        })?;
+        std::fs::write(out_path, format!("{text}\n")).map_err(|source| mif_rh::MifRhError::Io {
+            path: out_path.display().to_string(),
+            source,
+        })?;
+    }
+    Ok(Outcome {
+        message: format!(
+            "mif-project: {} projects to a valid MIF L3 finding",
+            report.display()
         ),
         exit_code: 0,
     })

@@ -36,6 +36,8 @@ pub mod catalog;
 pub mod config;
 mod error;
 pub mod finding;
+pub mod harness_project;
+pub mod harness_release;
 pub mod index;
 pub mod lock;
 pub mod ontology_pack;
@@ -54,6 +56,11 @@ pub use catalog::Catalog;
 pub use config::HarnessConfig;
 pub use error::MifRhError;
 pub use finding::Finding;
+pub use harness_project::project_report;
+pub use harness_release::{
+    BumpOptions, BumpReport, VersionGateFailure, VersionGateReport, bump_version,
+    check_version_bump, goal_version_id,
+};
 pub use index::{FindingIndex, IndexStats, IndexedFinding, Miss, SearchMatch, SimilarFinding};
 pub use lock::ReviewLock;
 pub use ontology_pack::{EntityType, OntologyPack};

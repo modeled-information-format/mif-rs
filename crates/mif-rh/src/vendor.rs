@@ -640,6 +640,22 @@ pub fn sync_registry(
     sidecar_path: &Path,
     source: &str,
 ) -> Result<RegistrySyncReport, MifRhError> {
+    // Validate the config's shape BEFORE any network/source activity — a
+    // malformed config must fail fast and offline, matching
+    // `sync-registry-ontologies.sh`'s own original `jq -e '.ontologies |
+    // type == "array"'` guard, which ran before it ever touched the
+    // registry.
+    let mut config = load_config_json(config_path)?;
+    if !config
+        .get("ontologies")
+        .is_some_and(serde_json::Value::is_array)
+    {
+        return Err(MifRhError::ConfigMalformed {
+            path: config_path.display().to_string(),
+            detail: ".ontologies is missing or not an array".to_string(),
+        });
+    }
+
     let index_bytes = fetch_raw(source, "index.json")?;
     let index: RegistryIndex =
         serde_json::from_slice(&index_bytes).map_err(|err| MifRhError::RegistryIndexInvalid {
@@ -663,7 +679,6 @@ pub fn sync_registry(
         });
     }
 
-    let mut config = load_config_json(config_path)?;
     let known = known_ontology_ids(&config);
     let mut discovered: Vec<String> = index
         .ontologies
@@ -1182,5 +1197,45 @@ mod tests {
 
         let report = sync_registry(dir.path(), &config_path, &sidecar_path, &source).unwrap();
         assert!(report.discovered.is_empty());
+    }
+
+    #[test]
+    fn sync_registry_rejects_a_non_array_ontologies_field_without_touching_the_network() {
+        // A deliberately unreachable source: if the config-shape check ran
+        // AFTER fetching the index (as it once did), this would hang or
+        // fail on a network error instead of failing closed immediately on
+        // the malformed config, matching
+        // `sync-registry-ontologies.sh`'s own original ordering (config
+        // validated before any registry access).
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("harness.config.json");
+        fs::write(&config_path, r#"{"ontologies":"not-an-array"}"#).unwrap();
+        let sidecar_path = dir.path().join("enabled-packs.json");
+
+        let error = sync_registry(
+            dir.path(),
+            &config_path,
+            &sidecar_path,
+            "http://127.0.0.1.invalid/unreachable",
+        )
+        .unwrap_err();
+        assert!(matches!(error, super::MifRhError::ConfigMalformed { .. }));
+    }
+
+    #[test]
+    fn sync_registry_rejects_invalid_json_config_without_touching_the_network() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("harness.config.json");
+        fs::write(&config_path, "not json at all").unwrap();
+        let sidecar_path = dir.path().join("enabled-packs.json");
+
+        let error = sync_registry(
+            dir.path(),
+            &config_path,
+            &sidecar_path,
+            "http://127.0.0.1.invalid/unreachable",
+        )
+        .unwrap_err();
+        assert!(matches!(error, super::MifRhError::Json { .. }));
     }
 }
