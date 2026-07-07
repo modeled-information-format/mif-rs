@@ -591,6 +591,21 @@ enum HarnessCommand {
         #[arg(long)]
         sample: PathBuf,
     },
+    /// Compute a topic README's metadata rollup, emitted as
+    /// `source`-able shell variable assignments.
+    TopicMetadata {
+        /// The registered topic id.
+        topic: String,
+        /// Path to `harness.config.json`.
+        #[arg(long)]
+        config: PathBuf,
+        /// The topic's findings directory.
+        #[arg(long)]
+        findings: PathBuf,
+        /// The topic's `goal.json` (treated as empty if missing/unreadable).
+        #[arg(long)]
+        goal: PathBuf,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -1077,6 +1092,12 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
             refs,
             sample,
         } => harness_reconcile_session_cmd(topic_reports_dir, schema, refs, sample),
+        HarnessCommand::TopicMetadata {
+            topic,
+            config,
+            findings,
+            goal,
+        } => harness_topic_metadata_cmd(topic, config, findings, goal),
     }
 }
 
@@ -1651,6 +1672,19 @@ fn harness_reconcile_session_cmd(
     };
     Ok(Outcome {
         message,
+        exit_code: 0,
+    })
+}
+
+fn harness_topic_metadata_cmd(
+    topic: &str,
+    config: &Path,
+    findings: &Path,
+    goal: &Path,
+) -> Result<Outcome, CliError> {
+    let metadata = mif_rh::topic_metadata(topic, config, findings, goal)?;
+    Ok(Outcome {
+        message: metadata.to_shell_script(),
         exit_code: 0,
     })
 }

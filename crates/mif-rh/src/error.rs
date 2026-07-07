@@ -204,6 +204,15 @@ pub enum MifRhError {
         /// The sample finding path that unexpectedly failed to validate.
         sample_path: String,
     },
+    /// A topic README build/check was requested for a topic with no entry
+    /// in `harness.config.json`'s `topics[]`.
+    #[error("topic '{topic}' is not registered in {config_path}")]
+    TopicNotRegistered {
+        /// The unregistered topic id.
+        topic: String,
+        /// The manifest path checked.
+        config_path: String,
+    },
     /// Building a dynamic `jsonschema` validator for a resolved entity
     /// type's `schema` field failed. Indicates a malformed ontology pack,
     /// not a bug in the finding being validated.
@@ -608,6 +617,13 @@ impl MifRhError {
                 title: "Known-good sample finding failed schema validation",
                 status: 500,
                 exit_code: 3,
+            },
+            Self::TopicNotRegistered { .. } => ProblemMeta {
+                slug: "topic-not-registered",
+                version: "v1",
+                title: "Topic is not registered in harness.config.json",
+                status: 422,
+                exit_code: 2,
             },
             Self::EntityTypeSchemaInvalid { .. } => ProblemMeta {
                 slug: "entity-type-schema-invalid",
@@ -1241,6 +1257,17 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 Applicability::Unspecified,
             ),
         ),
+        MifRhError::TopicNotRegistered { .. } => (
+            SuggestedFix::new(
+                "Register the topic in harness.config.json's topics[] before building its README.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Register the topic",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
         MifRhError::FindingIo { .. }
         | MifRhError::Io { .. }
         | MifRhError::LockIo { .. }
@@ -1477,6 +1504,10 @@ mod tests {
             },
             MifRhError::ReconcileEnvironmentBroken {
                 sample_path: "schemas/samples/finding.sample.json".to_string(),
+            },
+            MifRhError::TopicNotRegistered {
+                topic: "x".to_string(),
+                config_path: "harness.config.json".to_string(),
             },
         ]
     }
