@@ -606,6 +606,20 @@ enum HarnessCommand {
         #[arg(long)]
         goal: PathBuf,
     },
+    /// Build the cross-topic corpus atlas (`corpus-map.json` +
+    /// `corpus-synthesis.md`) from the concordance.
+    SynthesizeCorpus {
+        /// Path to `reports/concordance.json`.
+        concordance: PathBuf,
+        /// Write the corpus map here.
+        map_out: PathBuf,
+        /// Write the corpus synthesis markdown here.
+        markdown_out: PathBuf,
+        /// Previously authored "Cross-Corpus Insights" prose to preserve
+        /// across rebuilds (omit to seed the draft marker).
+        #[arg(long)]
+        preserved_insights: Option<String>,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -1098,6 +1112,17 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
             findings,
             goal,
         } => harness_topic_metadata_cmd(topic, config, findings, goal),
+        HarnessCommand::SynthesizeCorpus {
+            concordance,
+            map_out,
+            markdown_out,
+            preserved_insights,
+        } => harness_synthesize_corpus_cmd(
+            concordance,
+            map_out,
+            markdown_out,
+            preserved_insights.as_deref(),
+        ),
     }
 }
 
@@ -1685,6 +1710,40 @@ fn harness_topic_metadata_cmd(
     let metadata = mif_rh::topic_metadata(topic, config, findings, goal)?;
     Ok(Outcome {
         message: metadata.to_shell_script(),
+        exit_code: 0,
+    })
+}
+
+fn harness_synthesize_corpus_cmd(
+    concordance: &Path,
+    map_out: &Path,
+    markdown_out: &Path,
+    preserved_insights: Option<&str>,
+) -> Result<Outcome, CliError> {
+    let synthesis = mif_rh::synthesize_corpus(concordance, preserved_insights)?;
+    let sorted_map = mif_rh::sort_object_keys(&synthesis.map);
+    let map_text = serde_json::to_string_pretty(&sorted_map).map_err(|source| {
+        mif_rh::MifRhError::JsonSerialize {
+            path: map_out.display().to_string(),
+            source,
+        }
+    })?;
+    std::fs::write(map_out, format!("{map_text}\n")).map_err(|source| mif_rh::MifRhError::Io {
+        path: map_out.display().to_string(),
+        source,
+    })?;
+    std::fs::write(markdown_out, &synthesis.markdown).map_err(|source| mif_rh::MifRhError::Io {
+        path: markdown_out.display().to_string(),
+        source,
+    })?;
+    Ok(Outcome {
+        message: format!(
+            "synthesize-corpus: wrote {} and {} ({} topics, {} entities)",
+            map_out.display(),
+            markdown_out.display(),
+            synthesis.topics,
+            synthesis.entities
+        ),
         exit_code: 0,
     })
 }

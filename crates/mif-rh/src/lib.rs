@@ -37,6 +37,7 @@ pub mod config;
 mod error;
 pub mod finding;
 pub mod harness_concordance;
+pub mod harness_corpus;
 pub mod harness_graph;
 pub mod harness_import;
 pub mod harness_index;
@@ -69,12 +70,13 @@ pub use config::HarnessConfig;
 pub use error::MifRhError;
 pub use finding::Finding;
 pub use harness_concordance::build_concordance;
+pub use harness_corpus::{CorpusSynthesis, synthesize_corpus};
 pub use harness_graph::build_graph;
 pub use harness_import::{ImportReport, import_corpus};
 pub use harness_index::build_index;
 pub use harness_membership::{MembershipReport, resolve_membership};
 pub use harness_project::project_report;
-pub use harness_reconcile::{ReconcileReport, reconcile_session};
+pub use harness_reconcile::{ReconcileReport, reconcile_session, sort_object_keys};
 pub use harness_release::{
     BumpOptions, BumpReport, VersionGateFailure, VersionGateReport, bump_version,
     check_version_bump, goal_version_id,

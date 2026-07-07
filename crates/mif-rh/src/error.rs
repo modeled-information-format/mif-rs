@@ -213,6 +213,14 @@ pub enum MifRhError {
         /// The manifest path checked.
         config_path: String,
     },
+    /// A concordance file parsed but is not a valid graph (no `.nodes`
+    /// array) — the corpus atlas is a projection of the spine, and there
+    /// is nothing to project without one.
+    #[error("concordance is not a valid graph (no .nodes array): {path}")]
+    InvalidConcordance {
+        /// The invalid concordance path.
+        path: String,
+    },
     /// Building a dynamic `jsonschema` validator for a resolved entity
     /// type's `schema` field failed. Indicates a malformed ontology pack,
     /// not a bug in the finding being validated.
@@ -622,6 +630,13 @@ impl MifRhError {
                 slug: "topic-not-registered",
                 version: "v1",
                 title: "Topic is not registered in harness.config.json",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::InvalidConcordance { .. } => ProblemMeta {
+                slug: "invalid-concordance",
+                version: "v1",
+                title: "Concordance is not a valid graph",
                 status: 422,
                 exit_code: 2,
             },
@@ -1268,6 +1283,17 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 Applicability::MaybeIncorrect,
             ),
         ),
+        MifRhError::InvalidConcordance { .. } => (
+            SuggestedFix::new(
+                "Build the concordance first (scripts/build-concordance.sh) before synthesizing the corpus atlas.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Build the concordance",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
         MifRhError::FindingIo { .. }
         | MifRhError::Io { .. }
         | MifRhError::LockIo { .. }
@@ -1508,6 +1534,9 @@ mod tests {
             MifRhError::TopicNotRegistered {
                 topic: "x".to_string(),
                 config_path: "harness.config.json".to_string(),
+            },
+            MifRhError::InvalidConcordance {
+                path: "reports/concordance.json".to_string(),
             },
         ]
     }

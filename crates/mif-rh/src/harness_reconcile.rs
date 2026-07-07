@@ -247,7 +247,8 @@ pub fn reconcile_session(
 
 /// Recursively sorts every JSON object's keys (matching jq's `-S` flag),
 /// leaving arrays' element order and scalar values untouched.
-fn sort_object_keys(value: &Value) -> Value {
+#[must_use]
+pub fn sort_object_keys(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
             let sorted: std::collections::BTreeMap<String, Value> = map
