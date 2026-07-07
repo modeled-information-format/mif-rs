@@ -565,6 +565,15 @@ enum HarnessCommand {
         #[arg(long)]
         config: Option<PathBuf>,
     },
+    /// Build the cross-topic concordance (the ontological spine) from
+    /// every topic's findings.
+    BuildConcordance {
+        /// The reports root directory (each subdirectory with a
+        /// `findings/` is a topic).
+        reports_dir: PathBuf,
+        /// Write the concordance here. Defaults to `<reports-dir>/concordance.json`.
+        out: Option<PathBuf>,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -1042,6 +1051,9 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
             refs,
             config: config.as_deref(),
         }),
+        HarnessCommand::BuildConcordance { reports_dir, out } => {
+            harness_build_concordance_cmd(reports_dir, out.as_deref())
+        },
     }
 }
 
@@ -1571,6 +1583,33 @@ fn harness_import_corpus_cmd(args: &ImportCorpusArgs<'_>) -> Result<Outcome, Cli
     }
     Ok(Outcome {
         message,
+        exit_code: 0,
+    })
+}
+
+fn harness_build_concordance_cmd(
+    reports_dir: &Path,
+    out: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let out_path = out.map_or_else(|| reports_dir.join("concordance.json"), Path::to_path_buf);
+    let concordance = mif_rh::build_concordance(reports_dir)?;
+    let node_count = concordance["nodes"].as_array().map_or(0, Vec::len);
+    let edge_count = concordance["edges"].as_array().map_or(0, Vec::len);
+    let text = serde_json::to_string_pretty(&concordance).map_err(|source| {
+        mif_rh::MifRhError::JsonSerialize {
+            path: out_path.display().to_string(),
+            source,
+        }
+    })?;
+    std::fs::write(&out_path, format!("{text}\n")).map_err(|source| mif_rh::MifRhError::Io {
+        path: out_path.display().to_string(),
+        source,
+    })?;
+    Ok(Outcome {
+        message: format!(
+            "build-concordance: wrote {} ({node_count} nodes, {edge_count} edges) across topics",
+            out_path.display()
+        ),
         exit_code: 0,
     })
 }
