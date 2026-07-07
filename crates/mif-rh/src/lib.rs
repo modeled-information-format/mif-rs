@@ -43,6 +43,7 @@ pub mod harness_index;
 pub mod harness_markdown;
 pub mod harness_membership;
 pub mod harness_project;
+pub mod harness_reconcile;
 pub mod harness_release;
 pub mod harness_render;
 pub mod harness_synthesize;
@@ -72,6 +73,7 @@ pub use harness_import::{ImportReport, import_corpus};
 pub use harness_index::build_index;
 pub use harness_membership::{MembershipReport, resolve_membership};
 pub use harness_project::project_report;
+pub use harness_reconcile::{ReconcileReport, reconcile_session};
 pub use harness_release::{
     BumpOptions, BumpReport, VersionGateFailure, VersionGateReport, bump_version,
     check_version_bump, goal_version_id,

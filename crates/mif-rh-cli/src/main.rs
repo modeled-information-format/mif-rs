@@ -574,6 +574,23 @@ enum HarnessCommand {
         /// Write the concordance here. Defaults to `<reports-dir>/concordance.json`.
         out: Option<PathBuf>,
     },
+    /// Derive a durable session checkpoint (`state.json`) purely from
+    /// disk and print the remaining-work plan.
+    ReconcileSession {
+        /// The topic's reports directory (`reports/<topic>`).
+        topic_reports_dir: PathBuf,
+        /// Path to `schemas/findings.schema.json`.
+        #[arg(long)]
+        schema: PathBuf,
+        /// A `$ref` dependency schema (repeatable). Each must declare its
+        /// own `$id`.
+        #[arg(long = "ref")]
+        refs: Vec<PathBuf>,
+        /// A known-good sample finding, validated first as an
+        /// environment sanity check.
+        #[arg(long)]
+        sample: PathBuf,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -1054,6 +1071,12 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
         HarnessCommand::BuildConcordance { reports_dir, out } => {
             harness_build_concordance_cmd(reports_dir, out.as_deref())
         },
+        HarnessCommand::ReconcileSession {
+            topic_reports_dir,
+            schema,
+            refs,
+            sample,
+        } => harness_reconcile_session_cmd(topic_reports_dir, schema, refs, sample),
     }
 }
 
@@ -1610,6 +1633,24 @@ fn harness_build_concordance_cmd(
             "build-concordance: wrote {} ({node_count} nodes, {edge_count} edges) across topics",
             out_path.display()
         ),
+        exit_code: 0,
+    })
+}
+
+fn harness_reconcile_session_cmd(
+    topic_reports_dir: &Path,
+    schema: &Path,
+    refs: &[PathBuf],
+    sample: &Path,
+) -> Result<Outcome, CliError> {
+    let report = mif_rh::reconcile_session(topic_reports_dir, schema, refs, sample)?;
+    let message = if report.plan.is_empty() {
+        "nothing to do".to_string()
+    } else {
+        format!("REMAINING WORK PLAN\n{}", report.plan.join("\n"))
+    };
+    Ok(Outcome {
+        message,
         exit_code: 0,
     })
 }

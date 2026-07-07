@@ -193,6 +193,17 @@ pub enum MifRhError {
         /// The paths of the findings missing provenance.
         paths: Vec<String>,
     },
+    /// A session reconciliation's known-good sample finding failed schema
+    /// validation — the schema/toolchain itself is broken. Must never be
+    /// read as "every finding is invalid" (that would re-run an entire
+    /// expensive research session).
+    #[error(
+        "the known-good sample finding at {sample_path} failed schema validation — the schema/toolchain is broken, refusing to emit a plan"
+    )]
+    ReconcileEnvironmentBroken {
+        /// The sample finding path that unexpectedly failed to validate.
+        sample_path: String,
+    },
     /// Building a dynamic `jsonschema` validator for a resolved entity
     /// type's `schema` field failed. Indicates a malformed ontology pack,
     /// not a bug in the finding being validated.
@@ -590,6 +601,13 @@ impl MifRhError {
                 title: "Corpus import contains findings with no provenance block",
                 status: 422,
                 exit_code: 1,
+            },
+            Self::ReconcileEnvironmentBroken { .. } => ProblemMeta {
+                slug: "reconcile-environment-broken",
+                version: "v1",
+                title: "Known-good sample finding failed schema validation",
+                status: 500,
+                exit_code: 3,
             },
             Self::EntityTypeSchemaInvalid { .. } => ProblemMeta {
                 slug: "entity-type-schema-invalid",
@@ -1211,6 +1229,18 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 Applicability::MaybeIncorrect,
             ),
         ),
+        MifRhError::ReconcileEnvironmentBroken { .. } => (
+            SuggestedFix::new(
+                "Check the schema/$ref files and the jsonschema toolchain — a known-good \
+                 sample should always validate.",
+                Applicability::Unspecified,
+            ),
+            CodeAction::new(
+                "Diagnose the schema toolchain",
+                "quickfix",
+                Applicability::Unspecified,
+            ),
+        ),
         MifRhError::FindingIo { .. }
         | MifRhError::Io { .. }
         | MifRhError::LockIo { .. }
@@ -1444,6 +1474,9 @@ mod tests {
             MifRhError::MissingProvenance {
                 count: 1,
                 paths: vec!["src/findings/f1.json".to_string()],
+            },
+            MifRhError::ReconcileEnvironmentBroken {
+                sample_path: "schemas/samples/finding.sample.json".to_string(),
             },
         ]
     }
