@@ -1642,6 +1642,7 @@ dependencies = [
 name = "mif-rh-cli"
 version = "0.4.0"
 dependencies = [
+ "chrono",
  "clap",
  "mif-embed",
  "mif-ontology",

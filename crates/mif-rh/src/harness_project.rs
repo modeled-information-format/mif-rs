@@ -63,14 +63,14 @@ pub fn project_report(
     Ok(doc)
 }
 
-fn read_text(path: &Path) -> Result<String, MifRhError> {
+pub(crate) fn read_text(path: &Path) -> Result<String, MifRhError> {
     std::fs::read_to_string(path).map_err(|source| MifRhError::Io {
         path: path.display().to_string(),
         source,
     })
 }
 
-fn read_json(path: &Path) -> Result<Value, MifRhError> {
+pub(crate) fn read_json(path: &Path) -> Result<Value, MifRhError> {
     let contents = read_text(path)?;
     serde_json::from_str(&contents).map_err(|source| MifRhError::Json {
         path: path.display().to_string(),
@@ -78,7 +78,12 @@ fn read_json(path: &Path) -> Result<Value, MifRhError> {
     })
 }
 
-fn validate_against_schema(
+/// Validates `instance` against `schema_path`, resolving `$ref`s against
+/// `ref_paths` (each of which must declare its own `$id`). Shared by
+/// [`crate::harness_project::project_report`] and
+/// `crate::harness_wrap::wrap_source`, which both validate an
+/// assembled JSON document against a MIF schema at runtime.
+pub(crate) fn validate_against_schema(
     instance: &Value,
     instance_path: &Path,
     schema_path: &Path,

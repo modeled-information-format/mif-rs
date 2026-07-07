@@ -38,6 +38,8 @@ mod error;
 pub mod finding;
 pub mod harness_project;
 pub mod harness_release;
+pub mod harness_toggle;
+pub mod harness_wrap;
 pub mod index;
 pub mod lock;
 pub mod ontology_pack;
@@ -61,6 +63,8 @@ pub use harness_release::{
     BumpOptions, BumpReport, VersionGateFailure, VersionGateReport, bump_version,
     check_version_bump, goal_version_id,
 };
+pub use harness_toggle::{SITE_PLUGINS, pack_toggle, site_toggle_plugin, site_toggle_primary};
+pub use harness_wrap::{WrapSourceInputs, read_source_content, wrap_source};
 pub use index::{FindingIndex, IndexStats, IndexedFinding, Miss, SearchMatch, SimilarFinding};
 pub use lock::ReviewLock;
 pub use ontology_pack::{EntityType, OntologyPack};

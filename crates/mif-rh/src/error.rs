@@ -134,6 +134,32 @@ pub enum MifRhError {
         /// Every validation error, joined for display.
         detail: String,
     },
+    /// A manifest toggle's value is not one of the allowed values.
+    #[error("{field} must be one of {allowed} (got '{value}')")]
+    InvalidToggleValue {
+        /// The toggled field's name.
+        field: String,
+        /// The rejected value.
+        value: String,
+        /// The pipe-joined list of allowed values.
+        allowed: String,
+    },
+    /// No source content was available from `--content-file`,
+    /// `--content`, or stdin.
+    #[error("empty content (provide --content-file, --content, or stdin)")]
+    EmptySourceContent,
+    /// A `pack-toggle` target is not declared in `harness.config.json`'s
+    /// `packs[]` array. Distinct from [`Self::PackNotFound`] (a
+    /// `bump-version --pack` target with no `packs/<family>/<name>/`
+    /// directory on disk) — this is a config-declaration check, not a
+    /// filesystem one.
+    #[error("pack '{name}' is not declared in {path} packs[] — declare it first")]
+    PackNotDeclared {
+        /// The undeclared pack name.
+        name: String,
+        /// The manifest path checked.
+        path: String,
+    },
     /// Building a dynamic `jsonschema` validator for a resolved entity
     /// type's `schema` field failed. Indicates a malformed ontology pack,
     /// not a bug in the finding being validated.
@@ -482,6 +508,27 @@ impl MifRhError {
                 title: "Report failed schema validation",
                 status: 422,
                 exit_code: 1,
+            },
+            Self::InvalidToggleValue { .. } => ProblemMeta {
+                slug: "invalid-toggle-value",
+                version: "v1",
+                title: "Manifest toggle value is not one of the allowed values",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::EmptySourceContent => ProblemMeta {
+                slug: "empty-source-content",
+                version: "v1",
+                title: "No source content was available from any input",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::PackNotDeclared { .. } => ProblemMeta {
+                slug: "pack-not-declared",
+                version: "v1",
+                title: "Pack is not declared in the harness manifest",
+                status: 404,
+                exit_code: 2,
             },
             Self::EntityTypeSchemaInvalid { .. } => ProblemMeta {
                 slug: "entity-type-schema-invalid",
@@ -1026,6 +1073,39 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 Applicability::MaybeIncorrect,
             ),
         ),
+        MifRhError::InvalidToggleValue { .. } => (
+            SuggestedFix::new(
+                "Pass one of the allowed values, then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Correct the toggle value",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::EmptySourceContent => (
+            SuggestedFix::new(
+                "Provide content via --content-file, --content, or stdin.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Provide source content",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::PackNotDeclared { .. } => (
+            SuggestedFix::new(
+                "Declare the pack in the manifest's packs[] array, then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Declare the pack first",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
         MifRhError::FindingIo { .. }
         | MifRhError::Io { .. }
         | MifRhError::LockIo { .. }
@@ -1236,6 +1316,16 @@ mod tests {
                 path: "reports/x/findings/1.md".to_string(),
                 schema_path: "schemas/findings.schema.json".to_string(),
                 detail: "missing required field 'title'".to_string(),
+            },
+            MifRhError::InvalidToggleValue {
+                field: "primarySurface".to_string(),
+                value: "bogus".to_string(),
+                allowed: "reports|docs|auto".to_string(),
+            },
+            MifRhError::EmptySourceContent,
+            MifRhError::PackNotDeclared {
+                name: "pdf".to_string(),
+                path: "harness.config.json".to_string(),
             },
         ]
     }

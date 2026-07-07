@@ -408,6 +408,72 @@ enum HarnessCommand {
         #[arg(long = "json-out")]
         json_out: Option<PathBuf>,
     },
+    /// Set `.site.primarySurface` in the harness manifest.
+    SiteTogglePrimary {
+        /// `reports`, `docs`, or `auto`.
+        value: String,
+        /// Manifest path. Defaults to `harness.config.json`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Set `.site.plugins.<name>` in the harness manifest.
+    SiteTogglePlugin {
+        /// `llmsTxt`, `mermaid`, `imageZoom`, or `linksValidator`.
+        name: String,
+        /// `on` or `off`.
+        state: String,
+        /// Manifest path. Defaults to `harness.config.json`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Set `.packs[].enabled` for an already-declared pack.
+    PackToggle {
+        /// The pack's declared name.
+        pack: String,
+        /// `on` or `off`.
+        state: String,
+        /// Manifest path. Defaults to `harness.config.json`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Compose and validate a MIF source-envelope from a raw ingested
+    /// source.
+    WrapSource {
+        /// The source URL.
+        #[arg(long)]
+        url: String,
+        /// The source's MIME content type.
+        #[arg(long = "content-type")]
+        content_type: String,
+        /// The namespace the source belongs to.
+        #[arg(long)]
+        namespace: String,
+        /// The source's slug.
+        #[arg(long)]
+        slug: String,
+        /// Write the envelope here.
+        #[arg(long)]
+        out: PathBuf,
+        /// The source's title. Defaults to `slug`.
+        #[arg(long)]
+        title: Option<String>,
+        /// Read content from this file.
+        #[arg(long = "content-file")]
+        content_file: Option<PathBuf>,
+        /// Content given directly on the command line.
+        #[arg(long)]
+        content: Option<String>,
+        /// The provenance `sourceType`. Defaults to `agent_inferred`.
+        #[arg(long = "source-type")]
+        source_type: Option<String>,
+        /// Path to `schemas/mif/source-envelope.schema.json`.
+        #[arg(long)]
+        schema: PathBuf,
+        /// A `$ref` dependency schema (repeatable). Each must declare its
+        /// own `$id`.
+        #[arg(long = "ref")]
+        refs: Vec<PathBuf>,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -793,6 +859,44 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
             refs,
             json_out,
         } => harness_project_report_cmd(report, schema, refs, json_out.as_deref()),
+        HarnessCommand::SiteTogglePrimary { value, config } => {
+            harness_site_toggle_primary_cmd(value, config.as_deref())
+        },
+        HarnessCommand::SiteTogglePlugin {
+            name,
+            state,
+            config,
+        } => harness_site_toggle_plugin_cmd(name, state, config.as_deref()),
+        HarnessCommand::PackToggle {
+            pack,
+            state,
+            config,
+        } => harness_pack_toggle_cmd(pack, state, config.as_deref()),
+        HarnessCommand::WrapSource {
+            url,
+            content_type,
+            namespace,
+            slug,
+            out,
+            title,
+            content_file,
+            content,
+            source_type,
+            schema,
+            refs,
+        } => harness_wrap_source_cmd(&WrapSourceArgs {
+            url,
+            content_type,
+            namespace,
+            slug,
+            out,
+            title: title.as_deref(),
+            content_file: content_file.as_deref(),
+            content: content.as_deref(),
+            source_type: source_type.as_deref(),
+            schema,
+            refs,
+        }),
     }
 }
 
@@ -917,6 +1021,134 @@ fn harness_project_report_cmd(
         message: format!(
             "mif-project: {} projects to a valid MIF L3 finding",
             report.display()
+        ),
+        exit_code: 0,
+    })
+}
+
+fn harness_site_toggle_primary_cmd(
+    value: &str,
+    config: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let config_path = effective_path(config, DEFAULT_CONFIG);
+    mif_rh::site_toggle_primary(&config_path, value)?;
+    Ok(Outcome {
+        message: format!(
+            "site-toggle: primarySurface -> {value} in {}",
+            config_path.display()
+        ),
+        exit_code: 0,
+    })
+}
+
+fn harness_site_toggle_plugin_cmd(
+    name: &str,
+    state: &str,
+    config: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let enabled = parse_on_off("site-toggle", state)?;
+    let config_path = effective_path(config, DEFAULT_CONFIG);
+    mif_rh::site_toggle_plugin(&config_path, name, enabled)?;
+    Ok(Outcome {
+        message: format!(
+            "site-toggle: plugin {name} -> enabled={enabled} in {}",
+            config_path.display()
+        ),
+        exit_code: 0,
+    })
+}
+
+fn harness_pack_toggle_cmd(
+    pack: &str,
+    state: &str,
+    config: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let enabled = parse_on_off("pack-toggle", state)?;
+    let config_path = effective_path(config, DEFAULT_CONFIG);
+    mif_rh::pack_toggle(&config_path, pack, enabled)?;
+    Ok(Outcome {
+        message: format!(
+            "pack-toggle: {pack} -> enabled={enabled} in {}",
+            config_path.display()
+        ),
+        exit_code: 0,
+    })
+}
+
+/// Parses a bash-style `on|off` toggle state, reporting `caller` in the
+/// error message so `site-toggle`/`pack-toggle` each name themselves.
+fn parse_on_off(caller: &str, state: &str) -> Result<bool, CliError> {
+    match state {
+        "on" => Ok(true),
+        "off" => Ok(false),
+        other => Err(mif_rh::MifRhError::InvalidToggleValue {
+            field: format!("{caller} state"),
+            value: other.to_string(),
+            allowed: "on|off".to_string(),
+        }),
+    }
+}
+
+/// Bundles [`HarnessCommand::WrapSource`]'s fields for
+/// [`harness_wrap_source_cmd`] to stay under this workspace's
+/// too-many-arguments threshold.
+struct WrapSourceArgs<'a> {
+    url: &'a str,
+    content_type: &'a str,
+    namespace: &'a str,
+    slug: &'a str,
+    out: &'a Path,
+    title: Option<&'a str>,
+    content_file: Option<&'a Path>,
+    content: Option<&'a str>,
+    source_type: Option<&'a str>,
+    schema: &'a Path,
+    refs: &'a [PathBuf],
+}
+
+fn harness_wrap_source_cmd(args: &WrapSourceArgs<'_>) -> Result<Outcome, CliError> {
+    let content_text =
+        mif_rh::read_source_content(args.content_file, args.content.unwrap_or_default())?;
+    let created = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let envelope = mif_rh::wrap_source(
+        &mif_rh::WrapSourceInputs {
+            url: args.url,
+            content_type: args.content_type,
+            namespace: args.namespace,
+            slug: args.slug,
+            title: args.title.unwrap_or_default(),
+            content: &content_text,
+            source_type: args.source_type.unwrap_or_default(),
+            created: &created,
+        },
+        args.schema,
+        args.refs,
+    )?;
+
+    if let Some(parent) = args.out.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| mif_rh::MifRhError::Io {
+            path: parent.display().to_string(),
+            source,
+        })?;
+    }
+    let text = serde_json::to_string_pretty(&envelope).map_err(|source| {
+        mif_rh::MifRhError::JsonSerialize {
+            path: args.out.display().to_string(),
+            source,
+        }
+    })?;
+    std::fs::write(args.out, format!("{text}\n")).map_err(|source| mif_rh::MifRhError::Io {
+        path: args.out.display().to_string(),
+        source,
+    })?;
+
+    Ok(Outcome {
+        message: format!(
+            "wrap-source: wrote {} (urn:mif:source:{}:{}, {})",
+            args.out.display(),
+            args.namespace,
+            args.slug,
+            args.content_type
         ),
         exit_code: 0,
     })

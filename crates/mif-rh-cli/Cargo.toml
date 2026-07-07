@@ -23,6 +23,7 @@ mif-rh.workspace = true
 mif-embed.workspace = true
 mif-ontology.workspace = true
 mif-problem.workspace = true
+chrono.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
