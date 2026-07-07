@@ -701,6 +701,7 @@ type CliError = mif_rh::MifRhError;
 /// code to report — distinct from `Err`, since e.g. an invalid/unresolved
 /// classification is still a successfully *produced* record, but must
 /// still exit non-zero, matching rht's own bash exit-code contract.
+#[derive(Debug)]
 struct Outcome {
     message: String,
     exit_code: u8,
@@ -2807,8 +2808,20 @@ mod tests {
     use std::fs;
 
     use super::{
-        CalibrateArgs, ReviewArgs, SuggestTypeArgs, calibrate_cmd, expansion_candidates_cmd,
-        harness_assert_graph_mif_cmd, resolve, review, suggest_type_cmd, topic_from_path,
+        CalibrateArgs, ImportCorpusArgs, RenderArtifactArgs, ReviewArgs, SuggestTypeArgs,
+        WrapSourceArgs, calibrate_cmd, expansion_candidates_cmd, harness_assert_graph_mif_cmd,
+        harness_build_concordance_cmd, harness_build_graph_cmd, harness_build_index_cmd,
+        harness_bump_version_cmd, harness_check_citation_integrity_cmd,
+        harness_check_ontology_registry_cmd, harness_check_relationship_targets_cmd,
+        harness_check_shippable_typing_cmd, harness_check_version_bump_cmd, harness_falsify_cmd,
+        harness_goal_version_cmd, harness_graph_stats_cmd, harness_import_corpus_cmd,
+        harness_pack_toggle_cmd, harness_project_report_cmd, harness_reconcile_session_cmd,
+        harness_render_artifact_cmd, harness_resolve_membership_cmd,
+        harness_site_toggle_plugin_cmd, harness_site_toggle_primary_cmd,
+        harness_synthesize_artifact_cmd, harness_synthesize_corpus_cmd, harness_topic_metadata_cmd,
+        harness_validate_concordance_cmd, harness_wrap_source_cmd, ontology_author_cmd,
+        ontology_fetch_cmd, ontology_lock_check_cmd, ontology_sync_cmd, ontology_sync_registry_cmd,
+        resolve, review, suggest_type_cmd, topic_from_path,
     };
 
     fn write_fixture(dir: &std::path::Path) {
@@ -3416,5 +3429,755 @@ mod tests {
                 .message
                 .contains("FAIL — every node id is a urn:mif:")
         );
+    }
+
+    #[test]
+    fn check_citation_integrity_cmd_passes_a_well_formed_finding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.json");
+        fs::write(
+            &path,
+            r#"{"@id":"urn:mif:f1","citations":[{"url":"https://example.com","citationRole":"supports"}]}"#,
+        )
+        .unwrap();
+
+        let outcome = harness_check_citation_integrity_cmd(&[path], None);
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("citation-integrity: PASS"));
+    }
+
+    #[test]
+    fn check_citation_integrity_cmd_fails_on_no_citations() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("f.json");
+        fs::write(&path, r#"{"@id":"urn:mif:f1","citations":[]}"#).unwrap();
+
+        let outcome = harness_check_citation_integrity_cmd(&[path], None);
+        assert_eq!(outcome.exit_code, 1);
+        assert!(outcome.message.contains("citation-integrity: FAIL"));
+    }
+
+    #[test]
+    fn check_shippable_typing_cmd_passes_a_typed_shippable_finding() {
+        let dir = tempfile::tempdir().unwrap();
+        let reports_dir = dir.path().join("reports/edu");
+        fs::create_dir_all(reports_dir.join("findings")).unwrap();
+        fs::write(
+            reports_dir.join("findings/f1.json"),
+            r#"{"@id":"urn:mif:f1","extensions":{"harness":{"verification":{"verdict":"survived"}}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            reports_dir.join("ontology-map.json"),
+            r#"[{"finding_id":"urn:mif:f1","valid":true,"basis":"declared"}]"#,
+        )
+        .unwrap();
+
+        let outcome = harness_check_shippable_typing_cmd(&reports_dir).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(
+            outcome
+                .message
+                .contains("all shippable findings carry a valid ontology type")
+        );
+    }
+
+    #[test]
+    fn check_shippable_typing_cmd_blocks_an_untyped_shippable_finding() {
+        let dir = tempfile::tempdir().unwrap();
+        let reports_dir = dir.path().join("reports/edu");
+        fs::create_dir_all(reports_dir.join("findings")).unwrap();
+        fs::write(
+            reports_dir.join("findings/f1.json"),
+            r#"{"@id":"urn:mif:f1","extensions":{"harness":{"verification":{"verdict":"survived"}}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            reports_dir.join("ontology-map.json"),
+            r#"[{"finding_id":"urn:mif:f1","valid":true,"basis":"untyped"}]"#,
+        )
+        .unwrap();
+
+        let outcome = harness_check_shippable_typing_cmd(&reports_dir).unwrap();
+        assert_eq!(outcome.exit_code, 1);
+        assert!(outcome.message.contains("synthesis BLOCKED"));
+        assert!(outcome.message.contains("unblock with"));
+    }
+
+    #[test]
+    fn check_shippable_typing_cmd_errors_on_a_missing_ontology_map() {
+        let dir = tempfile::tempdir().unwrap();
+        let reports_dir = dir.path().join("reports/edu");
+        fs::create_dir_all(reports_dir.join("findings")).unwrap();
+
+        assert!(harness_check_shippable_typing_cmd(&reports_dir).is_err());
+    }
+
+    #[test]
+    fn falsify_cmd_writes_a_placeholder_inconclusive_verdict_and_logs_the_run_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let finding = dir.path().join("f.json");
+        fs::write(&finding, r#"{"@id":"urn:mif:f1"}"#).unwrap();
+
+        let outcome = harness_falsify_cmd(&finding, None).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("\"inconclusive\""));
+    }
+
+    #[test]
+    fn falsify_cmd_errors_on_a_missing_finding_file() {
+        let error =
+            harness_falsify_cmd(std::path::Path::new("/no/such/file.json"), None).unwrap_err();
+        assert!(matches!(error, mif_rh::MifRhError::Io { .. }));
+    }
+
+    fn write_concordance_fixture(
+        dir: &std::path::Path,
+    ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        fs::write(
+            dir.join("core.yaml"),
+            "ontology:\n  id: mif-generic\n  version: \"1.0.0\"\n",
+        )
+        .unwrap();
+        let catalog = dir.join("cat.json");
+        fs::write(
+            &catalog,
+            r#"{"ontologies":[{"id":"mif-generic","version":"1.0.0","source":"core.yaml","core":true}]}"#,
+        )
+        .unwrap();
+        let config = dir.join("cfg.json");
+        fs::write(&config, r#"{"topics":[]}"#).unwrap();
+        (catalog, config, dir.to_path_buf())
+    }
+
+    #[test]
+    fn validate_concordance_cmd_passes_a_conformant_graph() {
+        let dir = tempfile::tempdir().unwrap();
+        let (catalog, config, root) = write_concordance_fixture(dir.path());
+        let concordance = dir.path().join("concordance.json");
+        fs::write(
+            &concordance,
+            r#"{"nodes":[{"id":"n1","entityType":"Concept","topics":[]}],"edges":[]}"#,
+        )
+        .unwrap();
+
+        let outcome =
+            harness_validate_concordance_cmd(&concordance, &config, &catalog, &root).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("conformant"));
+    }
+
+    #[test]
+    fn validate_concordance_cmd_flags_an_undeclared_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let (catalog, config, root) = write_concordance_fixture(dir.path());
+        let concordance = dir.path().join("concordance.json");
+        fs::write(
+            &concordance,
+            r#"{"nodes":[{"id":"n1","entityType":"made-up-type","topics":[]}],"edges":[]}"#,
+        )
+        .unwrap();
+
+        let outcome =
+            harness_validate_concordance_cmd(&concordance, &config, &catalog, &root).unwrap();
+        assert_eq!(outcome.exit_code, 1);
+        assert!(outcome.message.contains("conformance violation"));
+        assert!(outcome.message.contains("/ontology-review"));
+    }
+
+    #[test]
+    fn validate_concordance_cmd_errors_on_a_missing_concordance_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (catalog, config, root) = write_concordance_fixture(dir.path());
+
+        let error = harness_validate_concordance_cmd(
+            &dir.path().join("missing.json"),
+            &config,
+            &catalog,
+            &root,
+        )
+        .unwrap_err();
+        assert!(matches!(error, mif_rh::MifRhError::Io { .. }));
+    }
+
+    #[test]
+    fn check_ontology_registry_cmd_passes_an_empty_registry() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let outcome = harness_check_ontology_registry_cmd(dir.path());
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("0 type(s)"));
+        assert!(
+            outcome
+                .message
+                .contains("relationship-endpoint orphans: none")
+        );
+    }
+
+    #[test]
+    fn check_ontology_registry_cmd_flags_an_orphaned_relationship_endpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("packs/ontologies/x")).unwrap();
+        fs::write(
+            dir.path().join("packs/ontologies/x/x.ontology.yaml"),
+            "ontology:\n  id: x\n  version: \"0.1.0\"\nentity_types:\n  - name: a\nrelationships:\n  rel:\n    from: [a]\n    to: [does-not-exist]\n",
+        )
+        .unwrap();
+
+        let outcome = harness_check_ontology_registry_cmd(dir.path());
+        assert_eq!(outcome.exit_code, 1);
+        assert!(
+            outcome
+                .message
+                .contains("relationship-endpoint orphans: does-not-exist")
+        );
+    }
+
+    #[test]
+    fn check_relationship_targets_cmd_passes_when_every_target_resolves() {
+        let dir = tempfile::tempdir().unwrap();
+        let reports_dir = dir.path().join("reports");
+        fs::create_dir_all(reports_dir.join("t1/findings")).unwrap();
+        fs::write(
+            reports_dir.join("t1/findings/a.json"),
+            r#"{"@id":"urn:mif:t1:a","relationships":[]}"#,
+        )
+        .unwrap();
+
+        let outcome = harness_check_relationship_targets_cmd(&reports_dir).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("check-relationship-targets: ok"));
+    }
+
+    #[test]
+    fn check_relationship_targets_cmd_flags_a_dangling_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let reports_dir = dir.path().join("reports");
+        fs::create_dir_all(reports_dir.join("t1/findings")).unwrap();
+        fs::write(
+            reports_dir.join("t1/findings/a.json"),
+            r#"{"@id":"urn:mif:t1:a","relationships":[{"type":"relates-to","target":"urn:mif:t1:missing"}]}"#,
+        )
+        .unwrap();
+
+        let outcome = harness_check_relationship_targets_cmd(&reports_dir).unwrap();
+        assert_eq!(outcome.exit_code, 1);
+        assert!(outcome.message.contains("ORPHAN"));
+    }
+
+    #[test]
+    fn check_relationship_targets_cmd_errors_on_a_malformed_finding() {
+        let dir = tempfile::tempdir().unwrap();
+        let reports_dir = dir.path().join("reports");
+        fs::create_dir_all(reports_dir.join("t1/findings")).unwrap();
+        fs::write(reports_dir.join("t1/findings/bad.json"), "{invalid json").unwrap();
+
+        assert!(harness_check_relationship_targets_cmd(&reports_dir).is_err());
+    }
+
+    #[test]
+    fn goal_version_cmd_returns_a_version_id_for_a_wellformed_goal() {
+        let dir = tempfile::tempdir().unwrap();
+        let goal_path = dir.path().join("goal.json");
+        fs::write(
+            &goal_path,
+            r#"{"objective":"o","dimensions":["landscape"]}"#,
+        )
+        .unwrap();
+
+        let outcome = harness_goal_version_cmd(&goal_path).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(!outcome.message.is_empty());
+    }
+
+    #[test]
+    fn goal_version_cmd_errors_on_a_missing_goal_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(harness_goal_version_cmd(&dir.path().join("missing.json")).is_err());
+    }
+
+    fn write_release_fixture(root: &std::path::Path) {
+        fs::write(
+            root.join("harness.config.json"),
+            r#"{"version": "0.4.0", "topics": []}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(root.join(".claude-plugin")).unwrap();
+        fs::write(
+            root.join(".claude-plugin/marketplace.json"),
+            r#"{"name": "research-harness", "metadata": {"version": "0.4.0"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("CHANGELOG.md"),
+            "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-01-01\n\nInitial.\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn bump_version_cmd_bumps_the_release_pointer() {
+        let dir = tempfile::tempdir().unwrap();
+        write_release_fixture(dir.path());
+
+        let outcome =
+            harness_bump_version_cmd("patch", &[], Some("2026-02-01"), false, Some(dir.path()))
+                .unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("0.4.0 -> 0.4.1"));
+    }
+
+    #[test]
+    fn bump_version_cmd_check_mode_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        write_release_fixture(dir.path());
+
+        let outcome =
+            harness_bump_version_cmd("patch", &[], Some("2026-02-01"), true, Some(dir.path()))
+                .unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("no files written"));
+    }
+
+    fn git(root: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn check_version_bump_cmd_passes_with_no_changes_and_no_prior_release() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-q", "-b", "main"]);
+        git(dir.path(), &["config", "user.email", "test@example.com"]);
+        git(dir.path(), &["config", "user.name", "Test"]);
+        write_release_fixture(dir.path());
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "base"]);
+
+        let outcome = harness_check_version_bump_cmd(Some("HEAD"), Some(dir.path())).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("check-version-bump:"));
+    }
+
+    #[test]
+    fn project_report_cmd_projects_a_wellformed_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let schema = dir.path().join("schema.json");
+        fs::write(&schema, r#"{"type":"object"}"#).unwrap();
+        let report = dir.path().join("report.md");
+        fs::write(&report, "---\nid: r1\n---\n\nBody text.\n").unwrap();
+
+        let outcome = harness_project_report_cmd(&report, &schema, &[], None).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(
+            outcome
+                .message
+                .contains("projects to a valid MIF L3 finding")
+        );
+    }
+
+    #[test]
+    fn site_toggle_primary_cmd_writes_the_primary_surface() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("harness.config.json");
+        fs::write(&config, r#"{"version": "1.0.0"}"#).unwrap();
+
+        let outcome = harness_site_toggle_primary_cmd("docs", Some(&config)).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("primarySurface -> docs"));
+    }
+
+    #[test]
+    fn site_toggle_plugin_cmd_flips_the_named_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("harness.config.json");
+        fs::write(&config, r#"{"version": "1.0.0"}"#).unwrap();
+
+        let outcome = harness_site_toggle_plugin_cmd("llmsTxt", "on", Some(&config)).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("plugin llmsTxt -> enabled=true"));
+    }
+
+    #[test]
+    fn site_toggle_plugin_cmd_rejects_a_non_on_off_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("harness.config.json");
+        fs::write(&config, r#"{"version": "1.0.0"}"#).unwrap();
+
+        assert!(harness_site_toggle_plugin_cmd("llmsTxt", "sideways", Some(&config)).is_err());
+    }
+
+    #[test]
+    fn pack_toggle_cmd_flips_the_named_packs_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("harness.config.json");
+        fs::write(
+            &config,
+            r#"{"version": "1.0.0", "packs": [{"name": "pdf", "enabled": false}]}"#,
+        )
+        .unwrap();
+
+        let outcome = harness_pack_toggle_cmd("pdf", "on", Some(&config)).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("pdf -> enabled=true"));
+    }
+
+    #[test]
+    fn wrap_source_cmd_writes_a_source_envelope() {
+        let dir = tempfile::tempdir().unwrap();
+        let schema = dir.path().join("schema.json");
+        fs::write(&schema, r#"{"type":"object"}"#).unwrap();
+        let out = dir.path().join("out/source.json");
+
+        let outcome = harness_wrap_source_cmd(&WrapSourceArgs {
+            url: "https://example.com/a",
+            content_type: "article",
+            namespace: "edu",
+            slug: "a",
+            out: &out,
+            title: Some("Title"),
+            content_file: None,
+            content: Some("some content"),
+            source_type: None,
+            schema: &schema,
+            refs: &[],
+        })
+        .unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(out.exists());
+        assert!(outcome.message.contains("wrap-source: wrote"));
+    }
+
+    #[test]
+    fn build_graph_cmd_writes_a_graph_from_findings() {
+        let dir = tempfile::tempdir().unwrap();
+        let findings_dir = dir.path().join("reports/t1/findings");
+        fs::create_dir_all(&findings_dir).unwrap();
+        fs::write(
+            findings_dir.join("f1.json"),
+            r#"{"@id":"urn:mif:f1","entity":{"name":"E"}}"#,
+        )
+        .unwrap();
+        let out = dir.path().join("graph.json");
+
+        let outcome = harness_build_graph_cmd(&findings_dir, Some(&out)).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(out.exists());
+        assert!(outcome.message.contains("build-graph: wrote"));
+    }
+
+    #[test]
+    fn build_index_cmd_writes_an_index_from_findings() {
+        let dir = tempfile::tempdir().unwrap();
+        let findings_dir = dir.path().join("reports/t1/findings");
+        fs::create_dir_all(&findings_dir).unwrap();
+        fs::write(
+            findings_dir.join("f1.json"),
+            r#"{"@id":"urn:mif:f1","entity":{"name":"E"}}"#,
+        )
+        .unwrap();
+        let out = dir.path().join("index.json");
+
+        let outcome = harness_build_index_cmd(&findings_dir, Some(&out)).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(out.exists());
+        assert!(outcome.message.contains("build-index: wrote"));
+    }
+
+    #[test]
+    fn resolve_membership_cmd_reports_members_stale_and_excluded() {
+        let dir = tempfile::tempdir().unwrap();
+        let topic_dir = dir.path().join("reports/t1");
+        fs::create_dir_all(topic_dir.join("findings")).unwrap();
+        fs::write(
+            topic_dir.join("goal.json"),
+            r#"{"dimensions": ["landscape"]}"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("harness.config.json"),
+            r#"{"freshness": {"default_days": 30}}"#,
+        )
+        .unwrap();
+        fs::write(
+            topic_dir.join("findings/f1.json"),
+            r#"{"@id": "urn:mif:f1", "extensions": {"harness": {"dimension": "landscape",
+                "verification": {"verdict": "survived", "attempted_at": "2026-05-30"}}}}"#,
+        )
+        .unwrap();
+
+        let outcome = harness_resolve_membership_cmd("t1", Some("gv-1"), Some(dir.path())).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("members: 1"));
+    }
+
+    #[test]
+    fn graph_stats_cmd_counts_nodes_and_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph_path = dir.path().join("knowledge-graph.json");
+        fs::write(
+            &graph_path,
+            r#"{"nodes":[{"id":"a"},{"id":"b"}],"edges":[{"source":"a","target":"b"}]}"#,
+        )
+        .unwrap();
+
+        let outcome = harness_graph_stats_cmd(&graph_path).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert_eq!(outcome.message, "2 1");
+    }
+
+    #[test]
+    fn render_artifact_cmd_writes_a_rendered_channel_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let artifact_path = dir.path().join("artifact.json");
+        fs::write(
+            &artifact_path,
+            r#"{"title":"T","sections":[],"sources":[]}"#,
+        )
+        .unwrap();
+        let out = dir.path().join("out.md");
+
+        let outcome = harness_render_artifact_cmd(&RenderArtifactArgs {
+            artifact: &artifact_path,
+            channel: "blog",
+            out: &out,
+            slug: "t",
+            slugpath: "reports/t1/t.md",
+            created: "2026-06-01T00:00:00Z",
+            version: 1,
+            verification: None,
+        })
+        .unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(out.exists());
+        assert!(outcome.message.contains("render: wrote"));
+    }
+
+    #[test]
+    fn synthesize_artifact_cmd_writes_an_artifact_from_findings() {
+        let dir = tempfile::tempdir().unwrap();
+        let findings_dir = dir.path().join("reports/t1/findings");
+        fs::create_dir_all(&findings_dir).unwrap();
+        fs::write(
+            findings_dir.join("f1.json"),
+            r#"{"@id":"urn:mif:f1","content":"insight text",
+                "citations":[{"url":"https://example.com","title":"Example"}]}"#,
+        )
+        .unwrap();
+        let out = dir.path().join("artifact.json");
+
+        let outcome =
+            harness_synthesize_artifact_cmd(&findings_dir, Some("general"), Some(&out)).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(out.exists());
+        assert!(outcome.message.contains("synthesize: wrote"));
+    }
+
+    #[test]
+    fn import_corpus_cmd_imports_findings_into_a_topic() {
+        let dir = tempfile::tempdir().unwrap();
+        let schema = dir.path().join("schema.json");
+        fs::write(&schema, r#"{"type":"object"}"#).unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("f1.json"),
+            r#"{"@id":"urn:mif:f1","provenance":{"sourceType":"web"}}"#,
+        )
+        .unwrap();
+        let dest = dir.path().join("reports/t1");
+
+        let outcome = harness_import_corpus_cmd(&ImportCorpusArgs {
+            src_findings_dir: &src,
+            dest_dir: &dest,
+            topic: "t1",
+            schema: &schema,
+            refs: &[],
+            config: None,
+        })
+        .unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("import: imported"));
+    }
+
+    #[test]
+    fn build_concordance_cmd_writes_a_concordance_across_topics() {
+        let dir = tempfile::tempdir().unwrap();
+        let reports_dir = dir.path().join("reports");
+        fs::create_dir_all(reports_dir.join("t1/findings")).unwrap();
+        fs::write(
+            reports_dir.join("t1/findings/f1.json"),
+            r#"{"@id":"urn:mif:f1","entity":{"name":"E","entity_type":"concept"}}"#,
+        )
+        .unwrap();
+        let out = dir.path().join("concordance.json");
+
+        let outcome = harness_build_concordance_cmd(&reports_dir, Some(&out)).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(out.exists());
+        assert!(outcome.message.contains("build-concordance: wrote"));
+    }
+
+    #[test]
+    fn reconcile_session_cmd_reports_nothing_to_do_on_a_complete_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let schema = dir.path().join("schema.json");
+        fs::write(&schema, r#"{"type":"object"}"#).unwrap();
+        let topic_dir = dir.path().join("reports/t1");
+        fs::create_dir_all(topic_dir.join("findings")).unwrap();
+        let sample = dir.path().join("sample.json");
+        fs::write(&sample, r#"{"@id":"urn:mif:sample"}"#).unwrap();
+
+        let outcome = harness_reconcile_session_cmd(&topic_dir, &schema, &[], &sample).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+    }
+
+    #[test]
+    fn topic_metadata_cmd_prints_a_shell_script_for_a_registered_topic() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("harness.config.json");
+        fs::write(
+            &config,
+            r#"{"topics": [{"id": "t1", "title": "Topic One", "status": "active"}],
+                "dimensions": [{"id": "landscape", "description": "Market landscape"}]}"#,
+        )
+        .unwrap();
+        let findings_dir = dir.path().join("findings");
+        fs::create_dir_all(&findings_dir).unwrap();
+        let goal_path = dir.path().join("goal.json");
+
+        let outcome = harness_topic_metadata_cmd("t1", &config, &findings_dir, &goal_path).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(!outcome.message.is_empty());
+    }
+
+    #[test]
+    fn topic_metadata_cmd_errors_on_an_unregistered_topic() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("harness.config.json");
+        fs::write(&config, r#"{"topics": []}"#).unwrap();
+        let findings_dir = dir.path().join("findings");
+        fs::create_dir_all(&findings_dir).unwrap();
+
+        assert!(
+            harness_topic_metadata_cmd(
+                "nope",
+                &config,
+                &findings_dir,
+                &dir.path().join("goal.json")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn synthesize_corpus_cmd_writes_a_map_and_markdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let concordance = dir.path().join("concordance.json");
+        fs::write(
+            &concordance,
+            r#"{"nodes":[{"id":"n1","entityType":"Concept","topics":["t1"],"name":"N1"}],"edges":[]}"#,
+        )
+        .unwrap();
+        let map_out = dir.path().join("map.json");
+        let markdown_out = dir.path().join("out.md");
+
+        let outcome =
+            harness_synthesize_corpus_cmd(&concordance, &map_out, &markdown_out, None).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(map_out.exists());
+        assert!(markdown_out.exists());
+        assert!(outcome.message.contains("synthesize-corpus: wrote"));
+    }
+
+    fn write_ontology_root(root: &std::path::Path) {
+        fs::create_dir_all(root.join(".claude")).unwrap();
+        fs::write(
+            root.join("harness.config.json"),
+            r#"{"topics":[{"id":"edu","ontologies":["edu-fixture"]}],"ontologies":[]}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join(".claude/enabled-packs.json"),
+            r#"{"ontologies":[]}"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn ontology_fetch_cmd_reports_nothing_to_fetch_with_no_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ontology_root(dir.path());
+
+        let outcome = ontology_fetch_cmd(&[], false, Some(dir.path()), None, None).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("nothing to fetch"));
+    }
+
+    #[test]
+    fn ontology_sync_cmd_catalogs_the_core_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ontology_root(dir.path());
+        let config = dir.path().join("harness.config.json");
+        let catalog = dir.path().join(".claude/enabled-packs.json");
+
+        let outcome = ontology_sync_cmd(Some(dir.path()), Some(&config), Some(&catalog)).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("ontology sync: cataloged"));
+    }
+
+    #[test]
+    fn ontology_lock_check_cmd_passes_with_no_lock_file() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ontology_root(dir.path());
+
+        let outcome = ontology_lock_check_cmd(Some(dir.path()), None).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+    }
+
+    #[test]
+    fn ontology_sync_registry_cmd_reports_no_new_ontologies_against_a_local_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ontology_root(dir.path());
+        let config = dir.path().join("harness.config.json");
+        let registry = dir.path().join("registry");
+        fs::create_dir_all(&registry).unwrap();
+        fs::write(registry.join("index.json"), r#"{"ontologies":{}}"#).unwrap();
+
+        let outcome = ontology_sync_registry_cmd(
+            Some(dir.path()),
+            Some(&config),
+            None,
+            Some(&registry.display().to_string()),
+        )
+        .unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("no new ontologies"));
+    }
+
+    #[test]
+    fn ontology_author_cmd_drafts_from_a_topic_map() {
+        let dir = tempfile::tempdir().unwrap();
+        let reports_dir = dir.path().join("reports");
+        fs::create_dir_all(reports_dir.join("t1")).unwrap();
+        fs::write(
+            reports_dir.join("t1/ontology-map.json"),
+            r#"[{"finding_id":"urn:mif:f1","valid":false,"basis":"untyped",
+                "entity_type":"widget","resolved_ontology":"mif-generic@1.0.0"}]"#,
+        )
+        .unwrap();
+        let out = dir.path().join("new-id.ontology.yaml");
+
+        let outcome =
+            ontology_author_cmd("new-id", Some("t1"), None, Some(&out), Some(&reports_dir))
+                .unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(out.exists());
+        assert!(outcome.message.contains("ontology author: drafted"));
     }
 }
