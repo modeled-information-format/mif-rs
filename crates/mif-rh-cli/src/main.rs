@@ -620,6 +620,12 @@ enum HarnessCommand {
         #[arg(long)]
         preserved_insights: Option<String>,
     },
+    /// Prove a knowledge graph is MIF-derived (urn:mif: ids, typed
+    /// relationships, referential integrity) rather than tag co-occurrence.
+    AssertGraphMif {
+        /// Path to the `knowledge-graph.json` to check.
+        graph: PathBuf,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -1123,7 +1129,32 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
             markdown_out,
             preserved_insights.as_deref(),
         ),
+        HarnessCommand::AssertGraphMif { graph } => harness_assert_graph_mif_cmd(graph),
     }
+}
+
+fn harness_assert_graph_mif_cmd(graph_path: &Path) -> Result<Outcome, CliError> {
+    let assertion = mif_rh::assert_graph_mif_file(graph_path)?;
+    let mut lines: Vec<String> = assertion
+        .checks
+        .iter()
+        .map(|c| {
+            if c.passed {
+                format!("  graph: ok — {}", c.message)
+            } else {
+                format!("  graph: FAIL — {}", c.message)
+            }
+        })
+        .collect();
+    lines.push(if assertion.passed {
+        "assert-graph: PASS".to_string()
+    } else {
+        "assert-graph: FAIL".to_string()
+    });
+    Ok(Outcome {
+        message: lines.join("\n"),
+        exit_code: u8::from(!assertion.passed),
+    })
 }
 
 fn harness_goal_version_cmd(goal_path: &Path) -> Result<Outcome, CliError> {
@@ -2496,7 +2527,7 @@ mod tests {
 
     use super::{
         CalibrateArgs, ReviewArgs, SuggestTypeArgs, calibrate_cmd, expansion_candidates_cmd,
-        resolve, review, suggest_type_cmd, topic_from_path,
+        harness_assert_graph_mif_cmd, resolve, review, suggest_type_cmd, topic_from_path,
     };
 
     fn write_fixture(dir: &std::path::Path) {
@@ -3066,6 +3097,43 @@ mod tests {
         assert_eq!(
             topic_from_path(std::path::Path::new("/some/other/path.json")),
             None
+        );
+    }
+
+    #[test]
+    fn assert_graph_mif_cmd_passes_a_well_formed_graph() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph_path = dir.path().join("knowledge-graph.json");
+        fs::write(
+            &graph_path,
+            r#"{"nodes":[{"id":"urn:mif:f1","kind":"concept"}],
+                "edges":[{"source":"urn:mif:f1","target":"urn:mif:f1","via":"relationship"}]}"#,
+        )
+        .unwrap();
+
+        let outcome = harness_assert_graph_mif_cmd(&graph_path).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("assert-graph: PASS"));
+    }
+
+    #[test]
+    fn assert_graph_mif_cmd_fails_on_a_tag_derived_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph_path = dir.path().join("knowledge-graph.json");
+        fs::write(
+            &graph_path,
+            r#"{"nodes":[{"id":"some-tag","kind":"concept"}],
+                "edges":[{"source":"some-tag","target":"some-tag","via":"relationship"}]}"#,
+        )
+        .unwrap();
+
+        let outcome = harness_assert_graph_mif_cmd(&graph_path).unwrap();
+        assert_eq!(outcome.exit_code, 1);
+        assert!(outcome.message.contains("assert-graph: FAIL"));
+        assert!(
+            outcome
+                .message
+                .contains("FAIL — every node id is a urn:mif:")
         );
     }
 }
