@@ -4,11 +4,11 @@
 //! YAML frontmatter from its body, folds the body in as `content` (unless
 //! the frontmatter already sets it), and validates the resulting JSON
 //! against an arbitrary caller-supplied schema (with `$ref` dependencies)
-//! at runtime. Citation-integrity (`scripts/check-citation-integrity.sh`)
-//! is a separate, not-yet-migrated concern (Story #287) — this function
-//! covers only the projection + schema-validation half of the original
-//! script; the bash wrapper chains the citation-integrity check
-//! afterward.
+//! at runtime. Citation-integrity (`scripts/check-citation-integrity.sh`,
+//! [`crate::harness_citation_integrity`], Story #287) is a separate
+//! concern — this function covers only the projection + schema-validation
+//! half of the original script; the bash wrapper chains the
+//! citation-integrity check afterward.
 
 use std::path::{Path, PathBuf};
 

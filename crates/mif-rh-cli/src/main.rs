@@ -626,6 +626,18 @@ enum HarnessCommand {
         /// Path to the `knowledge-graph.json` to check.
         graph: PathBuf,
     },
+    /// Citation-integrity gate: every finding has >=1 traceable citation
+    /// with a role, no falsified finding ships, and no citation URL is
+    /// listed dead.
+    CheckCitationIntegrity {
+        /// One or more findings files (a single finding object or an array).
+        #[arg(required = true)]
+        findings: Vec<PathBuf>,
+        /// `harness.config.json`, read for the `features.internalCitations`
+        /// opt-in (defaults to strict http(s)-only when omitted/unreadable).
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -1130,6 +1142,9 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
             preserved_insights.as_deref(),
         ),
         HarnessCommand::AssertGraphMif { graph } => harness_assert_graph_mif_cmd(graph),
+        HarnessCommand::CheckCitationIntegrity { findings, config } => Ok(
+            harness_check_citation_integrity_cmd(findings, config.as_deref()),
+        ),
     }
 }
 
@@ -1155,6 +1170,26 @@ fn harness_assert_graph_mif_cmd(graph_path: &Path) -> Result<Outcome, CliError> 
         message: lines.join("\n"),
         exit_code: u8::from(!assertion.passed),
     })
+}
+
+fn harness_check_citation_integrity_cmd(findings: &[PathBuf], config: Option<&Path>) -> Outcome {
+    let report = mif_rh::check_citation_integrity(findings, config);
+    let mut lines = report.violations.clone();
+    if report.ok() {
+        lines.push(format!(
+            "citation-integrity: PASS ({} file(s))",
+            report.files_checked
+        ));
+    } else {
+        lines.push(format!(
+            "citation-integrity: FAIL ({} violation(s))",
+            report.violations.len()
+        ));
+    }
+    Outcome {
+        message: lines.join("\n"),
+        exit_code: u8::from(!report.ok()),
+    }
 }
 
 fn harness_goal_version_cmd(goal_path: &Path) -> Result<Outcome, CliError> {
