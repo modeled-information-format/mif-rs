@@ -160,6 +160,13 @@ pub enum MifRhError {
         /// The manifest path checked.
         path: String,
     },
+    /// A findings directory has no `*.json` files to build a graph/index
+    /// from.
+    #[error("no finding JSON in {path}")]
+    NoFindingsFound {
+        /// The empty findings directory.
+        path: String,
+    },
     /// Building a dynamic `jsonschema` validator for a resolved entity
     /// type's `schema` field failed. Indicates a malformed ontology pack,
     /// not a bug in the finding being validated.
@@ -527,6 +534,13 @@ impl MifRhError {
                 slug: "pack-not-declared",
                 version: "v1",
                 title: "Pack is not declared in the harness manifest",
+                status: 404,
+                exit_code: 2,
+            },
+            Self::NoFindingsFound { .. } => ProblemMeta {
+                slug: "no-findings-found",
+                version: "v1",
+                title: "Findings directory has no finding JSON",
                 status: 404,
                 exit_code: 2,
             },
@@ -1106,6 +1120,17 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 Applicability::MaybeIncorrect,
             ),
         ),
+        MifRhError::NoFindingsFound { .. } => (
+            SuggestedFix::new(
+                "Point at a directory containing finding JSON files, then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Point at a non-empty findings directory",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
         MifRhError::FindingIo { .. }
         | MifRhError::Io { .. }
         | MifRhError::LockIo { .. }
@@ -1326,6 +1351,9 @@ mod tests {
             MifRhError::PackNotDeclared {
                 name: "pdf".to_string(),
                 path: "harness.config.json".to_string(),
+            },
+            MifRhError::NoFindingsFound {
+                path: "reports/x/findings".to_string(),
             },
         ]
     }

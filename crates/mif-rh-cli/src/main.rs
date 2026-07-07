@@ -474,6 +474,39 @@ enum HarnessCommand {
         #[arg(long = "ref")]
         refs: Vec<PathBuf>,
     },
+    /// Build the MIF-native knowledge graph from a findings directory.
+    BuildGraph {
+        /// Directory of finding JSON files.
+        findings_dir: PathBuf,
+        /// Write the graph here. Defaults to `<findings-dir>/../knowledge-graph.json`.
+        out: Option<PathBuf>,
+    },
+    /// Build the flat research index from a findings directory, folding in
+    /// the goal-version membership mirror.
+    BuildIndex {
+        /// Directory of finding JSON files.
+        findings_dir: PathBuf,
+        /// Write the index here. Defaults to `<findings-dir>/../research-index.json`.
+        out: Option<PathBuf>,
+    },
+    /// Resolve a goal version's deterministic scope over a topic's
+    /// findings, writing the authoritative members file.
+    ResolveMembership {
+        /// The topic name (`reports/<topic>/`).
+        topic: String,
+        /// The goal version. Defaults to the content hash of
+        /// `reports/<topic>/goal.json`.
+        version: Option<String>,
+        /// Repo root. Defaults to the current directory.
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Print a knowledge-graph JSON file's node/edge counts as `NODES
+    /// EDGES` (for build-graph-viz.sh's HTML header).
+    GraphStats {
+        /// Path to a `knowledge-graph.json` file.
+        graph: PathBuf,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -897,6 +930,18 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
             schema,
             refs,
         }),
+        HarnessCommand::BuildGraph { findings_dir, out } => {
+            harness_build_graph_cmd(findings_dir, out.as_deref())
+        },
+        HarnessCommand::BuildIndex { findings_dir, out } => {
+            harness_build_index_cmd(findings_dir, out.as_deref())
+        },
+        HarnessCommand::ResolveMembership {
+            topic,
+            version,
+            root,
+        } => harness_resolve_membership_cmd(topic, version.as_deref(), root.as_deref()),
+        HarnessCommand::GraphStats { graph } => harness_graph_stats_cmd(graph),
     }
 }
 
@@ -1150,6 +1195,139 @@ fn harness_wrap_source_cmd(args: &WrapSourceArgs<'_>) -> Result<Outcome, CliErro
             args.slug,
             args.content_type
         ),
+        exit_code: 0,
+    })
+}
+
+fn harness_build_graph_cmd(findings_dir: &Path, out: Option<&Path>) -> Result<Outcome, CliError> {
+    let out_path = out.map_or_else(
+        || findings_dir.join("../knowledge-graph.json"),
+        Path::to_path_buf,
+    );
+    let graph = mif_rh::build_graph(findings_dir)?;
+    let node_count = graph["nodes"].as_array().map_or(0, Vec::len);
+    let edge_count = graph["edges"].as_array().map_or(0, Vec::len);
+    let text = serde_json::to_string_pretty(&graph).map_err(|source| {
+        mif_rh::MifRhError::JsonSerialize {
+            path: out_path.display().to_string(),
+            source,
+        }
+    })?;
+    std::fs::write(&out_path, format!("{text}\n")).map_err(|source| mif_rh::MifRhError::Io {
+        path: out_path.display().to_string(),
+        source,
+    })?;
+    Ok(Outcome {
+        message: format!(
+            "build-graph: wrote {} ({node_count} nodes, {edge_count} edges)",
+            out_path.display()
+        ),
+        exit_code: 0,
+    })
+}
+
+fn harness_build_index_cmd(findings_dir: &Path, out: Option<&Path>) -> Result<Outcome, CliError> {
+    let out_path = out.map_or_else(
+        || findings_dir.join("../research-index.json"),
+        Path::to_path_buf,
+    );
+    let index = mif_rh::build_index(findings_dir)?;
+    let count = index["count"].as_u64().unwrap_or(0);
+    let text = serde_json::to_string_pretty(&index).map_err(|source| {
+        mif_rh::MifRhError::JsonSerialize {
+            path: out_path.display().to_string(),
+            source,
+        }
+    })?;
+    std::fs::write(&out_path, format!("{text}\n")).map_err(|source| mif_rh::MifRhError::Io {
+        path: out_path.display().to_string(),
+        source,
+    })?;
+    Ok(Outcome {
+        message: format!(
+            "build-index: wrote {} ({count} findings)",
+            out_path.display()
+        ),
+        exit_code: 0,
+    })
+}
+
+fn harness_resolve_membership_cmd(
+    topic: &str,
+    version: Option<&str>,
+    root: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let root = effective_path(root, ".");
+    let topic_dir = root.join("reports").join(topic);
+    let config_path = root.join(DEFAULT_CONFIG);
+
+    let version = if let Some(v) = version {
+        v.to_string()
+    } else {
+        let goal_path = topic_dir.join("goal.json");
+        let contents =
+            std::fs::read_to_string(&goal_path).map_err(|source| mif_rh::MifRhError::Io {
+                path: goal_path.display().to_string(),
+                source,
+            })?;
+        let goal: serde_json::Value =
+            serde_json::from_str(&contents).map_err(|source| mif_rh::MifRhError::Json {
+                path: goal_path.display().to_string(),
+                source,
+            })?;
+        mif_rh::goal_version_id(&goal)
+    };
+    let generated = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let report = mif_rh::resolve_membership(
+        &topic_dir,
+        &config_path,
+        &version,
+        &generated,
+        chrono::Utc::now(),
+    )?;
+
+    let members = report.members_file["members"]
+        .as_array()
+        .map_or(0, Vec::len);
+    let stale = report.members_file["stale"].as_array().map_or(0, Vec::len);
+    let excluded = report.members_file["excluded"]
+        .as_array()
+        .map_or(0, Vec::len);
+    let gaps: Vec<&str> = report.members_file["gap_dimensions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str())
+        .collect();
+    let gaps_display = if gaps.is_empty() {
+        "none".to_string()
+    } else {
+        gaps.join(", ")
+    };
+
+    Ok(Outcome {
+        message: format!(
+            "wrote {}\n  members: {members} | stale: {stale} | excluded: {excluded} | gap_dimensions: {gaps_display}",
+            report.out_path.display()
+        ),
+        exit_code: 0,
+    })
+}
+
+fn harness_graph_stats_cmd(graph: &Path) -> Result<Outcome, CliError> {
+    let contents = std::fs::read_to_string(graph).map_err(|source| mif_rh::MifRhError::Io {
+        path: graph.display().to_string(),
+        source,
+    })?;
+    let value: serde_json::Value =
+        serde_json::from_str(&contents).map_err(|source| mif_rh::MifRhError::Json {
+            path: graph.display().to_string(),
+            source,
+        })?;
+    let nodes = value["nodes"].as_array().map_or(0, Vec::len);
+    let edges = value["edges"].as_array().map_or(0, Vec::len);
+    Ok(Outcome {
+        message: format!("{nodes} {edges}"),
         exit_code: 0,
     })
 }

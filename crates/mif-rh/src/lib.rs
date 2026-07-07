@@ -36,6 +36,9 @@ pub mod catalog;
 pub mod config;
 mod error;
 pub mod finding;
+pub mod harness_graph;
+pub mod harness_index;
+pub mod harness_membership;
 pub mod harness_project;
 pub mod harness_release;
 pub mod harness_toggle;
@@ -58,6 +61,9 @@ pub use catalog::Catalog;
 pub use config::HarnessConfig;
 pub use error::MifRhError;
 pub use finding::Finding;
+pub use harness_graph::build_graph;
+pub use harness_index::build_index;
+pub use harness_membership::{MembershipReport, resolve_membership};
 pub use harness_project::project_report;
 pub use harness_release::{
     BumpOptions, BumpReport, VersionGateFailure, VersionGateReport, bump_version,
