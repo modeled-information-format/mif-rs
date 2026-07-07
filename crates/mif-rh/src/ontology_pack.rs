@@ -58,6 +58,8 @@ struct OntologyBlock {
     version: String,
     #[serde(default)]
     extends: Vec<String>,
+    #[serde(default)]
+    description: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,6 +81,8 @@ pub struct OntologyPack {
     pub version: String,
     /// Ontology ids this ontology directly extends.
     pub extends: Vec<String>,
+    /// The ontology's human-readable description, if declared.
+    pub description: String,
     /// Entity types this ontology declares.
     pub entity_types: Vec<EntityType>,
     /// Discovery-fallback configuration.
@@ -101,6 +105,7 @@ pub fn parse_pack(yaml: &str, path: &str) -> Result<OntologyPack, MifRhError> {
         id: file.ontology.id,
         version: file.ontology.version,
         extends: file.ontology.extends,
+        description: file.ontology.description,
         entity_types: file.entity_types,
         discovery: file.discovery,
     })

@@ -30,6 +30,7 @@
 //! never-authoritative: it never writes to `ontology-map.json`, and
 //! `resolve`/`review` never call into it.
 
+pub mod author;
 pub mod calibrate;
 pub mod catalog;
 pub mod config;
@@ -42,7 +43,9 @@ pub mod queue;
 pub mod resolve;
 pub mod review;
 pub mod suggest;
+pub mod vendor;
 
+pub use author::{DraftReport, draft_from_clusters, draft_from_topic};
 pub use calibrate::{
     CONFUSION_REPRESENTATIVES, CalibrateOptions, CalibrationSample, ConfusionPair, ConfusionReport,
     collect_topic_samples, confusions, packs_carry_negatives, subsample, sweep,
@@ -64,6 +67,11 @@ pub use review::{
     write_followup,
 };
 pub use suggest::{TypeSuggestion, suggest_type};
+pub use vendor::{
+    CatalogSyncReport, DriftEntry, FetchReport, LockCheckReport, LockEntry, LockFile,
+    RegistrySyncReport, VendoredOntology, fetch, lock_check, resolve_source, sync_catalog,
+    sync_registry,
+};
 
 /// Rebuilds the search index for `topic_ids`, embedding every finding's
 /// discovery text (or its entity's `name`, for typed findings with no

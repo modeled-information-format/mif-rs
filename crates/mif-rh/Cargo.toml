@@ -31,6 +31,8 @@ rusqlite.workspace = true
 sysinfo.workspace = true
 regex.workspace = true
 chrono.workspace = true
+sha2.workspace = true
+ureq.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

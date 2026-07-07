@@ -19,6 +19,7 @@ use mif_problem::{OutputFormat, ToProblem};
 const DEFAULT_CATALOG: &str = ".claude/enabled-packs.json";
 const DEFAULT_CONFIG: &str = "harness.config.json";
 const DEFAULT_REPORTS_DIR: &str = "reports";
+const ONTOLOGY_SOURCE_ENV: &str = "MIF_ONTOLOGY_SOURCE";
 
 #[derive(Parser)]
 #[command(
@@ -234,6 +235,116 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// On-demand ontology vendoring (rht ADR-0012): fetch, catalog, and
+    /// verify domain ontology packs from the canonical registry — a
+    /// compiled replacement for `fetch-ontology.sh`, the ontology-catalog
+    /// section of `sync-packs.sh`, `check-ontology-lock.sh`, and
+    /// `sync-registry-ontologies.sh`.
+    Ontology {
+        #[command(subcommand)]
+        action: OntologyCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum OntologyCommand {
+    /// Vendor one or more ontologies (and their `extends` closure) from the
+    /// registry, sha256-verified and pinned in `ontologies.lock.json`.
+    Fetch {
+        /// Ontology ids to fetch. Ignored (and may be omitted) with
+        /// `--all-enabled`.
+        ids: Vec<String>,
+        /// Fetch every ontology enabled in `harness.config.json`, instead
+        /// of the ids given positionally.
+        #[arg(long, conflicts_with = "ids")]
+        all_enabled: bool,
+        /// Repo root `packs/ontologies/`/`schemas/ontologies/`/
+        /// `ontologies.lock.json` resolve against. Defaults to the current
+        /// directory.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Path to the harness config (read for `--all-enabled`). Defaults
+        /// to `harness.config.json`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Override the registry source (a local directory or an http(s)
+        /// base URL). Defaults to the `MIF_ONTOLOGY_SOURCE` env var, then
+        /// `<root>/.ontologies.source`, then the canonical registry.
+        #[arg(long)]
+        source: Option<String>,
+    },
+    /// Rebuild the ontology-catalog section of the catalog sidecar
+    /// (`.claude/enabled-packs.json`'s `.ontologies` key) from committed
+    /// base layers plus every vendored, enabled ontology.
+    Sync {
+        /// Repo root ontology directories resolve against. Defaults to the
+        /// current directory.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Path to the harness config. Defaults to `harness.config.json`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Path to the catalog sidecar to update. Defaults to
+        /// `.claude/enabled-packs.json`.
+        #[arg(long)]
+        catalog: Option<PathBuf>,
+    },
+    /// Prove every vendored domain ontology matches
+    /// `ontologies.lock.json`'s pin (coverage + integrity), fail-closed.
+    LockCheck {
+        /// Repo root ontology directories and the lock file resolve
+        /// against. Defaults to the current directory.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Path to the harness config. Defaults to `harness.config.json`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Discover domain ontologies newly published to the registry, add
+    /// each (enabled by default) to `harness.config.json`, then vendor and
+    /// catalog everything currently enabled.
+    SyncRegistry {
+        /// Repo root ontology directories resolve against. Defaults to the
+        /// current directory.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Path to the harness config. Defaults to `harness.config.json`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Path to the catalog sidecar to update. Defaults to
+        /// `.claude/enabled-packs.json`.
+        #[arg(long)]
+        catalog: Option<PathBuf>,
+        /// Override the registry source. See `ontology fetch --source`.
+        #[arg(long)]
+        source: Option<String>,
+    },
+    /// Draft a new domain ontology YAML from research: entity types a
+    /// topic's findings actually used, or clusters of recurring tier-3
+    /// misses. Contributing it upstream (`--open-pr`) stays rht's own
+    /// script's job — it orchestrates `git`/`gh`, not `jq`.
+    Author {
+        /// The new ontology's id.
+        new_id: String,
+        /// Topic dir under `reports/` to mine observed types from.
+        /// Required unless `--from-clusters` is given.
+        #[arg(
+            required_unless_present = "from_clusters",
+            conflicts_with = "from_clusters"
+        )]
+        topic: Option<String>,
+        /// Alternate input: a `mif-rh-cli ontology expansion-candidates
+        /// --out` file. One candidate type is drafted per cluster.
+        #[arg(long)]
+        from_clusters: Option<PathBuf>,
+        /// Write the draft here. Defaults to a temp file (path printed).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Root `reports/` directory (read for topic mode). Defaults to
+        /// `reports`.
+        #[arg(long)]
+        reports_dir: Option<PathBuf>,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -361,6 +472,317 @@ fn run(command: &Command) -> Result<Outcome, CliError> {
             calibration,
             out,
         } => expansion_candidates_cmd(index.as_deref(), calibration.as_deref(), out.as_deref()),
+        Command::Ontology { action } => ontology_cmd(action),
+    }
+}
+
+/// Resolves an ontology-registry source override: an explicit `--source`
+/// flag first, then the `MIF_ONTOLOGY_SOURCE` env var — `mif_rh::vendor`'s
+/// own precedence (a `.ontologies.source` marker file, then the canonical
+/// default) applies underneath when both are absent.
+fn ontology_source_override(explicit: Option<&str>) -> Option<String> {
+    explicit
+        .map(str::to_string)
+        .or_else(|| std::env::var(ONTOLOGY_SOURCE_ENV).ok())
+}
+
+fn ontology_cmd(action: &OntologyCommand) -> Result<Outcome, CliError> {
+    match action {
+        OntologyCommand::Fetch {
+            ids,
+            all_enabled,
+            root,
+            config,
+            source,
+        } => ontology_fetch_cmd(
+            ids,
+            *all_enabled,
+            root.as_deref(),
+            config.as_deref(),
+            source.as_deref(),
+        ),
+        OntologyCommand::Sync {
+            root,
+            config,
+            catalog,
+        } => ontology_sync_cmd(root.as_deref(), config.as_deref(), catalog.as_deref()),
+        OntologyCommand::LockCheck { root, config } => {
+            ontology_lock_check_cmd(root.as_deref(), config.as_deref())
+        },
+        OntologyCommand::SyncRegistry {
+            root,
+            config,
+            catalog,
+            source,
+        } => ontology_sync_registry_cmd(
+            root.as_deref(),
+            config.as_deref(),
+            catalog.as_deref(),
+            source.as_deref(),
+        ),
+        OntologyCommand::Author {
+            new_id,
+            topic,
+            from_clusters,
+            out,
+            reports_dir,
+        } => ontology_author_cmd(
+            new_id,
+            topic.as_deref(),
+            from_clusters.as_deref(),
+            out.as_deref(),
+            reports_dir.as_deref(),
+        ),
+    }
+}
+
+fn ontology_fetch_cmd(
+    ids: &[String],
+    all_enabled: bool,
+    root: Option<&Path>,
+    config: Option<&Path>,
+    source: Option<&str>,
+) -> Result<Outcome, CliError> {
+    let root = effective_path(root, ".");
+    let resolved_source =
+        mif_rh::vendor::resolve_source(&root, ontology_source_override(source).as_deref());
+    let fetch_ids = if all_enabled {
+        let config_path = effective_path(config, DEFAULT_CONFIG);
+        enabled_ontology_ids_from_file(&config_path)?
+    } else {
+        ids.to_vec()
+    };
+    if fetch_ids.is_empty() {
+        return Ok(Outcome {
+            message: "ontology fetch: nothing to fetch (no ids given and no enabled ontologies \
+                      configured)"
+                .to_string(),
+            exit_code: 0,
+        });
+    }
+    let report = mif_rh::vendor::fetch(&root, &resolved_source, &fetch_ids)?;
+    let message = if report.vendored.is_empty() {
+        "ontology fetch: nothing to fetch (all requested layers are committed base layers or \
+         already vendored)"
+            .to_string()
+    } else {
+        let names: Vec<String> = report
+            .vendored
+            .iter()
+            .map(|v| format!("{}@{}", v.id, v.version))
+            .collect();
+        format!(
+            "ontology fetch: vendored {} ({}); lock updated at {}",
+            report.vendored.len(),
+            names.join(", "),
+            root.join("ontologies.lock.json").display()
+        )
+    };
+    Ok(Outcome {
+        message,
+        exit_code: 0,
+    })
+}
+
+fn ontology_sync_cmd(
+    root: Option<&Path>,
+    config: Option<&Path>,
+    catalog: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let root = effective_path(root, ".");
+    let config_path = effective_path(config, DEFAULT_CONFIG);
+    let catalog_path = effective_path(catalog, DEFAULT_CATALOG);
+    let report = mif_rh::vendor::sync_catalog(&root, &config_path, &catalog_path)?;
+    Ok(Outcome {
+        message: format!(
+            "ontology sync: cataloged {} ontolog{} -> {}",
+            report.cataloged,
+            if report.cataloged == 1 { "y" } else { "ies" },
+            catalog_path.display()
+        ),
+        exit_code: 0,
+    })
+}
+
+fn ontology_lock_check_cmd(
+    root: Option<&Path>,
+    config: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let root = effective_path(root, ".");
+    let config_path = effective_path(config, DEFAULT_CONFIG);
+    let report = mif_rh::vendor::lock_check(&root, &config_path)?;
+    Ok(format_lock_check_outcome(&report))
+}
+
+fn ontology_sync_registry_cmd(
+    root: Option<&Path>,
+    config: Option<&Path>,
+    catalog: Option<&Path>,
+    source: Option<&str>,
+) -> Result<Outcome, CliError> {
+    let root = effective_path(root, ".");
+    let config_path = effective_path(config, DEFAULT_CONFIG);
+    let catalog_path = effective_path(catalog, DEFAULT_CATALOG);
+    let resolved_source =
+        mif_rh::vendor::resolve_source(&root, ontology_source_override(source).as_deref());
+    let report =
+        mif_rh::vendor::sync_registry(&root, &config_path, &catalog_path, &resolved_source)?;
+    let message = if report.discovered.is_empty() {
+        "ontology sync-registry: no new ontologies in the registry".to_string()
+    } else {
+        format!(
+            "ontology sync-registry: discovered and enabled {} new ontology(ies): {}",
+            report.discovered.len(),
+            report.discovered.join(", ")
+        )
+    };
+    Ok(Outcome {
+        message,
+        exit_code: 0,
+    })
+}
+
+/// The subset of `mif-rh-cli ontology expansion-candidates --out` output
+/// `ontology author --from-clusters` reads (ignores `misses_considered`/
+/// `expansion`, which are diagnostic, not drafting input).
+#[derive(serde::Deserialize)]
+struct ExpansionCandidatesFile {
+    clusters: Vec<mif_rh::ExpansionCandidate>,
+}
+
+fn ontology_author_cmd(
+    new_id: &str,
+    topic: Option<&str>,
+    from_clusters: Option<&Path>,
+    out: Option<&Path>,
+    reports_dir: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let report = if let Some(clusters_path) = from_clusters {
+        let contents =
+            std::fs::read_to_string(clusters_path).map_err(|source| mif_rh::MifRhError::Io {
+                path: clusters_path.display().to_string(),
+                source,
+            })?;
+        let file: ExpansionCandidatesFile =
+            serde_json::from_str(&contents).map_err(|source| mif_rh::MifRhError::Json {
+                path: clusters_path.display().to_string(),
+                source,
+            })?;
+        let source_name = clusters_path.file_name().map_or_else(
+            || clusters_path.display().to_string(),
+            |name| name.to_string_lossy().to_string(),
+        );
+        mif_rh::draft_from_clusters(&file.clusters, new_id, &source_name)?
+    } else {
+        // clap's `required_unless_present` guarantees `topic` is present.
+        let topic = topic.unwrap_or_default();
+        let reports_dir = effective_path(reports_dir, DEFAULT_REPORTS_DIR);
+        let map_path = reports_dir.join(topic).join("ontology-map.json");
+        let contents =
+            std::fs::read_to_string(&map_path).map_err(|source| mif_rh::MifRhError::Io {
+                path: map_path.display().to_string(),
+                source,
+            })?;
+        let records: Vec<mif_rh::MapRecord> =
+            serde_json::from_str(&contents).map_err(|source| mif_rh::MifRhError::Json {
+                path: map_path.display().to_string(),
+                source,
+            })?;
+        mif_rh::draft_from_topic(&records, new_id, topic)?
+    };
+
+    let out_path = out.map_or_else(
+        || std::env::temp_dir().join(format!("{new_id}.ontology.yaml")),
+        Path::to_path_buf,
+    );
+    std::fs::write(&out_path, &report.yaml).map_err(|source| mif_rh::MifRhError::Io {
+        path: out_path.display().to_string(),
+        source,
+    })?;
+
+    Ok(Outcome {
+        message: format!(
+            "ontology author: drafted '{new_id}' with {} candidate type(s) -> {}",
+            report.type_count,
+            out_path.display()
+        ),
+        exit_code: 0,
+    })
+}
+
+/// Reads `harness.config.json`'s `.ontologies[]` directly (rather than
+/// through [`mif_rh::HarnessConfig`], which deliberately only models
+/// `topics[]`) to collect every enabled ontology id for `ontology fetch
+/// --all-enabled`.
+fn enabled_ontology_ids_from_file(config_path: &Path) -> Result<Vec<String>, CliError> {
+    if !config_path.exists() {
+        return Err(mif_rh::MifRhError::ConfigMissing {
+            path: config_path.display().to_string(),
+        });
+    }
+    let contents =
+        std::fs::read_to_string(config_path).map_err(|source| mif_rh::MifRhError::Io {
+            path: config_path.display().to_string(),
+            source,
+        })?;
+    let config: serde_json::Value =
+        serde_json::from_str(&contents).map_err(|source| mif_rh::MifRhError::Json {
+            path: config_path.display().to_string(),
+            source,
+        })?;
+    let ids = config
+        .get("ontologies")
+        .and_then(serde_json::Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .get("enabled")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                })
+                .filter_map(|entry| entry.get("id").and_then(serde_json::Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(ids)
+}
+
+/// Formats `check-ontology-lock.sh`'s own per-issue lines plus a final
+/// summary, matching its fail-closed exit-code contract (non-zero on any
+/// missing pin, un-vendored ontology, or drift).
+fn format_lock_check_outcome(report: &mif_rh::LockCheckReport) -> Outcome {
+    let mut lines = Vec::new();
+    for id in &report.missing_pins {
+        lines.push(format!(
+            "  MISSING PIN: '{id}' is enabled but absent from the lock — run `ontology fetch {id}`"
+        ));
+    }
+    for id in &report.not_vendored {
+        lines.push(format!(
+            "  NOT VENDORED: enabled '{id}' is pinned but its file is absent — run `ontology \
+             fetch {id}`"
+        ));
+    }
+    for drift in &report.drift {
+        lines.push(format!(
+            "  DRIFT: '{}' sha256 {} != pinned {} — a vendored ontology was edited locally; \
+             change it upstream and re-fetch",
+            drift.id, drift.got, drift.pinned
+        ));
+    }
+    if report.ok() {
+        lines.push(format!(
+            "check-ontology-lock: ok ({} vendored ontolog{} match the lock)",
+            report.checked,
+            if report.checked == 1 { "y" } else { "ies" }
+        ));
+    }
+    Outcome {
+        message: lines.join("\n"),
+        exit_code: u8::from(!report.ok()),
     }
 }
 

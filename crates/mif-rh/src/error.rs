@@ -152,6 +152,119 @@ pub enum MifRhError {
     /// Computing an embedding failed.
     #[error(transparent)]
     Embed(#[from] mif_embed::EmbedError),
+    /// Failed to fetch a file (the registry index, or a vendored ontology)
+    /// from the resolved ontology source (a local directory or an http(s)
+    /// base URL).
+    #[error("failed to fetch from ontology source {registry_source}: {detail}")]
+    RegistryFetch {
+        /// The resolved source (directory path or URL base). Named
+        /// `registry_source`, not `source`: `thiserror` treats a field
+        /// literally named `source` as the error-chain cause and requires
+        /// it to implement `std::error::Error`, which a plain `String`
+        /// does not.
+        registry_source: String,
+        /// A human-readable failure detail.
+        detail: String,
+    },
+    /// The registry index (`index.json`) was not valid JSON or did not
+    /// match the expected shape.
+    #[error("ontology registry index at {registry_source} is malformed: {detail}")]
+    RegistryIndexInvalid {
+        /// The resolved source the index was read from. See
+        /// [`Self::RegistryFetch`]'s doc comment for why this is
+        /// `registry_source`, not `source`.
+        registry_source: String,
+        /// A human-readable failure detail.
+        detail: String,
+    },
+    /// A requested or `extends`-ancestor ontology id has no entry in the
+    /// registry index — it has no canonical definition yet.
+    #[error(
+        "ontology '{id}' is not in the registry index — it has no canonical definition yet \
+         (author one with the `ontology author` subcommand)"
+    )]
+    OntologyNotInRegistry {
+        /// The unresolvable ontology id.
+        id: String,
+    },
+    /// The registry index's sha256 no longer matches the value pinned in
+    /// `ontologies.lock.json` for the same source (trust-on-first-use, then
+    /// pin) — the trust root moved.
+    #[error(
+        "registry index sha256 changed from the pinned value for source {registry_source} \
+         (pinned {pinned}, got {got}) — refusing to trust a moved index (clear index_sha256 \
+         in the lock to re-pin deliberately)"
+    )]
+    IndexPinMismatch {
+        /// The source whose index changed. See [`Self::RegistryFetch`]'s
+        /// doc comment for why this is `registry_source`, not `source`.
+        registry_source: String,
+        /// The previously pinned index sha256.
+        pinned: String,
+        /// The newly fetched index's sha256.
+        got: String,
+    },
+    /// A fetched ontology file's sha256 did not match the registry index's
+    /// pinned value — refusing to vendor a file that does not match the
+    /// trusted hash (fail-closed).
+    #[error("checksum mismatch for ontology '{id}' ({file}): expected {expected}, got {got}")]
+    ChecksumMismatch {
+        /// The ontology id being vendored.
+        id: String,
+        /// The index's declared file name.
+        file: String,
+        /// The expected (pinned) sha256.
+        expected: String,
+        /// The sha256 actually computed from the fetched bytes.
+        got: String,
+    },
+    /// The registry index named an unsafe (non-bare) file path for an
+    /// ontology — a poisoned index could otherwise escape the vendored
+    /// packs directory.
+    #[error(
+        "registry index entry for '{id}' has an unsafe file path: '{file}' (must be a bare \
+         filename)"
+    )]
+    UnsafeIndexPath {
+        /// The ontology id whose index entry is unsafe.
+        id: String,
+        /// The offending file path.
+        file: String,
+    },
+    /// A registry-discovered ontology id is not a bare, lowercase slug — a
+    /// poisoned or malformed index entry that could otherwise escape its
+    /// intended vendored directory once written into `harness.config.json`.
+    #[error("registry index declares a malformed ontology id: '{id}' (refusing, fail-closed)")]
+    MalformedOntologyId {
+        /// The malformed id.
+        id: String,
+    },
+    /// `harness.config.json`'s `.ontologies` field exists but is not an
+    /// array — refusing to guess how to append a discovered ontology to it.
+    #[error("{path}'s .ontologies is not an array: {detail}")]
+    ConfigMalformed {
+        /// The config path.
+        path: String,
+        /// A human-readable failure detail.
+        detail: String,
+    },
+    /// A topic's `ontology-map.json` carries no typed entity types to
+    /// mine an ontology draft from.
+    #[error(
+        "no entity types found in reports/{topic}/ontology-map.json — nothing to draft an \
+         ontology from"
+    )]
+    NoEntityTypesFound {
+        /// The topic whose map carried no typed entities.
+        topic: String,
+    },
+    /// An `expansion-candidates` output file carries no clusters to draft
+    /// candidate types from.
+    #[error("no clusters in {path} — nothing to draft an ontology from")]
+    NoClustersFound {
+        /// The clusters file with no clusters.
+        path: String,
+    },
 }
 
 impl MifRhError {
@@ -270,6 +383,76 @@ impl MifRhError {
                 version: "v1",
                 title: "Delegated embedding error",
                 status: 500,
+                exit_code: 1,
+            },
+            Self::RegistryFetch { .. } => ProblemMeta {
+                slug: "registry-fetch-failed",
+                version: "v1",
+                title: "Failed to fetch from the ontology registry source",
+                status: 502,
+                exit_code: 1,
+            },
+            Self::RegistryIndexInvalid { .. } => ProblemMeta {
+                slug: "registry-index-invalid",
+                version: "v1",
+                title: "Ontology registry index is malformed",
+                status: 502,
+                exit_code: 1,
+            },
+            Self::OntologyNotInRegistry { .. } => ProblemMeta {
+                slug: "ontology-not-in-registry",
+                version: "v1",
+                title: "Ontology id has no registry index entry",
+                status: 404,
+                exit_code: 1,
+            },
+            Self::IndexPinMismatch { .. } => ProblemMeta {
+                slug: "index-pin-mismatch",
+                version: "v1",
+                title: "Registry index sha256 no longer matches the pinned value",
+                status: 409,
+                exit_code: 1,
+            },
+            Self::ChecksumMismatch { .. } => ProblemMeta {
+                slug: "ontology-checksum-mismatch",
+                version: "v1",
+                title: "Fetched ontology file does not match its pinned sha256",
+                status: 422,
+                exit_code: 1,
+            },
+            Self::UnsafeIndexPath { .. } => ProblemMeta {
+                slug: "unsafe-index-path",
+                version: "v1",
+                title: "Registry index names an unsafe file path",
+                status: 422,
+                exit_code: 1,
+            },
+            Self::MalformedOntologyId { .. } => ProblemMeta {
+                slug: "malformed-ontology-id",
+                version: "v1",
+                title: "Registry index declares a malformed ontology id",
+                status: 422,
+                exit_code: 1,
+            },
+            Self::ConfigMalformed { .. } => ProblemMeta {
+                slug: "config-malformed",
+                version: "v1",
+                title: "Harness config's .ontologies field is not an array",
+                status: 422,
+                exit_code: 1,
+            },
+            Self::NoEntityTypesFound { .. } => ProblemMeta {
+                slug: "no-entity-types-found",
+                version: "v1",
+                title: "Topic's ontology map carries no typed entities to draft from",
+                status: 422,
+                exit_code: 1,
+            },
+            Self::NoClustersFound { .. } => ProblemMeta {
+                slug: "no-clusters-found",
+                version: "v1",
+                title: "Expansion-candidates file carries no clusters to draft from",
+                status: 422,
                 exit_code: 1,
             },
         }
@@ -397,6 +580,114 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 Applicability::MaybeIncorrect,
             ),
         ),
+        MifRhError::RegistryFetch { .. } => (
+            SuggestedFix::new(
+                "Check network access to the ontology source (or, for a local directory \
+                 source, that the path exists), then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Check the ontology source is reachable",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::RegistryIndexInvalid { .. } => (
+            SuggestedFix::new(
+                "The registry source's index.json is not valid — fix it upstream, or point \
+                 MIF_ONTOLOGY_SOURCE at a known-good mirror, then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Fix or repoint the registry index",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::OntologyNotInRegistry { .. } => (
+            SuggestedFix::new(
+                "Author the ontology from your research and contribute it upstream with the \
+                 `ontology author` subcommand, then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Author the missing ontology",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::IndexPinMismatch { .. } => (
+            SuggestedFix::new(
+                "Confirm the registry source is trustworthy, then clear index_sha256 in \
+                 ontologies.lock.json to re-pin deliberately, or investigate why the trust \
+                 root moved.",
+                Applicability::Unspecified,
+            ),
+            CodeAction::new(
+                "Investigate the moved trust root",
+                "quickfix",
+                Applicability::Unspecified,
+            ),
+        ),
+        MifRhError::ChecksumMismatch { .. } => (
+            SuggestedFix::new(
+                "The fetched ontology does not match the pinned registry hash. Do not vendor \
+                 it; investigate the registry source for tampering or corruption.",
+                Applicability::Unspecified,
+            ),
+            CodeAction::new(
+                "Investigate the checksum mismatch",
+                "quickfix",
+                Applicability::Unspecified,
+            ),
+        ),
+        MifRhError::NoEntityTypesFound { .. } => (
+            SuggestedFix::new(
+                "Run /ontology-review on the topic first so its findings get typed, then \
+                 retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Review the topic before authoring",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::NoClustersFound { .. } => (
+            SuggestedFix::new(
+                "Run `mif-rh-cli ontology expansion-candidates` again once more tier-3 misses \
+                 have recurred across runs, then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Wait for recurring misses before authoring",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::ConfigMalformed { .. } => (
+            SuggestedFix::new(
+                "Fix harness.config.json so its .ontologies field is an array, then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Fix the .ontologies field's shape",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::UnsafeIndexPath { .. } | MifRhError::MalformedOntologyId { .. } => (
+            SuggestedFix::new(
+                "The registry index entry is malformed or unsafe — fix it upstream in the \
+                 canonical registry before retrying.",
+                Applicability::Unspecified,
+            ),
+            CodeAction::new(
+                "Fix the malformed registry entry",
+                "quickfix",
+                Applicability::Unspecified,
+            ),
+        ),
         MifRhError::FindingIo { .. }
         | MifRhError::Io { .. }
         | MifRhError::LockIo { .. }
@@ -516,6 +807,45 @@ mod tests {
             MifRhError::Embed(mif_embed::EmbedError::NoCacheDir {
                 model: "test-model",
             }),
+            MifRhError::RegistryFetch {
+                registry_source: "https://example.test/ontologies".to_string(),
+                detail: "connection refused".to_string(),
+            },
+            MifRhError::RegistryIndexInvalid {
+                registry_source: "https://example.test/ontologies".to_string(),
+                detail: "no .ontologies key".to_string(),
+            },
+            MifRhError::OntologyNotInRegistry {
+                id: "clinical-trials".to_string(),
+            },
+            MifRhError::IndexPinMismatch {
+                registry_source: "https://example.test/ontologies".to_string(),
+                pinned: "aaa".to_string(),
+                got: "bbb".to_string(),
+            },
+            MifRhError::ChecksumMismatch {
+                id: "edu-fixture".to_string(),
+                file: "edu-fixture.ontology.yaml".to_string(),
+                expected: "aaa".to_string(),
+                got: "bbb".to_string(),
+            },
+            MifRhError::UnsafeIndexPath {
+                id: "edu-fixture".to_string(),
+                file: "../../etc/passwd".to_string(),
+            },
+            MifRhError::MalformedOntologyId {
+                id: "../etc".to_string(),
+            },
+            MifRhError::ConfigMalformed {
+                path: "harness.config.json".to_string(),
+                detail: ".ontologies is a string, not an array".to_string(),
+            },
+            MifRhError::NoEntityTypesFound {
+                topic: "edu".to_string(),
+            },
+            MifRhError::NoClustersFound {
+                path: "clusters.json".to_string(),
+            },
         ]
     }
 

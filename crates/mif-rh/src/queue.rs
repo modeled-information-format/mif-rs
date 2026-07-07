@@ -156,7 +156,7 @@ pub fn upsert_suggestions(
 }
 
 /// One member of an expansion-candidate cluster.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClusterMember {
     /// The finding whose classification missed.
     pub finding_id: String,
@@ -170,7 +170,7 @@ pub struct ClusterMember {
 
 /// One ontology-expansion candidate: a recurring cluster of
 /// mutually-similar tier-3 misses.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExpansionCandidate {
     /// Distinct findings in the cluster.
     pub size: usize,
