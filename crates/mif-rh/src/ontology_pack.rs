@@ -1,5 +1,6 @@
-//! Full ontology-pack YAML parsing: `entity_types`, `discovery`, and the
-//! `extends` chain, beyond what `mif_ontology::OntologyMetadata` covers.
+//! Full ontology-pack YAML parsing: `entity_types`, `relationships`,
+//! `discovery`, and the `extends` chain, beyond what
+//! `mif_ontology::OntologyMetadata` covers.
 //!
 //! `mif-ontology`'s [`mif_ontology::OntologyMetadata`] deliberately parses
 //! only `ontology.id`/`version`/`description`/`extends` — this module reads
@@ -62,17 +63,38 @@ struct OntologyBlock {
     description: Option<String>,
 }
 
+/// One ontology-declared relationship type: its `from`/`to` entity-type
+/// domains (subtype-of substitutable, per SPEC §8d), and whether it is
+/// symmetric.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RelationshipDecl {
+    /// Human-readable description.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Entity types (or their subtypes) a source node must be.
+    #[serde(default)]
+    pub from: Vec<String>,
+    /// Entity types (or their subtypes) a target node must be.
+    #[serde(default)]
+    pub to: Vec<String>,
+    /// Whether the relationship reads the same in both directions.
+    #[serde(default)]
+    pub symmetric: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct OntologyPackFile {
     ontology: OntologyBlock,
     #[serde(default)]
     entity_types: Vec<EntityType>,
     #[serde(default)]
+    relationships: HashMap<String, RelationshipDecl>,
+    #[serde(default)]
     discovery: DiscoveryConfig,
 }
 
 /// A fully-parsed ontology pack: identity, `extends` chain, entity types,
-/// and discovery configuration.
+/// relationship declarations, and discovery configuration.
 #[derive(Debug, Clone)]
 pub struct OntologyPack {
     /// The ontology's id.
@@ -85,6 +107,8 @@ pub struct OntologyPack {
     pub description: Option<String>,
     /// Entity types this ontology declares.
     pub entity_types: Vec<EntityType>,
+    /// Relationship types this ontology declares, keyed by type name.
+    pub relationships: HashMap<String, RelationshipDecl>,
     /// Discovery-fallback configuration.
     pub discovery: DiscoveryConfig,
 }
@@ -107,6 +131,7 @@ pub fn parse_pack(yaml: &str, path: &str) -> Result<OntologyPack, MifRhError> {
         extends: file.ontology.extends,
         description: file.ontology.description,
         entity_types: file.entity_types,
+        relationships: file.relationships,
         discovery: file.discovery,
     })
 }
@@ -227,6 +252,32 @@ discovery:
             pack.discovery.patterns[0].suggest_entity.as_deref(),
             Some("title")
         );
+    }
+
+    #[test]
+    fn parses_relationships_with_from_to_domains() {
+        let yaml = "
+ontology:
+  id: engineering-base
+  version: \"0.1.0\"
+relationships:
+  governs:
+    description: \"A control or policy governs a component or artifact\"
+    from: [control, policy]
+    to: [component, artifact]
+    symmetric: false
+";
+        let pack = parse_pack(yaml, "engineering-base.yaml").unwrap();
+        let governs = pack.relationships.get("governs").unwrap();
+        assert_eq!(governs.from, ["control", "policy"]);
+        assert_eq!(governs.to, ["component", "artifact"]);
+        assert!(!governs.symmetric);
+    }
+
+    #[test]
+    fn defaults_to_no_relationships_when_absent() {
+        let pack = parse_pack(EDU_FIXTURE_YAML, "edu-fixture.yaml").unwrap();
+        assert!(pack.relationships.is_empty());
     }
 
     #[test]

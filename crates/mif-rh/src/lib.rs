@@ -55,6 +55,7 @@ pub mod harness_shippable_typing;
 pub mod harness_synthesize;
 pub mod harness_toggle;
 pub mod harness_topic_metadata;
+pub mod harness_validate_concordance;
 pub mod harness_wrap;
 pub mod index;
 pub mod lock;
@@ -97,6 +98,7 @@ pub use harness_shippable_typing::{ShippableTypingReport, check_shippable_typing
 pub use harness_synthesize::synthesize_artifact;
 pub use harness_toggle::{SITE_PLUGINS, pack_toggle, site_toggle_plugin, site_toggle_primary};
 pub use harness_topic_metadata::{TopicMetadata, topic_metadata};
+pub use harness_validate_concordance::{ConcordanceValidation, validate_concordance};
 pub use harness_wrap::{WrapSourceInputs, read_source_content, wrap_source};
 pub use index::{FindingIndex, IndexStats, IndexedFinding, Miss, SearchMatch, SimilarFinding};
 pub use lock::ReviewLock;

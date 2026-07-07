@@ -248,6 +248,15 @@ pub enum MifRhError {
         /// The unparseable finding path.
         path: String,
     },
+    /// A `subtype_of` chain across the loaded ontology registry revisits
+    /// its own starting type — a cycle. User-authored ontology data must
+    /// never drive unbounded recursion during the concordance's transitive
+    /// supertype closure.
+    #[error("subtype_of graph contains a cycle involving entity type '{entity_type}'")]
+    SubtypeOfCycle {
+        /// The entity type where the cycle was detected.
+        entity_type: String,
+    },
     /// Building a dynamic `jsonschema` validator for a resolved entity
     /// type's `schema` field failed. Indicates a malformed ontology pack,
     /// not a bug in the finding being validated.
@@ -680,6 +689,13 @@ impl MifRhError {
                 title: "A finding failed to parse while checking relationship targets",
                 status: 400,
                 exit_code: 2,
+            },
+            Self::SubtypeOfCycle { .. } => ProblemMeta {
+                slug: "subtype-of-cycle",
+                version: "v1",
+                title: "subtype_of graph contains a cycle",
+                status: 422,
+                exit_code: 4,
             },
             Self::EntityTypeSchemaInvalid { .. } => ProblemMeta {
                 slug: "entity-type-schema-invalid",
@@ -1359,6 +1375,17 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 Applicability::MachineApplicable,
             ),
         ),
+        MifRhError::SubtypeOfCycle { .. } => (
+            SuggestedFix::new(
+                "Break the subtype_of cycle in the ontology registry — a type cannot (transitively) subtype itself.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Fix the subtype_of cycle",
+                "quickfix",
+                Applicability::MaybeIncorrect,
+            ),
+        ),
         MifRhError::FindingIo { .. }
         | MifRhError::Io { .. }
         | MifRhError::LockIo { .. }
@@ -1610,6 +1637,9 @@ mod tests {
             },
             MifRhError::RelationshipTargetFindingUnparseable {
                 path: "reports/edu/findings/bad.json".to_string(),
+            },
+            MifRhError::SubtypeOfCycle {
+                entity_type: "a".to_string(),
             },
         ]
     }

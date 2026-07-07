@@ -662,6 +662,24 @@ enum HarnessCommand {
         #[arg(long)]
         reports_dir: PathBuf,
     },
+    /// Fail-closed ontology conformance for the concordance (SPEC §8d):
+    /// every node `entityType` and relationship edge type must be declared
+    /// by an ontology bound to the node's topic(s), and every relationship
+    /// edge's endpoints must satisfy its declared `from`/`to` domains.
+    ValidateConcordance {
+        /// Path to `concordance.json`.
+        concordance: PathBuf,
+        /// Path to `harness.config.json`.
+        #[arg(long)]
+        config: PathBuf,
+        /// Path to the enabled-ontologies catalog (`.claude/enabled-packs.json`).
+        #[arg(long)]
+        catalog: PathBuf,
+        /// The repo root each cataloged ontology's `source` path is
+        /// relative to.
+        #[arg(long)]
+        root: PathBuf,
+    },
 }
 
 /// This binary has no failure modes of its own beyond what [`mif_rh`]
@@ -1178,6 +1196,12 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
         HarnessCommand::CheckRelationshipTargets { reports_dir } => {
             harness_check_relationship_targets_cmd(reports_dir)
         },
+        HarnessCommand::ValidateConcordance {
+            concordance,
+            config,
+            catalog,
+            root,
+        } => harness_validate_concordance_cmd(concordance, config, catalog, root),
     }
 }
 
@@ -1271,6 +1295,56 @@ fn harness_falsify_cmd(
     Ok(Outcome {
         message: json_text,
         exit_code: 0,
+    })
+}
+
+fn harness_validate_concordance_cmd(
+    concordance_path: &Path,
+    config_path: &Path,
+    catalog_path: &Path,
+    root: &Path,
+) -> Result<Outcome, CliError> {
+    let contents =
+        std::fs::read_to_string(concordance_path).map_err(|source| mif_rh::MifRhError::Io {
+            path: concordance_path.display().to_string(),
+            source,
+        })?;
+    let concordance: serde_json::Value =
+        serde_json::from_str(&contents).map_err(|source| mif_rh::MifRhError::Json {
+            path: concordance_path.display().to_string(),
+            source,
+        })?;
+    let catalog = mif_rh::Catalog::load(catalog_path)?;
+    let config = mif_rh::HarnessConfig::load(config_path)?;
+
+    let result = mif_rh::validate_concordance(&concordance, &config, &catalog, root)?;
+    let message = if result.ok() {
+        format!(
+            "validate-concordance: conformant ({} nodes, {} edges)",
+            result.nodes, result.edges
+        )
+    } else {
+        let mut lines = result.violations.clone();
+        lines.push(format!(
+            "validate-concordance: {} conformance violation(s) — fail",
+            result.violations.len()
+        ));
+        if result
+            .violations
+            .iter()
+            .any(|v| v.contains("/ontology-review"))
+        {
+            lines.push(
+                "validate-concordance: bind/enrich the named topic(s) with /ontology-review \
+                 --topic <id> --enrich, then rebuild."
+                    .to_string(),
+            );
+        }
+        lines.join("\n")
+    };
+    Ok(Outcome {
+        message,
+        exit_code: u8::from(!result.ok()),
     })
 }
 
