@@ -40,6 +40,10 @@ hf-hub = { version = "0.5.0", default-features = false, features = ["ureq"] }
 dirs = "6.0.0"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+# Already present transitively (tokenizers' "fancy-regex" feature); used
+# directly by mif-rh for markdown-render lookaround (autolink/deglob), which
+# Rust's standard `regex` crate deliberately doesn't support.
+fancy-regex = "0.18.0"
 # Stale-PID liveness check for mif-rh's review lock, without raw signal calls
 # (this workspace forbids unsafe_code workspace-wide). Exact-pinned at
 # 0.38.4: previously believed sysinfo >=0.38 required a newer Rust than
@@ -50,6 +54,15 @@ sysinfo = { version = "=0.38.4", default-features = false, features = ["system"]
 # Discovery-pattern content matching for mif-rh (the direct equivalent of
 # rht's bash `[[ =~ ]]` regex fallback classifier).
 regex = "1.12.4"
+# sha256 verification for on-demand ontology vendoring (mif-rh's `vendor`
+# module, the engine cutover of rht's fetch-ontology.sh). Pure-Rust, no
+# unsafe, MIT/Apache-2.0.
+sha2 = "0.10.9"
+# HTTP(S) fetch of the canonical ontology registry index/files, for the same
+# vendoring path. rustls-backed (no openssl); already pulled transitively by
+# hf-hub's own "ureq" feature, so this is not a new transitive dependency,
+# only a new direct one.
+ureq = "3.3.0"
 
 [workspace.dependencies.mif-core]
 path = "crates/mif-core"

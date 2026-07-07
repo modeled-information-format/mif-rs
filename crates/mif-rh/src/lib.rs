@@ -30,11 +30,34 @@
 //! never-authoritative: it never writes to `ontology-map.json`, and
 //! `resolve`/`review` never call into it.
 
+pub mod author;
 pub mod calibrate;
 pub mod catalog;
 pub mod config;
 mod error;
 pub mod finding;
+pub mod harness_assert_graph;
+pub mod harness_citation_integrity;
+pub mod harness_concordance;
+pub mod harness_corpus;
+pub mod harness_falsify;
+pub mod harness_graph;
+pub mod harness_import;
+pub mod harness_index;
+pub mod harness_markdown;
+pub mod harness_membership;
+pub mod harness_ontology_registry;
+pub mod harness_project;
+pub mod harness_reconcile;
+pub mod harness_relationship_targets;
+pub mod harness_release;
+pub mod harness_render;
+pub mod harness_shippable_typing;
+pub mod harness_synthesize;
+pub mod harness_toggle;
+pub mod harness_topic_metadata;
+pub mod harness_validate_concordance;
+pub mod harness_wrap;
 pub mod index;
 pub mod lock;
 pub mod ontology_pack;
@@ -42,7 +65,9 @@ pub mod queue;
 pub mod resolve;
 pub mod review;
 pub mod suggest;
+pub mod vendor;
 
+pub use author::{DraftReport, draft_from_clusters, draft_from_topic};
 pub use calibrate::{
     CONFUSION_REPRESENTATIVES, CalibrateOptions, CalibrationSample, ConfusionPair, ConfusionReport,
     collect_topic_samples, confusions, packs_carry_negatives, subsample, sweep,
@@ -51,6 +76,32 @@ pub use catalog::Catalog;
 pub use config::HarnessConfig;
 pub use error::MifRhError;
 pub use finding::Finding;
+pub use harness_assert_graph::{CheckResult, GraphAssertion, assert_graph_mif_file};
+pub use harness_citation_integrity::{CitationIntegrityReport, check_citation_integrity};
+pub use harness_concordance::build_concordance;
+pub use harness_corpus::{CorpusSynthesis, synthesize_corpus};
+pub use harness_falsify::{FalsifyResult, falsify};
+pub use harness_graph::build_graph;
+pub use harness_import::{ImportReport, import_corpus};
+pub use harness_index::build_index;
+pub use harness_membership::{MembershipReport, resolve_membership};
+pub use harness_ontology_registry::{RegistryValidation, validate_ontology_registry};
+pub use harness_project::project_report;
+pub use harness_reconcile::{ReconcileReport, reconcile_session, sort_object_keys};
+pub use harness_relationship_targets::{
+    Orphan, RelationshipTargetsReport, check_relationship_targets,
+};
+pub use harness_release::{
+    BumpOptions, BumpReport, VersionGateFailure, VersionGateReport, bump_version,
+    check_version_bump, goal_version_id,
+};
+pub use harness_render::{RenderInputs, render_artifact};
+pub use harness_shippable_typing::{ShippableTypingReport, check_shippable_typing};
+pub use harness_synthesize::synthesize_artifact;
+pub use harness_toggle::{SITE_PLUGINS, pack_toggle, site_toggle_plugin, site_toggle_primary};
+pub use harness_topic_metadata::{TopicMetadata, topic_metadata};
+pub use harness_validate_concordance::{ConcordanceValidation, validate_concordance};
+pub use harness_wrap::{WrapSourceInputs, read_source_content, wrap_source};
 pub use index::{FindingIndex, IndexStats, IndexedFinding, Miss, SearchMatch, SimilarFinding};
 pub use lock::ReviewLock;
 pub use ontology_pack::{EntityType, OntologyPack};
@@ -64,6 +115,11 @@ pub use review::{
     write_followup,
 };
 pub use suggest::{TypeSuggestion, suggest_type};
+pub use vendor::{
+    CatalogSyncReport, DriftEntry, FetchReport, LockCheckReport, LockEntry, LockFile,
+    RegistrySyncReport, VendoredOntology, fetch, lock_check, resolve_source, sync_catalog,
+    sync_registry,
+};
 
 /// Rebuilds the search index for `topic_ids`, embedding every finding's
 /// discovery text (or its entity's `name`, for typed findings with no

@@ -18,6 +18,7 @@ workspace = true
 mif-core.workspace = true
 mif-ontology.workspace = true
 mif-embed.workspace = true
+mif-frontmatter.workspace = true
 mif-problem.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -30,7 +31,10 @@ jsonschema.workspace = true
 rusqlite.workspace = true
 sysinfo.workspace = true
 regex.workspace = true
+fancy-regex.workspace = true
 chrono.workspace = true
+sha2.workspace = true
+ureq.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
