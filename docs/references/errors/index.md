@@ -76,3 +76,5 @@ own problem type.
 
 - [invalid-json/v1](/mif-rs/references/errors/invalid-json/v1/)
 - [document-not-found/v1](/mif-rs/references/errors/document-not-found/v1/)
+- [mif-cli-json-serialize-failure/v1](/mif-rs/references/errors/mif-cli-json-serialize-failure/v1/)
+- [mif-mcp-json-serialize-failure/v1](/mif-rs/references/errors/mif-mcp-json-serialize-failure/v1/)
