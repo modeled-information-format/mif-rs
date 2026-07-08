@@ -1137,9 +1137,22 @@ fn find_pin_safety_gaps(
 /// # Errors
 ///
 /// Returns [`MifRhError::LockSourceMismatch`] if `lock.source` is set and
-/// differs from `source`.
+/// differs from `source`, or if `lock.source` is empty while
+/// `lock.ontologies` already holds pins (a legacy or hand-edited lock file
+/// with pins but no recorded trust root — `LockFile`'s `#[serde(default)]`
+/// on `source` would otherwise let it through as if empty meant "nothing
+/// pinned yet").
 fn check_lock_source(lock: &LockFile, source: &str) -> Result<(), MifRhError> {
-    if !lock.source.is_empty() && lock.source != source {
+    if lock.source.is_empty() {
+        if lock.ontologies.is_empty() {
+            return Ok(());
+        }
+        return Err(MifRhError::LockSourceMismatch {
+            lock_source: "<unset>".to_string(),
+            requested_source: source.to_string(),
+        });
+    }
+    if lock.source != source {
         return Err(MifRhError::LockSourceMismatch {
             lock_source: lock.source.clone(),
             requested_source: source.to_string(),
@@ -1192,6 +1205,33 @@ fn fetch_and_parse_registry_pack(
     parse_pack(&new_text, &format!("{source}/{}", entry.file))
 }
 
+/// Validates and dedupes `ids` (preserving first-seen order), then filters
+/// to only those actually pinned in `lock.ontologies` — the ids
+/// [`check_pin_safety`] has anything to say about.
+///
+/// # Errors
+///
+/// Returns [`MifRhError::MalformedOntologyId`] if a requested id is not a
+/// bare, lowercase slug.
+fn pinned_requested_ids(lock: &LockFile, ids: &[String]) -> Result<Vec<String>, MifRhError> {
+    let mut seen = HashSet::new();
+    let mut pinned = Vec::new();
+    for id in ids {
+        // `id` is joined onto a filesystem path later (`old_path`), so it
+        // must be validated the same way `resolve_fetch_set` validates
+        // every id (including directly-requested ones) before any use —
+        // a caller-supplied id is just as untrusted a path component as
+        // one discovered via the registry's `extends` chain.
+        if !is_wellformed_id(id) {
+            return Err(MifRhError::MalformedOntologyId { id: id.clone() });
+        }
+        if seen.insert(id.as_str()) && lock.ontologies.contains_key(id) {
+            pinned.push(id.clone());
+        }
+    }
+    Ok(pinned)
+}
+
 /// Warns only when a pinned ontology's advanced schema actually breaks an
 /// already-stamped finding.
 ///
@@ -1233,12 +1273,13 @@ fn fetch_and_parse_registry_pack(
 /// does not match the index, [`MifRhError::OntologyPackNotUtf8`] if a
 /// checksum-verified fetched file is not valid UTF-8,
 /// [`MifRhError::OntologyPackYaml`] if the vendored or registry pack YAML
-/// is malformed, or [`MifRhError::Io`]/[`MifRhError::Json`] if a topic's
-/// `ontology-map.json` cannot be read or parsed. An individual finding
-/// file that cannot be read or parsed is silently skipped rather than
-/// propagated (the same treatment `collect_topic_samples` gives an
-/// unreadable finding) — a gap-analysis finding is review's concern, not
-/// this function's.
+/// is malformed, or [`MifRhError::Json`] if a topic's `ontology-map.json`
+/// exists but fails to parse. A topic whose `ontology-map.json` does not
+/// exist yet (e.g. review has never run for it) contributes no gaps for
+/// that topic rather than erroring — the same treatment an individual
+/// finding file that cannot be read or parsed gets (the same treatment
+/// `collect_topic_samples` gives an unreadable finding) — a gap-analysis
+/// finding is review's concern, not this function's.
 pub fn check_pin_safety(
     root: &Path,
     source: &str,
@@ -1246,8 +1287,13 @@ pub fn check_pin_safety(
     topics: &[String],
     ids: &[String],
 ) -> Result<Vec<PinSafetyReport>, MifRhError> {
-    // Checked before fetching the index: a source mismatch fails closed regardless of its content.
     let lock = LockFile::load_or_default(&root.join("ontologies.lock.json"))?;
+    // Validated and filtered to actually-pinned ids before any network/lock-source
+    // work: nothing to analyze (and nothing to fail closed about) if none are pinned.
+    let pinned_ids = pinned_requested_ids(&lock, ids)?;
+    if pinned_ids.is_empty() {
+        return Ok(Vec::new());
+    }
     check_lock_source(&lock, source)?;
     let index_bytes = fetch_raw(source, "index.json")?;
     let index_sha256 = sha256_hex(&index_bytes);
@@ -1272,23 +1318,9 @@ pub fn check_pin_safety(
     }
 
     let mut reports = Vec::new();
-    let mut seen_ids = HashSet::new();
-    for id in ids {
-        // Skip a repeated id: nothing new to analyze, and avoids duplicate fetches/output.
-        if !seen_ids.insert(id.as_str()) {
-            continue;
-        }
-        // `id` is joined onto a filesystem path below (`old_path`), so it
-        // must be validated the same way `resolve_fetch_set` validates
-        // every id (including directly-requested ones) before any use —
-        // a caller-supplied id is just as untrusted a path component as
-        // one discovered via the registry's `extends` chain.
-        if !is_wellformed_id(id) {
-            return Err(MifRhError::MalformedOntologyId { id: id.clone() });
-        }
-        let Some(locked) = lock.ontologies.get(id) else {
-            continue; // nothing pinned, nothing to check
-        };
+    for id in &pinned_ids {
+        // Guaranteed present: pinned_requested_ids already filtered to ids in lock.ontologies.
+        let locked = &lock.ontologies[id];
         let entry = index
             .ontologies
             .get(id)
@@ -2342,6 +2374,50 @@ mod tests {
             error,
             super::MifRhError::LockSourceMismatch { .. }
         ));
+    }
+
+    #[test]
+    fn check_pin_safety_fails_closed_on_a_lock_with_pins_but_no_recorded_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = seed_pin_safety_fixture(dir.path(), "0.1.0", "0.2.0");
+        // A legacy/hand-edited lock: pins present, source empty. Must not
+        // be trusted against any caller-supplied source.
+        let lock_path = dir.path().join("ontologies.lock.json");
+        let mut lock: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&lock_path).unwrap()).unwrap();
+        lock["source"] = serde_json::json!("");
+        fs::write(&lock_path, serde_json::to_string(&lock).unwrap()).unwrap();
+
+        let error = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &dir.path().join("reports"),
+            &[],
+            &["edu-fixture".to_string()],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            super::MifRhError::LockSourceMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn check_pin_safety_short_circuits_before_any_fetch_when_nothing_is_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        // No ontologies.lock.json at all, and an unreachable source: if the
+        // short-circuit didn't happen before fetching the registry index,
+        // this would fail with a RegistryFetch error instead of returning
+        // an empty result.
+        let reports = super::check_pin_safety(
+            dir.path(),
+            "http://127.0.0.1.invalid/unreachable",
+            &dir.path().join("reports"),
+            &[],
+            &["not-pinned-anywhere".to_string()],
+        )
+        .unwrap();
+        assert!(reports.is_empty());
     }
 
     #[test]
