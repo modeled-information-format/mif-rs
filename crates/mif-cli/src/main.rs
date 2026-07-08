@@ -630,8 +630,11 @@ fn emit_markdown(
         path: file.display().to_string(),
         source,
     })?;
+    // Strip a leading UTF-8 BOM (common in files saved by some Windows
+    // editors), matching `project_to_jsonld`'s handling of the same case.
+    let contents = contents.strip_prefix('\u{feff}').unwrap_or(&contents);
     let jsonld: serde_json::Value =
-        serde_json::from_str(&contents).map_err(|source| CliError::Json {
+        serde_json::from_str(contents).map_err(|source| CliError::Json {
             path: file.display().to_string(),
             source,
         })?;
@@ -1028,6 +1031,33 @@ Test content.
         .unwrap();
         assert!(output.starts_with("---\n"));
         assert!(output.contains("Test content."));
+    }
+
+    #[test]
+    fn emit_markdown_accepts_json_ld_with_a_leading_byte_order_mark() {
+        // Regression: emit_markdown parsed JSON directly, unlike
+        // project_to_jsonld (used by validate/ingest/roundtrip/emit-jsonld),
+        // which strips a leading UTF-8 BOM first. A BOM-prefixed file that
+        // every other command accepted failed here.
+        let mut contents = "\u{feff}".to_string();
+        contents.push_str(
+            r#"{
+                "@context": "https://mif-spec.dev/schema/context.jsonld",
+                "@type": "Concept",
+                "@id": "urn:mif:memory:bom-test",
+                "conceptType": "semantic",
+                "content": "Test content.",
+                "created": "2026-07-02T00:00:00Z"
+            }"#,
+        );
+        let file = write_temp_file(&contents);
+        let output = emit_markdown(
+            file.path(),
+            None,
+            mif_frontmatter::FrontmatterShape::V1Canonical,
+        )
+        .unwrap();
+        assert!(output.starts_with("---\n"));
     }
 
     #[test]

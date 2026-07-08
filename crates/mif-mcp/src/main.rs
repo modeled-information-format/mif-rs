@@ -638,8 +638,11 @@ fn emit_markdown_document_inner(
         path: file.display().to_string(),
         source,
     })?;
+    // Strip a leading UTF-8 BOM (common in files saved by some Windows
+    // editors), matching `project_to_jsonld`'s handling of the same case.
+    let contents = contents.strip_prefix('\u{feff}').unwrap_or(&contents);
     let jsonld: serde_json::Value =
-        serde_json::from_str(&contents).map_err(|source| McpError::Json {
+        serde_json::from_str(contents).map_err(|source| McpError::Json {
             path: file.display().to_string(),
             source,
         })?;
@@ -1120,6 +1123,29 @@ Test content via MCP.
                 "created": "2026-07-02T00:00:00Z"
             }"#,
         );
+        let result = Mif.emit_markdown_document(Parameters(EmitMarkdownParams {
+            file: file.path().to_path_buf(),
+            out: None,
+            shape: None,
+        }));
+        assert!(result.starts_with("---\n"));
+    }
+
+    #[test]
+    fn emit_markdown_tool_accepts_json_ld_with_a_leading_byte_order_mark() {
+        // See the identical regression in mif-cli's test module.
+        let mut contents = "\u{feff}".to_string();
+        contents.push_str(
+            r#"{
+                "@context": "https://mif-spec.dev/schema/context.jsonld",
+                "@type": "Concept",
+                "@id": "urn:mif:memory:mcp-bom-test",
+                "conceptType": "semantic",
+                "content": "Test content.",
+                "created": "2026-07-02T00:00:00Z"
+            }"#,
+        );
+        let file = write_temp_file(&contents);
         let result = Mif.emit_markdown_document(Parameters(EmitMarkdownParams {
             file: file.path().to_path_buf(),
             out: None,
