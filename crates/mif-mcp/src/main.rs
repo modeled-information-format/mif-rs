@@ -32,7 +32,6 @@ struct ValidateParams {
     /// MIF level floor to additionally require (1, 2, or 3). Level 1's
     /// fields are already covered by the canonical schema, so the default
     /// is a plain schema validation.
-    #[serde(default)]
     level: Option<u8>,
 }
 
