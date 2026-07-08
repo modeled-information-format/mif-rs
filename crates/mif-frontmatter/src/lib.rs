@@ -703,11 +703,12 @@ pub fn roundtrip_lossless(md_text: &str) -> Result<(), FrontmatterError> {
 
 /// Proves a JSON-LD document's round trip through markdown is lossless.
 ///
-/// Every field present in `jsonld` survives with the same value after
-/// projecting to markdown (via [`jsonld_to_md`]) and back (via
-/// [`md_to_jsonld`]). Returns the derived `(frontmatter, body)` pair on
-/// success, so a caller that needs the markdown output doesn't have to
-/// reproject.
+/// Every TOP-LEVEL field present in `jsonld` survives with the same value
+/// (compared as a whole, so a changed nested structure under an unchanged
+/// key is still caught) after projecting to markdown (via [`jsonld_to_md`])
+/// and back (via [`md_to_jsonld`]). Returns the derived `(frontmatter,
+/// body)` pair on success, so a caller that needs the markdown output
+/// doesn't have to reproject.
 ///
 /// Unlike [`roundtrip_lossless`] (which proves a markdown document's own
 /// projection is a stable fixed point), this proves fidelity to the
