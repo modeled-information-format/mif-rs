@@ -270,12 +270,55 @@ pub struct VendoredOntology {
     pub version: String,
 }
 
+/// One ontology [`fetch`] left untouched at its pinned version.
+///
+/// Its `ontologies.lock.json` entry differs from the registry's current
+/// version, and `refresh` was not set (research-harness-template#270: a
+/// pinned corpus must not silently advance underneath an already-stamped
+/// finding set).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinnedSkipped {
+    /// The ontology's id.
+    pub id: String,
+    /// The version currently pinned in `ontologies.lock.json`.
+    pub locked_version: String,
+    /// The version the registry currently offers.
+    pub registry_version: String,
+}
+
 /// The outcome of a [`fetch`] call.
 #[derive(Debug, Clone, Default)]
 pub struct FetchReport {
-    /// Every ontology newly vendored by this call (already-vendored,
-    /// unchanged ontologies are not re-listed).
+    /// Every ontology newly vendored or refreshed by this call
+    /// (already-vendored, unchanged ontologies are not re-listed).
     pub vendored: Vec<VendoredOntology>,
+    /// Every ontology left at its pinned version because the registry has
+    /// moved past it and `refresh` was not set. Never populated on a first
+    /// fetch of an id (nothing pinned yet to hold).
+    pub pinned_skipped: Vec<PinnedSkipped>,
+}
+
+/// Whether `id` is already pinned in `lock` at a version different from
+/// `entry`'s (the registry's current one) and `refresh` was not set — the
+/// rht#270 drift `fetch` must hold rather than silently advance past.
+fn pinned_below_registry(
+    refresh: bool,
+    lock: &LockFile,
+    id: &str,
+    entry: &IndexEntry,
+) -> Option<PinnedSkipped> {
+    if refresh {
+        return None;
+    }
+    let locked = lock.ontologies.get(id)?;
+    if locked.version == entry.version {
+        return None;
+    }
+    Some(PinnedSkipped {
+        id: id.to_string(),
+        locked_version: locked.version.clone(),
+        registry_version: entry.version.clone(),
+    })
 }
 
 /// Vendors `ids` and their `extends` closure from the registry.
@@ -293,6 +336,16 @@ pub struct FetchReport {
 /// moved — unless the lock's `index_sha256` is cleared to re-pin
 /// deliberately.
 ///
+/// An id already present in `ontologies.lock.json` whose pinned version
+/// differs from the registry's current one is left untouched unless
+/// `refresh` is set — the lock IS the version pin (rht#270): a corpus must
+/// not have an ontology's schema silently advance underneath its
+/// already-stamped findings just because the registry published a newer
+/// version. Skipped ids are reported in
+/// [`FetchReport::pinned_skipped`], never silently dropped. An id with no
+/// existing lock entry (a first-time fetch) is unaffected by `refresh` and
+/// always vendors at the registry's current version.
+///
 /// # Errors
 ///
 /// Returns [`MifRhError::RegistryFetch`] if the index or a file cannot be
@@ -304,7 +357,12 @@ pub struct FetchReport {
 /// [`MifRhError::ChecksumMismatch`] if a fetched file's sha256 does not
 /// match the index, or [`MifRhError::Io`] if a vendored file cannot be
 /// written or the lock cannot be saved.
-pub fn fetch(root: &Path, source: &str, ids: &[String]) -> Result<FetchReport, MifRhError> {
+pub fn fetch(
+    root: &Path,
+    source: &str,
+    ids: &[String],
+    refresh: bool,
+) -> Result<FetchReport, MifRhError> {
     let index_bytes = fetch_raw(source, "index.json")?;
     let index_sha256 = sha256_hex(&index_bytes);
     let index: RegistryIndex =
@@ -328,6 +386,7 @@ pub fn fetch(root: &Path, source: &str, ids: &[String]) -> Result<FetchReport, M
 
     let fetch_list = resolve_fetch_set(root, &index, ids)?;
     let mut vendored = Vec::new();
+    let mut pinned_skipped = Vec::new();
     let packs_dir = root.join("packs/ontologies");
     // Set before the loop (not after) and persisted incrementally per id
     // below: if a later id in this same request fails
@@ -344,6 +403,10 @@ pub fn fetch(root: &Path, source: &str, ids: &[String]) -> Result<FetchReport, M
         let Some(entry) = index.ontologies.get(id) else {
             continue;
         };
+        if let Some(skip) = pinned_below_registry(refresh, &lock, id, entry) {
+            pinned_skipped.push(skip);
+            continue;
+        }
         // `entry.file` is later joined onto a filesystem path, so it must be
         // exactly one normal path component (a bare filename) — checking
         // only for `/` and `..` still lets a Windows-style separator
@@ -412,15 +475,19 @@ pub fn fetch(root: &Path, source: &str, ids: &[String]) -> Result<FetchReport, M
             version: entry.version.clone(),
         });
     }
-    if fetch_list.is_empty() {
-        // Nothing to vendor (every requested id was a committed base
-        // layer) — still worth persisting the pin so a later fetch from
-        // this source has one to compare against, but no per-id write
-        // happened above to do it.
+    if vendored.is_empty() {
+        // No per-id write happened above to persist the mutated
+        // index_sha256/source: either fetch_list was empty (every requested
+        // id was a committed base layer), or every entry in it was pinned
+        // and skipped. Either way the pin/trust-root mutations made before
+        // the loop still need to land on disk.
         crate::write_json_atomic(&lock_path, &lock)?;
     }
 
-    Ok(FetchReport { vendored })
+    Ok(FetchReport {
+        vendored,
+        pinned_skipped,
+    })
 }
 
 /// Reads `harness.config.json`'s `.ontologies[]` (JSON, since `sync_registry`
@@ -730,7 +797,11 @@ pub fn sync_registry(
     }
 
     let enabled = enabled_ontology_ids(&config);
-    let fetch_report = fetch(root, source, &enabled)?;
+    // `refresh: false` — sync-registry's job is discovering NEWLY published
+    // ids and enabling them, not silently advancing ids already pinned in
+    // ontologies.lock.json (rht#270). A newly-discovered id has no lock
+    // entry yet, so it always vendors regardless of this flag.
+    let fetch_report = fetch(root, source, &enabled, false)?;
     sync_catalog(root, config_path, sidecar_path)?;
 
     Ok(RegistrySyncReport {
@@ -924,7 +995,7 @@ mod tests {
         write_base_layer(dir.path());
         let source = write_local_registry(dir.path());
 
-        let report = fetch(dir.path(), &source, &["edu-fixture".to_string()]).unwrap();
+        let report = fetch(dir.path(), &source, &["edu-fixture".to_string()], false).unwrap();
 
         assert_eq!(report.vendored.len(), 1);
         assert_eq!(report.vendored[0].id, "edu-fixture");
@@ -941,6 +1012,139 @@ mod tests {
         // mif-base is a committed base layer: it must never be vendored,
         // even though edu-fixture's extends names it.
         assert!(!dir.path().join("packs/ontologies/mif-base").exists());
+    }
+
+    /// Writes a registry at `version` for `edu-fixture` (distinct content
+    /// from `write_local_registry`'s 0.1.0, so its sha256 genuinely
+    /// differs), then seeds `ontologies.lock.json` claiming `edu-fixture`
+    /// is already pinned at `locked_version` — an already-index-trusted
+    /// registry (the index sha256 in the lock matches the one on disk) that
+    /// has moved past a per-id pin, the exact drift `fetch`'s pin-respecting
+    /// check (rht#270) must catch. Returns the registry source path.
+    fn seed_registry_ahead_of_a_pinned_lock(
+        dir: &std::path::Path,
+        registry_version: &str,
+        locked_version: &str,
+    ) -> String {
+        let registry = dir.join("registry");
+        fs::create_dir_all(&registry).unwrap();
+        let yaml = format!(
+            "ontology:\n  id: edu-fixture\n  version: \"{registry_version}\"\n  description: \
+             \"An edu fixture at {registry_version}\"\n  extends: [mif-base]\nentity_types: \
+             []\n"
+        );
+        let sha = sha256_of(yaml.as_bytes());
+        let index = format!(
+            r#"{{"ontologies":{{"edu-fixture":{{"version":"{registry_version}","sha256":"{sha}","file":"edu-fixture.ontology.yaml","extends":["mif-base"]}}}}}}"#
+        );
+        fs::write(registry.join("index.json"), &index).unwrap();
+        fs::write(registry.join("edu-fixture.ontology.yaml"), yaml).unwrap();
+
+        let source = registry.display().to_string();
+        let lock = serde_json::json!({
+            "schema": "mif-ontology-lock/v1",
+            "source": source,
+            "index_sha256": sha256_of(index.as_bytes()),
+            "ontologies": {
+                "edu-fixture": {"version": locked_version, "sha256": "irrelevant-for-this-test"}
+            }
+        });
+        fs::write(
+            dir.join("ontologies.lock.json"),
+            serde_json::to_string(&lock).unwrap(),
+        )
+        .unwrap();
+        source
+    }
+
+    #[test]
+    fn fetch_leaves_a_pinned_ontology_untouched_when_the_registry_advances_without_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        write_base_layer(dir.path());
+        let source = seed_registry_ahead_of_a_pinned_lock(dir.path(), "0.2.0", "0.1.0");
+
+        let report = fetch(dir.path(), &source, &["edu-fixture".to_string()], false).unwrap();
+
+        assert!(report.vendored.is_empty());
+        assert_eq!(report.pinned_skipped.len(), 1);
+        assert_eq!(report.pinned_skipped[0].id, "edu-fixture");
+        assert_eq!(report.pinned_skipped[0].locked_version, "0.1.0");
+        assert_eq!(report.pinned_skipped[0].registry_version, "0.2.0");
+
+        let lock: super::LockFile = serde_json::from_str(
+            &fs::read_to_string(dir.path().join("ontologies.lock.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(lock.ontologies["edu-fixture"].version, "0.1.0");
+        assert!(
+            !dir.path()
+                .join("packs/ontologies/edu-fixture/edu-fixture.ontology.yaml")
+                .exists(),
+            "a pinned-and-skipped id must never be written to disk"
+        );
+    }
+
+    #[test]
+    fn fetch_refresh_advances_a_pinned_ontology_to_the_registry_version() {
+        let dir = tempfile::tempdir().unwrap();
+        write_base_layer(dir.path());
+        let source = seed_registry_ahead_of_a_pinned_lock(dir.path(), "0.2.0", "0.1.0");
+
+        let report = fetch(dir.path(), &source, &["edu-fixture".to_string()], true).unwrap();
+
+        assert!(report.pinned_skipped.is_empty());
+        assert_eq!(report.vendored.len(), 1);
+        assert_eq!(report.vendored[0].version, "0.2.0");
+
+        let lock: super::LockFile = serde_json::from_str(
+            &fs::read_to_string(dir.path().join("ontologies.lock.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(lock.ontologies["edu-fixture"].version, "0.2.0");
+        assert!(
+            dir.path()
+                .join("packs/ontologies/edu-fixture/edu-fixture.ontology.yaml")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn fetch_persists_a_cleared_index_pin_even_when_every_id_is_pinned_skipped() {
+        // Regression: when every requested id is pinned-and-skipped, no
+        // per-id write happens in the loop, so the index_sha256/source
+        // mutated before the loop must still be persisted by the
+        // fallback write after it — otherwise a deliberate re-pin (clear
+        // index_sha256, re-fetch) silently fails to record the new trust
+        // root whenever it also happens to hit only already-pinned ids.
+        let dir = tempfile::tempdir().unwrap();
+        write_base_layer(dir.path());
+        let source = seed_registry_ahead_of_a_pinned_lock(dir.path(), "0.2.0", "0.1.0");
+
+        // Clear index_sha256, simulating a deliberate re-pin in progress.
+        let mut lock: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(dir.path().join("ontologies.lock.json")).unwrap(),
+        )
+        .unwrap();
+        lock.as_object_mut().unwrap().remove("index_sha256");
+        fs::write(
+            dir.path().join("ontologies.lock.json"),
+            serde_json::to_string(&lock).unwrap(),
+        )
+        .unwrap();
+
+        let report = fetch(dir.path(), &source, &["edu-fixture".to_string()], false).unwrap();
+        assert!(report.vendored.is_empty());
+        assert_eq!(report.pinned_skipped.len(), 1);
+
+        let after: super::LockFile = serde_json::from_str(
+            &fs::read_to_string(dir.path().join("ontologies.lock.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            after.index_sha256.is_some(),
+            "the re-pinned index_sha256 must be persisted even though every \
+             requested id was pinned-skipped"
+        );
     }
 
     #[test]
@@ -960,6 +1164,7 @@ mod tests {
             dir.path(),
             &registry.display().to_string(),
             &["edu-fixture".to_string()],
+            false,
         )
         .unwrap_err();
         assert!(matches!(error, super::MifRhError::ChecksumMismatch { .. }));
@@ -992,6 +1197,7 @@ mod tests {
                 dir.path(),
                 &registry.display().to_string(),
                 &["edu-fixture".to_string()],
+                false,
             )
             .unwrap_err();
             assert!(
@@ -1016,6 +1222,7 @@ mod tests {
             dir.path(),
             &registry.display().to_string(),
             &["edu-fixture".to_string()],
+            false,
         )
         .unwrap_err();
 
@@ -1031,7 +1238,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_base_layer(dir.path());
         let source = write_local_registry(dir.path());
-        fetch(dir.path(), &source, &["edu-fixture".to_string()]).unwrap();
+        fetch(dir.path(), &source, &["edu-fixture".to_string()], false).unwrap();
 
         // The same source's index.json now hashes differently.
         fs::write(
@@ -1042,7 +1249,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = fetch(dir.path(), &source, &["edu-fixture".to_string()]).unwrap_err();
+        let error = fetch(dir.path(), &source, &["edu-fixture".to_string()], false).unwrap_err();
         assert!(matches!(error, super::MifRhError::IndexPinMismatch { .. }));
     }
 
@@ -1051,7 +1258,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = write_local_registry(dir.path());
 
-        let error = fetch(dir.path(), &source, &["nonexistent-id".to_string()]).unwrap_err();
+        let error = fetch(dir.path(), &source, &["nonexistent-id".to_string()], false).unwrap_err();
         assert!(matches!(
             error,
             super::MifRhError::OntologyNotInRegistry { .. }
@@ -1079,6 +1286,7 @@ mod tests {
             dir.path(),
             &registry.display().to_string(),
             &["edu-fixture".to_string()],
+            false,
         )
         .unwrap_err();
         assert!(matches!(
@@ -1108,6 +1316,7 @@ mod tests {
             dir.path(),
             &source,
             &["edu-fixture".to_string(), "bad-fixture".to_string()],
+            false,
         )
         .unwrap_err();
         assert!(matches!(error, super::MifRhError::ChecksumMismatch { .. }));
