@@ -911,6 +911,279 @@ pub fn lock_check(root: &Path, config_path: &Path) -> Result<LockCheckReport, Mi
     Ok(report)
 }
 
+/// One `required` field the registry's advanced schema newly demands for an
+/// entity type both the vendored and registry packs declare.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewlyRequiredField {
+    /// The entity type the field was added to.
+    pub entity_type: String,
+    /// The newly required field's name.
+    pub field: String,
+}
+
+/// A stamped finding missing a newly required field.
+///
+/// The breaking-change warning [`check_pin_safety`] exists to surface,
+/// distinct from `fetch`'s plain version-drift warning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinSafetyGap {
+    /// The topic the finding belongs to.
+    pub topic: String,
+    /// The finding's id.
+    pub finding_id: String,
+    /// The finding's stamped entity type.
+    pub entity_type: String,
+    /// The newly required field the finding's `entity` payload lacks.
+    pub field: String,
+}
+
+/// One pinned, drifted ontology's pin-safety analysis.
+#[derive(Debug, Clone, Default)]
+pub struct PinSafetyReport {
+    /// The ontology's id.
+    pub id: String,
+    /// The version currently pinned in `ontologies.lock.json`.
+    pub locked_version: String,
+    /// The version the registry currently offers.
+    pub registry_version: String,
+    /// Fields the registry's advanced schema newly requires, relative to
+    /// the vendored version. Empty if the vendored pack could not be read
+    /// to diff against, or if nothing newly required was found.
+    pub newly_required: Vec<NewlyRequiredField>,
+    /// Stamped findings missing a newly required field. Always empty when
+    /// `newly_required` is empty.
+    pub gaps: Vec<PinSafetyGap>,
+}
+
+/// The `required` array of an entity type's `schema` object, as strings.
+fn required_fields(schema: &serde_json::Value) -> Vec<String> {
+    schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The `required` fields `new`'s schema adds for an entity type present in
+/// both `old` and `new`. An entity type absent from `old` is skipped
+/// entirely: it is wholly new, so no existing stamped finding could have
+/// been typed with it, and nothing about it can be "newly" required.
+fn diff_newly_required(
+    old: &crate::ontology_pack::OntologyPack,
+    new: &crate::ontology_pack::OntologyPack,
+) -> Vec<NewlyRequiredField> {
+    let mut out = Vec::new();
+    for new_type in &new.entity_types {
+        let Some(old_type) = old.entity_types.iter().find(|t| t.name == new_type.name) else {
+            continue;
+        };
+        let old_required = required_fields(&old_type.schema);
+        for field in required_fields(&new_type.schema) {
+            if !old_required.contains(&field) {
+                out.push(NewlyRequiredField {
+                    entity_type: new_type.name.clone(),
+                    field,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Cross-references `newly_required` against every stamped finding (basis
+/// declared/resolved and valid — the same predicate `collect_topic_samples`
+/// uses) across `topics` whose `resolved_ontology` names `ontology_id`,
+/// reporting one [`PinSafetyGap`] per finding whose `entity` payload lacks a
+/// newly required field.
+fn find_pin_safety_gaps(
+    reports_dir: &Path,
+    topics: &[String],
+    ontology_id: &str,
+    newly_required: &[NewlyRequiredField],
+) -> Result<Vec<PinSafetyGap>, MifRhError> {
+    let mut gaps = Vec::new();
+    for topic in topics {
+        let map_path = reports_dir.join(topic).join("ontology-map.json");
+        let contents = match std::fs::read_to_string(&map_path) {
+            Ok(contents) => contents,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(source) => {
+                return Err(MifRhError::Io {
+                    path: map_path.display().to_string(),
+                    source,
+                });
+            },
+        };
+        let records: Vec<crate::resolve::MapRecord> =
+            serde_json::from_str(&contents).map_err(|source| MifRhError::Json {
+                path: map_path.display().to_string(),
+                source,
+            })?;
+
+        let findings_dir = reports_dir.join(topic).join("findings");
+        if !findings_dir.is_dir() {
+            continue;
+        }
+        for file in crate::review::list_finding_files(&findings_dir)? {
+            let Ok(finding) = crate::finding::Finding::load(&file) else {
+                continue; // gap findings are review's concern, not this one's
+            };
+            let Some(record) = records.iter().find(|r| r.finding_id == finding.id) else {
+                continue;
+            };
+            let stamped = record.valid
+                && matches!(
+                    record.basis,
+                    crate::resolve::Basis::Declared | crate::resolve::Basis::Resolved
+                );
+            if !stamped {
+                continue;
+            }
+            let bound_to_this_ontology = record
+                .resolved_ontology
+                .as_deref()
+                .and_then(|resolved| resolved.split('@').next())
+                == Some(ontology_id);
+            if !bound_to_this_ontology {
+                continue;
+            }
+            let Some(entity_type) = record.entity_type.as_deref() else {
+                continue;
+            };
+            gaps.extend(
+                newly_required
+                    .iter()
+                    .filter(|nrf| nrf.entity_type == entity_type)
+                    .filter(|nrf| {
+                        finding
+                            .entity
+                            .as_ref()
+                            .and_then(|entity| entity.get(&nrf.field))
+                            .is_none_or(serde_json::Value::is_null)
+                    })
+                    .map(|nrf| PinSafetyGap {
+                        topic: topic.clone(),
+                        finding_id: finding.id.clone(),
+                        entity_type: entity_type.to_string(),
+                        field: nrf.field.clone(),
+                    }),
+            );
+        }
+    }
+    Ok(gaps)
+}
+
+/// Warns only when a pinned ontology's advanced schema actually breaks an
+/// already-stamped finding.
+///
+/// For each of `ids` currently pinned in `root/ontologies.lock.json` at a
+/// version behind the registry's current one, diffs the vendored (old) and
+/// registry (new) schema's `entity_types[].schema.required` lists, and
+/// cross-references any newly required field against `topics`' already-
+/// stamped findings — the narrower, smarter follow-up to `fetch`'s plain
+/// version-drift warning (research-harness-template#270's proposed fix #2;
+/// tracked as mif-rs#61).
+///
+/// An id with no lock entry, or already at the registry's current version,
+/// produces no report entry — nothing pinned, or nothing drifted, to
+/// analyze. An id whose vendored pack cannot be read from disk (e.g.
+/// deleted since the pin was recorded) produces a report entry with empty
+/// `newly_required`/`gaps`: the version drift is still real, but nothing
+/// can be diffed against.
+///
+/// Read-only: never touches `ontologies.lock.json`, never vendors, never
+/// advances a pin. Downloads the registry's current file for a drifted id
+/// purely to diff it — unlike `fetch`, which never re-fetches a
+/// pinned-skipped id's file at all.
+///
+/// # Errors
+///
+/// Returns [`MifRhError::RegistryFetch`] if the registry index or a
+/// drifted id's file cannot be fetched, [`MifRhError::RegistryIndexInvalid`]
+/// if the index is not valid JSON, [`MifRhError::OntologyNotInRegistry`] if
+/// a requested id has no index entry, [`MifRhError::OntologyPackYaml`] if
+/// the vendored or registry pack YAML is malformed, or
+/// [`MifRhError::Io`]/[`MifRhError::Json`] if a topic's `ontology-map.json`
+/// or a finding file cannot be read.
+pub fn check_pin_safety(
+    root: &Path,
+    source: &str,
+    reports_dir: &Path,
+    topics: &[String],
+    ids: &[String],
+) -> Result<Vec<PinSafetyReport>, MifRhError> {
+    let index_bytes = fetch_raw(source, "index.json")?;
+    let index: RegistryIndex =
+        serde_json::from_slice(&index_bytes).map_err(|err| MifRhError::RegistryIndexInvalid {
+            registry_source: source.to_string(),
+            detail: err.to_string(),
+        })?;
+    let lock = LockFile::load_or_default(&root.join("ontologies.lock.json"))?;
+
+    let mut reports = Vec::new();
+    for id in ids {
+        let Some(locked) = lock.ontologies.get(id) else {
+            continue; // nothing pinned, nothing to check
+        };
+        let entry = index
+            .ontologies
+            .get(id)
+            .ok_or_else(|| MifRhError::OntologyNotInRegistry { id: id.clone() })?;
+        if locked.version == entry.version {
+            continue; // not drifted, nothing to check
+        }
+
+        let old_path = root
+            .join("packs/ontologies")
+            .join(id)
+            .join(format!("{id}.ontology.yaml"));
+        let old_pack = match std::fs::read_to_string(&old_path) {
+            Ok(yaml) => Some(parse_pack(&yaml, &old_path.display().to_string())?),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => None,
+            Err(source) => {
+                return Err(MifRhError::Io {
+                    path: old_path.display().to_string(),
+                    source,
+                });
+            },
+        };
+        let Some(old_pack) = old_pack else {
+            reports.push(PinSafetyReport {
+                id: id.clone(),
+                locked_version: locked.version.clone(),
+                registry_version: entry.version.clone(),
+                newly_required: Vec::new(),
+                gaps: Vec::new(),
+            });
+            continue;
+        };
+
+        let new_bytes = fetch_raw(source, &entry.file)?;
+        let new_pack = parse_pack(&String::from_utf8_lossy(&new_bytes), &entry.file)?;
+
+        let newly_required = diff_newly_required(&old_pack, &new_pack);
+        let gaps = if newly_required.is_empty() {
+            Vec::new()
+        } else {
+            find_pin_safety_gaps(reports_dir, topics, id, &newly_required)?
+        };
+
+        reports.push(PinSafetyReport {
+            id: id.clone(),
+            locked_version: locked.version.clone(),
+            registry_version: entry.version.clone(),
+            newly_required,
+            gaps,
+        });
+    }
+    Ok(reports)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1525,5 +1798,284 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, super::MifRhError::Json { .. }));
+    }
+
+    /// Seeds a full pin-safety fixture: a vendored (old) pack on disk at
+    /// `locked_version`, a registry (new) pack at `registry_version`
+    /// (`title` entity type's `schema.required` growing from `[name]` to
+    /// `[name, isbn]`), and a lock pinned at `locked_version`. Returns the
+    /// registry source path.
+    fn seed_pin_safety_fixture(
+        dir: &std::path::Path,
+        locked_version: &str,
+        registry_version: &str,
+    ) -> String {
+        let old_yaml = format!(
+            "ontology:\n  id: edu-fixture\n  version: \"{locked_version}\"\n  extends: \
+             [mif-base]\nentity_types:\n  - name: title\n    schema:\n      required: \
+             [name]\n      properties:\n        name: {{type: string}}\n"
+        );
+        fs::create_dir_all(dir.join("packs/ontologies/edu-fixture")).unwrap();
+        fs::write(
+            dir.join("packs/ontologies/edu-fixture/edu-fixture.ontology.yaml"),
+            &old_yaml,
+        )
+        .unwrap();
+
+        let registry = dir.join("registry");
+        fs::create_dir_all(&registry).unwrap();
+        let new_yaml = format!(
+            "ontology:\n  id: edu-fixture\n  version: \"{registry_version}\"\n  extends: \
+             [mif-base]\nentity_types:\n  - name: title\n    schema:\n      required: [name, \
+             isbn]\n      properties:\n        name: {{type: string}}\n        isbn: {{type: \
+             string}}\n"
+        );
+        let sha = sha256_of(new_yaml.as_bytes());
+        let index = format!(
+            r#"{{"ontologies":{{"edu-fixture":{{"version":"{registry_version}","sha256":"{sha}","file":"edu-fixture.ontology.yaml","extends":["mif-base"]}}}}}}"#
+        );
+        fs::write(registry.join("index.json"), &index).unwrap();
+        fs::write(registry.join("edu-fixture.ontology.yaml"), &new_yaml).unwrap();
+
+        let source = registry.display().to_string();
+        let lock = serde_json::json!({
+            "schema": "mif-ontology-lock/v1",
+            "source": source,
+            "index_sha256": sha256_of(index.as_bytes()),
+            "ontologies": {
+                "edu-fixture": {"version": locked_version, "sha256": "irrelevant-for-this-test"}
+            }
+        });
+        fs::write(
+            dir.join("ontologies.lock.json"),
+            serde_json::to_string(&lock).unwrap(),
+        )
+        .unwrap();
+        source
+    }
+
+    /// Writes one topic's `ontology-map.json` (one stamped `title` record
+    /// resolved against `edu-fixture@{locked_version}`) and a matching
+    /// finding file whose `entity` payload is `entity_json`.
+    fn write_stamped_finding(
+        reports_dir: &std::path::Path,
+        topic: &str,
+        locked_version: &str,
+        entity_json: &str,
+    ) {
+        let topic_dir = reports_dir.join(topic);
+        fs::create_dir_all(topic_dir.join("findings")).unwrap();
+        fs::write(
+            topic_dir.join("ontology-map.json"),
+            format!(
+                r#"[{{"finding_id":"f-1","entity_type":"title","resolved_ontology":"edu-fixture@{locked_version}","basis":"resolved","valid":true}}]"#
+            ),
+        )
+        .unwrap();
+        fs::write(
+            topic_dir.join("findings/f-1.json"),
+            format!(r#"{{"@id":"f-1","entity":{entity_json}}}"#),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn check_pin_safety_reports_nothing_for_an_id_with_no_lock_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = seed_pin_safety_fixture(dir.path(), "0.1.0", "0.2.0");
+        fs::remove_file(dir.path().join("ontologies.lock.json")).unwrap();
+
+        let reports = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &dir.path().join("reports"),
+            &[],
+            &["edu-fixture".to_string()],
+        )
+        .unwrap();
+        assert!(reports.is_empty());
+    }
+
+    #[test]
+    fn check_pin_safety_reports_nothing_when_not_drifted() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = seed_pin_safety_fixture(dir.path(), "0.2.0", "0.2.0");
+
+        let reports = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &dir.path().join("reports"),
+            &[],
+            &["edu-fixture".to_string()],
+        )
+        .unwrap();
+        assert!(reports.is_empty());
+    }
+
+    #[test]
+    fn check_pin_safety_flags_a_newly_required_field_missing_from_a_stamped_finding() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = seed_pin_safety_fixture(dir.path(), "0.1.0", "0.2.0");
+        let reports_dir = dir.path().join("reports");
+        write_stamped_finding(&reports_dir, "edu", "0.1.0", r#"{"name":"Algebra I"}"#);
+
+        let reports = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &reports_dir,
+            &["edu".to_string()],
+            &["edu-fixture".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(reports.len(), 1);
+        let report = &reports[0];
+        assert_eq!(report.locked_version, "0.1.0");
+        assert_eq!(report.registry_version, "0.2.0");
+        assert_eq!(report.newly_required.len(), 1);
+        assert_eq!(report.newly_required[0].entity_type, "title");
+        assert_eq!(report.newly_required[0].field, "isbn");
+        assert_eq!(report.gaps.len(), 1);
+        assert_eq!(report.gaps[0].finding_id, "f-1");
+        assert_eq!(report.gaps[0].topic, "edu");
+        assert_eq!(report.gaps[0].field, "isbn");
+    }
+
+    #[test]
+    fn check_pin_safety_reports_no_gap_when_the_stamped_finding_already_has_the_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = seed_pin_safety_fixture(dir.path(), "0.1.0", "0.2.0");
+        let reports_dir = dir.path().join("reports");
+        write_stamped_finding(
+            &reports_dir,
+            "edu",
+            "0.1.0",
+            r#"{"name":"Algebra I","isbn":"978-0-13-000000-0"}"#,
+        );
+
+        let reports = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &reports_dir,
+            &["edu".to_string()],
+            &["edu-fixture".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].newly_required.len(), 1);
+        assert!(
+            reports[0].gaps.is_empty(),
+            "a finding that already carries the newly required field must not be flagged"
+        );
+    }
+
+    #[test]
+    fn check_pin_safety_reports_no_extra_warning_when_nothing_newly_required() {
+        let dir = tempfile::tempdir().unwrap();
+        // Same required list on both sides: no newly required field.
+        let old_yaml = "ontology:\n  id: edu-fixture\n  version: \"0.1.0\"\n  extends: \
+                         [mif-base]\nentity_types:\n  - name: title\n    schema:\n      \
+                         required: [name]\n";
+        fs::create_dir_all(dir.path().join("packs/ontologies/edu-fixture")).unwrap();
+        fs::write(
+            dir.path()
+                .join("packs/ontologies/edu-fixture/edu-fixture.ontology.yaml"),
+            old_yaml,
+        )
+        .unwrap();
+        let registry = dir.path().join("registry");
+        fs::create_dir_all(&registry).unwrap();
+        let new_yaml = "ontology:\n  id: edu-fixture\n  version: \"0.2.0\"\n  extends: \
+                         [mif-base]\nentity_types:\n  - name: title\n    schema:\n      \
+                         required: [name]\n";
+        let sha = sha256_of(new_yaml.as_bytes());
+        let index = format!(
+            r#"{{"ontologies":{{"edu-fixture":{{"version":"0.2.0","sha256":"{sha}","file":"edu-fixture.ontology.yaml","extends":["mif-base"]}}}}}}"#
+        );
+        fs::write(registry.join("index.json"), &index).unwrap();
+        fs::write(registry.join("edu-fixture.ontology.yaml"), new_yaml).unwrap();
+        let source = registry.display().to_string();
+        let lock = serde_json::json!({
+            "schema": "mif-ontology-lock/v1",
+            "source": source,
+            "index_sha256": sha256_of(index.as_bytes()),
+            "ontologies": {"edu-fixture": {"version": "0.1.0", "sha256": "irrelevant"}}
+        });
+        fs::write(
+            dir.path().join("ontologies.lock.json"),
+            serde_json::to_string(&lock).unwrap(),
+        )
+        .unwrap();
+
+        let reports = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &dir.path().join("reports"),
+            &[],
+            &["edu-fixture".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].newly_required.is_empty());
+        assert!(reports[0].gaps.is_empty());
+    }
+
+    #[test]
+    fn check_pin_safety_reports_empty_analysis_when_the_vendored_pack_is_missing_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = seed_pin_safety_fixture(dir.path(), "0.1.0", "0.2.0");
+        fs::remove_file(
+            dir.path()
+                .join("packs/ontologies/edu-fixture/edu-fixture.ontology.yaml"),
+        )
+        .unwrap();
+
+        let reports = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &dir.path().join("reports"),
+            &[],
+            &["edu-fixture".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].locked_version, "0.1.0");
+        assert_eq!(reports[0].registry_version, "0.2.0");
+        assert!(reports[0].newly_required.is_empty());
+        assert!(reports[0].gaps.is_empty());
+    }
+
+    #[test]
+    fn check_pin_safety_reports_an_unrelated_ontology_id_error_for_an_unregistered_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = seed_pin_safety_fixture(dir.path(), "0.1.0", "0.2.0");
+        // Pin an id the registry doesn't know about.
+        let mut lock: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(dir.path().join("ontologies.lock.json")).unwrap(),
+        )
+        .unwrap();
+        lock["ontologies"]["ghost-ontology"] =
+            serde_json::json!({"version": "0.1.0", "sha256": "irrelevant"});
+        fs::write(
+            dir.path().join("ontologies.lock.json"),
+            serde_json::to_string(&lock).unwrap(),
+        )
+        .unwrap();
+
+        let error = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &dir.path().join("reports"),
+            &[],
+            &["ghost-ontology".to_string()],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            super::MifRhError::OntologyNotInRegistry { .. }
+        ));
     }
 }
