@@ -953,9 +953,14 @@ pub struct PinSafetyReport {
     pub locked_version: String,
     /// The version the registry currently offers.
     pub registry_version: String,
+    /// Whether the diff was actually performed. `false` when the vendored
+    /// pack could not be read from disk to diff against — in that case
+    /// `newly_required`/`gaps` are empty because nothing was analyzed, NOT
+    /// because the drift was found safe. Callers must check this before
+    /// treating an empty `gaps` as a clean bill of health.
+    pub analyzed: bool,
     /// Fields the registry's advanced schema newly requires, relative to
-    /// the vendored version. Empty if the vendored pack could not be read
-    /// to diff against, or if nothing newly required was found.
+    /// the vendored version. Always empty when `analyzed` is `false`.
     pub newly_required: Vec<NewlyRequiredField>,
     /// Stamped findings missing a newly required field. Always empty when
     /// `newly_required` is empty.
@@ -1031,6 +1036,10 @@ fn find_pin_safety_gaps(
                 path: map_path.display().to_string(),
                 source,
             })?;
+        // Indexed once per topic rather than linearly scanned per finding
+        // file below (O(records) once vs. O(records) per finding).
+        let records_by_finding_id: std::collections::HashMap<&str, &crate::resolve::MapRecord> =
+            records.iter().map(|r| (r.finding_id.as_str(), r)).collect();
 
         let findings_dir = reports_dir.join(topic).join("findings");
         if !findings_dir.is_dir() {
@@ -1040,7 +1049,7 @@ fn find_pin_safety_gaps(
             let Ok(finding) = crate::finding::Finding::load(&file) else {
                 continue; // gap findings are review's concern, not this one's
             };
-            let Some(record) = records.iter().find(|r| r.finding_id == finding.id) else {
+            let Some(record) = records_by_finding_id.get(finding.id.as_str()).copied() else {
                 continue;
             };
             let stamped = record.valid
@@ -1195,6 +1204,7 @@ pub fn check_pin_safety(
                 id: id.clone(),
                 locked_version: locked.version.clone(),
                 registry_version: entry.version.clone(),
+                analyzed: false,
                 newly_required: Vec::new(),
                 gaps: Vec::new(),
             });
@@ -1235,6 +1245,7 @@ pub fn check_pin_safety(
             id: id.clone(),
             locked_version: locked.version.clone(),
             registry_version: entry.version.clone(),
+            analyzed: true,
             newly_required,
             gaps,
         });
@@ -2102,6 +2113,7 @@ mod tests {
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].locked_version, "0.1.0");
         assert_eq!(reports[0].registry_version, "0.2.0");
+        assert!(!reports[0].analyzed);
         assert!(reports[0].newly_required.is_empty());
         assert!(reports[0].gaps.is_empty());
     }

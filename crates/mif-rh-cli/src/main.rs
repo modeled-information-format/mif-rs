@@ -1078,7 +1078,13 @@ fn ontology_check_pin_safety_cmd(
 
     let mut lines = Vec::new();
     for report in &reports {
-        if report.newly_required.is_empty() {
+        if !report.analyzed {
+            lines.push(format!(
+                "{}: pinned {} -> registry {} (analysis skipped: the vendored pack is not on \
+                 disk to diff against)",
+                report.id, report.locked_version, report.registry_version
+            ));
+        } else if report.newly_required.is_empty() {
             lines.push(format!(
                 "{}: pinned {} -> registry {} (nothing newly required)",
                 report.id, report.locked_version, report.registry_version
@@ -4430,6 +4436,52 @@ mod tests {
         assert!(outcome.message.contains("WARNING"));
         assert!(outcome.message.contains("f-1"));
         assert!(outcome.message.contains("isbn"));
+    }
+
+    #[test]
+    fn ontology_check_pin_safety_cmd_reports_skipped_analysis_distinctly_from_safe() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ontology_root(dir.path());
+
+        // A registry ahead of the pinned lock, but no vendored pack on disk
+        // to diff against: check_pin_safety cannot analyze this id, and the
+        // CLI must not conflate that with "nothing newly required".
+        let registry = dir.path().join("registry");
+        fs::create_dir_all(&registry).unwrap();
+        fs::write(
+            registry.join("index.json"),
+            r#"{"ontologies":{"edu-fixture":{"version":"0.2.0","sha256":"irrelevant","file":"edu-fixture.ontology.yaml","extends":["mif-base"]}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            registry.join("edu-fixture.ontology.yaml"),
+            "ontology:\n  id: edu-fixture\n  version: \"0.2.0\"\nentity_types: []\n",
+        )
+        .unwrap();
+        let source = registry.display().to_string();
+        fs::write(
+            dir.path().join("ontologies.lock.json"),
+            serde_json::to_string(&serde_json::json!({
+                "schema": "mif-ontology-lock/v1",
+                "source": source,
+                "ontologies": {"edu-fixture": {"version": "0.1.0", "sha256": "irrelevant"}}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let config_path = dir.path().join("harness.config.json");
+        let outcome = ontology_check_pin_safety_cmd(
+            &["edu-fixture".to_string()],
+            Some(dir.path()),
+            Some(config_path.as_path()),
+            Some(&source),
+            None,
+        )
+        .unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("analysis skipped"));
+        assert!(!outcome.message.contains("nothing newly required"));
     }
 
     #[test]
