@@ -44,6 +44,11 @@ enum Command {
         /// Path to the MIF document (markdown with frontmatter, or a
         /// JSON-LD projection) to validate.
         file: PathBuf,
+        /// MIF level floor to additionally require (1, 2, or 3). Level 1's
+        /// fields are already covered by the canonical schema, so the
+        /// default is a plain schema validation.
+        #[arg(long, default_value_t = 1)]
+        level: u8,
     },
     /// Ontology-related operations.
     Ontology {
@@ -307,7 +312,7 @@ fn main() -> ExitCode {
 
 fn run(command: &Command) -> Result<String, CliError> {
     match command {
-        Command::Validate { file } => validate(file),
+        Command::Validate { file, level } => validate(file, *level),
         Command::Ontology { command } => match command {
             OntologyCommand::Resolve { id, ontologies_dir } => resolve(id, ontologies_dir),
         },
@@ -356,15 +361,17 @@ fn format_matches(matches: &[mif_store::SimilarityMatch]) -> String {
 /// Validates one MIF document: projects markdown-with-frontmatter or
 /// JSON-LD input to JSON-LD via [`project_to_jsonld`] (proving the
 /// markdown <-> JSON-LD round trip is lossless either way), then
-/// schema-checks the result. Unlike [`ingest`], this has no side effects:
+/// schema-checks the result against the canonical schema and the requested
+/// `level` floor (1, 2, or 3). Unlike [`ingest`], this has no side effects:
 /// no embedding model load, no vector store write.
 ///
 /// # Errors
 ///
 /// Returns [`CliError`] if the file cannot be read, is not valid
-/// JSON-LD/frontmatter, does not round-trip losslessly, or does not
-/// conform to the canonical MIF schema.
-fn validate(file: &Path) -> Result<String, CliError> {
+/// JSON-LD/frontmatter, does not round-trip losslessly, does not conform to
+/// the canonical MIF schema, does not satisfy the requested level floor, or
+/// `level` is not 1, 2, or 3.
+fn validate(file: &Path, level: u8) -> Result<String, CliError> {
     let contents = std::fs::read_to_string(file).map_err(|source| CliError::Io {
         path: file.display().to_string(),
         source,
@@ -374,7 +381,8 @@ fn validate(file: &Path) -> Result<String, CliError> {
         &contents,
         mif_frontmatter::FrontmatterShape::V1Canonical,
     )?;
-    mif_schema::validate_document(&jsonld)?;
+    let level = mif_schema::Level::try_from(level)?;
+    mif_schema::validate_level(&jsonld, level)?;
     Ok(format!("{}: valid", file.display()))
 }
 
@@ -702,7 +710,7 @@ mod tests {
             }"#,
         );
         assert_eq!(
-            validate(file.path()).unwrap(),
+            validate(file.path(), 1).unwrap(),
             format!("{}: valid", file.path().display())
         );
     }
@@ -716,7 +724,7 @@ mod tests {
         // one this test runs an assertion against.
         let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
         assert_eq!(
-            validate(file.path()).unwrap(),
+            validate(file.path(), 1).unwrap(),
             format!("{}: valid", file.path().display())
         );
     }
@@ -728,7 +736,7 @@ mod tests {
         // markdown-vs-JSON-LD dispatch.
         let file = write_temp_file(&format!("\u{feff}{VALID_MARKDOWN_FIXTURE}"));
         assert_eq!(
-            validate(file.path()).unwrap(),
+            validate(file.path(), 1).unwrap(),
             format!("{}: valid", file.path().display())
         );
     }
@@ -736,22 +744,67 @@ mod tests {
     #[test]
     fn validate_rejects_a_non_conformant_document() {
         let file = write_temp_file(r#"{"content": "missing required fields"}"#);
-        let error = validate(file.path()).unwrap_err();
+        let error = validate(file.path(), 1).unwrap_err();
         assert!(error.to_string().contains("failed schema validation"));
     }
 
     #[test]
     fn validate_reports_invalid_json() {
         let file = write_temp_file("not json");
-        let error = validate(file.path()).unwrap_err();
+        let error = validate(file.path(), 1).unwrap_err();
         assert!(error.to_string().contains("failed to parse"));
     }
 
     #[test]
     fn validate_reports_missing_file() {
         let missing = std::path::Path::new("/nonexistent/mif-cli-test-fixture.json");
-        let error = validate(missing).unwrap_err();
+        let error = validate(missing, 1).unwrap_err();
         assert!(error.to_string().contains("failed to read"));
+    }
+
+    #[test]
+    fn validate_l2_rejects_a_document_missing_the_l2_floor_fields() {
+        let file = write_temp_file(
+            r#"{
+                "@context": "https://mif-spec.dev/schema/context.jsonld",
+                "@type": "Concept",
+                "@id": "urn:mif:memory:test-001",
+                "conceptType": "semantic",
+                "content": "Test content.",
+                "created": "2026-07-02T00:00:00Z"
+            }"#,
+        );
+        let error = validate(file.path(), 2).unwrap_err();
+        assert!(error.to_string().contains("L2 level floor"));
+        assert!(error.to_string().contains("namespace"));
+    }
+
+    #[test]
+    fn validate_l2_accepts_a_document_with_the_l2_floor_fields() {
+        let file = write_temp_file(
+            r#"{
+                "@context": "https://mif-spec.dev/schema/context.jsonld",
+                "@type": "Concept",
+                "@id": "urn:mif:memory:test-001",
+                "conceptType": "semantic",
+                "content": "Test content.",
+                "created": "2026-07-02T00:00:00Z",
+                "namespace": "test",
+                "modified": "2026-07-02T00:00:00Z",
+                "temporal": {}
+            }"#,
+        );
+        assert_eq!(
+            validate(file.path(), 2).unwrap(),
+            format!("{}: valid", file.path().display())
+        );
+    }
+
+    #[test]
+    fn validate_rejects_an_out_of_range_level() {
+        let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
+        let error = validate(file.path(), 9).unwrap_err();
+        assert!(error.to_string().contains("unsupported MIF level"));
     }
 
     #[test]
@@ -783,7 +836,7 @@ mod tests {
     #[test]
     fn invalid_document_error_renders_as_problem_json() {
         let file = write_temp_file(r#"{"content": "missing required fields"}"#);
-        let error = validate(file.path()).unwrap_err();
+        let error = validate(file.path(), 1).unwrap_err();
         let json = error.render(OutputFormat::Json);
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         for member in [
@@ -805,7 +858,7 @@ mod tests {
     #[test]
     fn missing_file_io_error_classifies_as_a_404_maybe_incorrect_problem() {
         let error =
-            validate(std::path::Path::new("/nonexistent/mif-cli-fixture.json")).unwrap_err();
+            validate(std::path::Path::new("/nonexistent/mif-cli-fixture.json"), 1).unwrap_err();
         let problem = error.to_problem();
         assert_eq!(problem.status, 404);
         assert_eq!(
@@ -826,7 +879,7 @@ mod tests {
         // `classify_io_error` cannot tell the two apart there and correctly
         // classifies it as the 403 "maybe incorrect" case instead.
         let dir = tempfile::tempdir().unwrap();
-        let error = validate(dir.path()).unwrap_err();
+        let error = validate(dir.path(), 1).unwrap_err();
         let problem = error.to_problem();
         #[cfg(not(windows))]
         {
@@ -861,7 +914,7 @@ mod tests {
     #[test]
     fn pretty_render_matches_error_prefixed_display() {
         let error =
-            validate(std::path::Path::new("/nonexistent/mif-cli-fixture.json")).unwrap_err();
+            validate(std::path::Path::new("/nonexistent/mif-cli-fixture.json"), 1).unwrap_err();
         assert_eq!(
             error.render(OutputFormat::Pretty),
             format!("Error: {error}")
@@ -1353,7 +1406,10 @@ No type field.
         assert!(resolve_result.is_ok());
 
         let missing_file = tempfile::tempdir().unwrap().path().join("missing.json");
-        let validate_result = run(&Command::Validate { file: missing_file });
+        let validate_result = run(&Command::Validate {
+            file: missing_file,
+            level: 1,
+        });
         assert!(validate_result.is_err());
 
         let db_dir = tempfile::tempdir().unwrap();

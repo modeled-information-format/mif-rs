@@ -168,3 +168,49 @@ fn emit_markdown_on_invalid_json_exits_with_the_mapped_error_code() {
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
 }
+
+#[test]
+fn a_document_missing_a_level_floor_field_exits_with_the_mapped_error_code() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        file.path(),
+        r#"{
+            "@context": "https://mif-spec.dev/schema/context.jsonld",
+            "@type": "Concept",
+            "@id": "urn:mif:memory:exit-code-level-test",
+            "conceptType": "semantic",
+            "content": "Content.",
+            "created": "2026-07-02T00:00:00Z"
+        }"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mif-cli"))
+        .args(["validate", file.path().to_str().unwrap(), "--level", "2"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(5));
+}
+
+#[test]
+fn an_out_of_range_level_exits_with_the_mapped_error_code() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        file.path(),
+        r#"{
+            "@context": "https://mif-spec.dev/schema/context.jsonld",
+            "@type": "Concept",
+            "@id": "urn:mif:memory:exit-code-level-range-test",
+            "conceptType": "semantic",
+            "content": "Content.",
+            "created": "2026-07-02T00:00:00Z"
+        }"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mif-cli"))
+        .args(["validate", file.path().to_str().unwrap(), "--level", "9"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+}

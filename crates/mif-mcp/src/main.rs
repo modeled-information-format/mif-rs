@@ -31,6 +31,10 @@ struct ValidateParams {
     /// Path to the MIF document (markdown with frontmatter, or a JSON-LD
     /// projection) to validate.
     file: PathBuf,
+    /// MIF level floor to additionally require (1, 2, or 3). Level 1's
+    /// fields are already covered by the canonical schema, so the default
+    /// is a plain schema validation.
+    level: Option<u8>,
 }
 
 /// Parameters for the `resolve_ontology_reference` tool.
@@ -323,15 +327,18 @@ impl ToProblem for McpError {
 /// Validates one MIF document: projects markdown-with-frontmatter or
 /// JSON-LD input to JSON-LD via [`project_to_jsonld`] (proving the
 /// markdown <-> JSON-LD round trip is lossless either way), then
-/// schema-checks the result. Unlike [`ingest_mif_document_inner`], this
-/// has no side effects: no embedding model load, no vector store write.
+/// schema-checks the result against the canonical schema and the requested
+/// `level` floor (1, 2, or 3; defaults to 1). Unlike
+/// [`ingest_mif_document_inner`], this has no side effects: no embedding
+/// model load, no vector store write.
 ///
 /// # Errors
 ///
 /// Returns [`McpError`] if the file cannot be read, is not valid
-/// JSON-LD/frontmatter, does not round-trip losslessly, or does not
-/// conform to the canonical MIF schema.
-fn validate_mif_document_inner(file: &Path) -> Result<String, McpError> {
+/// JSON-LD/frontmatter, does not round-trip losslessly, does not conform to
+/// the canonical MIF schema, does not satisfy the requested level floor, or
+/// `level` is not 1, 2, or 3.
+fn validate_mif_document_inner(file: &Path, level: Option<u8>) -> Result<String, McpError> {
     let contents = std::fs::read_to_string(file).map_err(|source| McpError::Io {
         path: file.display().to_string(),
         source,
@@ -341,7 +348,8 @@ fn validate_mif_document_inner(file: &Path) -> Result<String, McpError> {
         &contents,
         mif_frontmatter::FrontmatterShape::V1Canonical,
     )?;
-    mif_schema::validate_document(&jsonld)?;
+    let level = mif_schema::Level::try_from(level.unwrap_or(1))?;
+    mif_schema::validate_level(&jsonld, level)?;
     Ok(format!("{}: valid", file.display()))
 }
 
@@ -673,13 +681,15 @@ struct Mif;
 impl Mif {
     #[tool(
         description = "Validate a MIF document (markdown with frontmatter, or a JSON-LD \
-                        projection) against the canonical MIF JSON Schema. No side effects."
+                        projection) against the canonical MIF JSON Schema and an optional \
+                        L1/L2/L3 level floor (defaults to 1). No side effects."
     )]
     fn validate_mif_document(
         &self,
-        Parameters(ValidateParams { file }): Parameters<ValidateParams>,
+        Parameters(ValidateParams { file, level }): Parameters<ValidateParams>,
     ) -> String {
-        validate_mif_document_inner(&file).unwrap_or_else(|error| error.to_problem().to_json())
+        validate_mif_document_inner(&file, level)
+            .unwrap_or_else(|error| error.to_problem().to_json())
     }
 
     #[tool(description = "Resolve an ontology's three-tier extends chain")]
@@ -841,6 +851,7 @@ mod tests {
         );
         let result = Mif.validate_mif_document(Parameters(ValidateParams {
             file: file.path().to_path_buf(),
+            level: None,
         }));
         assert!(result.ends_with(": valid"));
     }
@@ -855,6 +866,7 @@ mod tests {
         let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
         let result = Mif.validate_mif_document(Parameters(ValidateParams {
             file: file.path().to_path_buf(),
+            level: None,
         }));
         assert!(result.ends_with(": valid"));
     }
@@ -867,6 +879,7 @@ mod tests {
         let file = write_temp_file(&format!("\u{feff}{VALID_MARKDOWN_FIXTURE}"));
         let result = Mif.validate_mif_document(Parameters(ValidateParams {
             file: file.path().to_path_buf(),
+            level: None,
         }));
         assert!(result.ends_with(": valid"));
     }
@@ -876,6 +889,7 @@ mod tests {
         let file = write_temp_file(r#"{"content": "missing required fields"}"#);
         let result = Mif.validate_mif_document(Parameters(ValidateParams {
             file: file.path().to_path_buf(),
+            level: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
@@ -886,9 +900,71 @@ mod tests {
     }
 
     #[test]
+    fn validate_tool_reports_a_level_floor_violation_as_problem_json() {
+        let file = write_temp_file(
+            r#"{
+                "@context": "https://mif-spec.dev/schema/context.jsonld",
+                "@type": "Concept",
+                "@id": "urn:mif:memory:test-001",
+                "conceptType": "semantic",
+                "content": "Test content.",
+                "created": "2026-07-02T00:00:00Z"
+            }"#,
+        );
+        let result = Mif.validate_mif_document(Parameters(ValidateParams {
+            file: file.path().to_path_buf(),
+            level: Some(2),
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value["type"],
+            "https://modeled-information-format.github.io/mif-rs/references/errors/level-floor-violation/v1"
+        );
+        assert_eq!(value["status"], 422);
+    }
+
+    #[test]
+    fn validate_tool_accepts_a_document_satisfying_the_l2_floor() {
+        let file = write_temp_file(
+            r#"{
+                "@context": "https://mif-spec.dev/schema/context.jsonld",
+                "@type": "Concept",
+                "@id": "urn:mif:memory:test-001",
+                "conceptType": "semantic",
+                "content": "Test content.",
+                "created": "2026-07-02T00:00:00Z",
+                "namespace": "test",
+                "modified": "2026-07-02T00:00:00Z",
+                "temporal": {}
+            }"#,
+        );
+        let result = Mif.validate_mif_document(Parameters(ValidateParams {
+            file: file.path().to_path_buf(),
+            level: Some(2),
+        }));
+        assert!(result.ends_with(": valid"));
+    }
+
+    #[test]
+    fn validate_tool_reports_an_out_of_range_level_as_problem_json() {
+        let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
+        let result = Mif.validate_mif_document(Parameters(ValidateParams {
+            file: file.path().to_path_buf(),
+            level: Some(9),
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value["type"],
+            "https://modeled-information-format.github.io/mif-rs/references/errors/unsupported-level/v1"
+        );
+        assert_eq!(value["status"], 400);
+    }
+
+    #[test]
     fn validate_tool_reports_missing_file_as_problem_json() {
         let result = Mif.validate_mif_document(Parameters(ValidateParams {
             file: "/nonexistent/mif-mcp-test-fixture.json".into(),
+            level: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
@@ -913,6 +989,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = Mif.validate_mif_document(Parameters(ValidateParams {
             file: dir.path().to_path_buf(),
+            level: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
@@ -936,6 +1013,7 @@ mod tests {
         let file = write_temp_file("not json");
         let result = Mif.validate_mif_document(Parameters(ValidateParams {
             file: file.path().to_path_buf(),
+            level: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(

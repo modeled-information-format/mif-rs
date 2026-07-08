@@ -16,7 +16,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
@@ -45,12 +45,11 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 # Rust's standard `regex` crate deliberately doesn't support.
 fancy-regex = "0.18.0"
 # Stale-PID liveness check for mif-rh's review lock, without raw signal calls
-# (this workspace forbids unsafe_code workspace-wide). Exact-pinned at
-# 0.38.4: previously believed sysinfo >=0.38 required a newer Rust than
-# this workspace's MSRV; empirically this pin's rationale doesn't hold
-# (see mif-rs#56) — tracked as a follow-up to verify and possibly relax
-# to a range.
-sysinfo = { version = "=0.38.4", default-features = false, features = ["system"] }
+# (this workspace forbids unsafe_code workspace-wide). Previously exact-pinned
+# on the belief that sysinfo >=0.38 required a newer Rust than this
+# workspace's MSRV; verified false (mif-rs#56) — no MSRV or transitive
+# constraint requires an exact pin, so this now allows 0.38.x patch updates.
+sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 # Discovery-pattern content matching for mif-rh (the direct equivalent of
 # rht's bash `[[ =~ ]]` regex fallback classifier).
 regex = "1.12.4"
@@ -66,35 +65,35 @@ ureq = "3.3.0"
 
 [workspace.dependencies.mif-core]
 path = "crates/mif-core"
-version = "0.5.0"
+version = "0.6.0"
 
 [workspace.dependencies.mif-schema]
 path = "crates/mif-schema"
-version = "0.5.0"
+version = "0.6.0"
 
 [workspace.dependencies.mif-ontology]
 path = "crates/mif-ontology"
-version = "0.5.0"
+version = "0.6.0"
 
 [workspace.dependencies.mif-problem]
 path = "crates/mif-problem"
-version = "0.5.0"
+version = "0.6.0"
 
 [workspace.dependencies.mif-frontmatter]
 path = "crates/mif-frontmatter"
-version = "0.5.0"
+version = "0.6.0"
 
 [workspace.dependencies.mif-embed]
 path = "crates/mif-embed"
-version = "0.5.0"
+version = "0.6.0"
 
 [workspace.dependencies.mif-store]
 path = "crates/mif-store"
-version = "0.5.0"
+version = "0.6.0"
 
 [workspace.dependencies.mif-rh]
 path = "crates/mif-rh"
-version = "0.5.0"
+version = "0.6.0"
 
 [profile.dev]
 # Faster compile times during development
