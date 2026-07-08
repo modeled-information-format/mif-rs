@@ -701,6 +701,88 @@ pub fn roundtrip_lossless(md_text: &str) -> Result<(), FrontmatterError> {
     Ok(())
 }
 
+/// Proves a JSON-LD document's round trip through markdown is lossless:
+/// every field present in `jsonld` survives with the same value after
+/// projecting to markdown (via [`jsonld_to_md`]) and back (via
+/// [`md_to_jsonld`]). Returns the derived `(frontmatter, body)` pair on
+/// success, so a caller that needs the markdown output doesn't have to
+/// reproject.
+///
+/// Unlike [`roundtrip_lossless`] (which proves a markdown document's own
+/// projection is a stable fixed point), this proves fidelity to the
+/// JSON-LD INPUT specifically — checking only that the derived markdown is
+/// stable under a further cycle (as a naive caller might, by calling
+/// `roundtrip_lossless` on the derived markdown) never compares back to
+/// the original JSON-LD, so real data loss (e.g. a `timestamp` field with
+/// no `created`/`modified` to regenerate it from) can pass silently. This
+/// is a subset check, not full equality: a field `md_to_jsonld` always
+/// synthesizes (`timestamp` mirrors `created`/`modified`) may legitimately
+/// appear in the reconstruction even when absent from `jsonld` — that is
+/// not loss.
+///
+/// # Errors
+///
+/// Returns [`FrontmatterError::JsonNotAnObject`]/[`FrontmatterError::FieldNotAString`]/
+/// [`FrontmatterError::YamlConversion`] per [`jsonld_to_md`], the analogous
+/// [`md_to_jsonld`] errors on the reverse projection, or
+/// [`FrontmatterError::RoundTripDrift`] if a field present in `jsonld` is
+/// missing or holds a different value in the reconstruction.
+///
+/// # Examples
+///
+/// ```
+/// use mif_frontmatter::FrontmatterShape;
+///
+/// let jsonld = serde_json::json!({
+///     "@id": "urn:mif:x",
+///     "conceptType": "semantic",
+///     "content": "Body.",
+/// });
+/// let (frontmatter, body) = mif_frontmatter::jsonld_roundtrip_lossless(
+///     &jsonld,
+///     FrontmatterShape::V1Canonical,
+/// )
+/// .unwrap();
+/// assert_eq!(body, "Body.");
+/// ```
+pub fn jsonld_roundtrip_lossless(
+    jsonld: &serde_json::Value,
+    shape: FrontmatterShape,
+) -> Result<(Frontmatter, String), FrontmatterError> {
+    let (frontmatter, body) = jsonld_to_md(jsonld, shape)?;
+    let reconstructed = md_to_jsonld(&frontmatter, &body)?;
+    if let Some(missing) = first_field_lost_in_reconstruction(jsonld, &reconstructed) {
+        return Err(FrontmatterError::RoundTripDrift {
+            expected: serde_json::to_string_pretty(jsonld).unwrap_or_default(),
+            recovered: format!(
+                "{} (missing or changed: {missing})",
+                serde_json::to_string_pretty(&reconstructed).unwrap_or_default()
+            ),
+        });
+    }
+    Ok((frontmatter, body))
+}
+
+/// The name of the first top-level field present in `original` that is
+/// either absent from `reconstructed` or holds a different value there, or
+/// `None` if every original field survived. A field the reconstruction
+/// gains that the original never had (e.g. `md_to_jsonld`'s always-derived
+/// `timestamp` mirror) is not reported — nothing was lost. Falls back to
+/// plain equality if either value is not a JSON object.
+fn first_field_lost_in_reconstruction(
+    original: &serde_json::Value,
+    reconstructed: &serde_json::Value,
+) -> Option<String> {
+    let (Some(original), Some(reconstructed)) = (original.as_object(), reconstructed.as_object())
+    else {
+        return (original != reconstructed).then(|| "<non-object value>".to_string());
+    };
+    original
+        .iter()
+        .find(|(key, value)| reconstructed.get(key.as_str()) != Some(*value))
+        .map(|(key, _)| key.clone())
+}
+
 /// Converts one YAML value to JSON, wrapping conversion failure with the
 /// offending field's name for diagnostics.
 fn yaml_value_to_json(field: &str, value: &Value) -> Result<serde_json::Value, FrontmatterError> {
@@ -724,8 +806,8 @@ mod tests {
     use mif_problem::ToProblem;
 
     use super::{
-        FrontmatterError, FrontmatterShape, jsonld_to_md, md_to_jsonld, parse_markdown,
-        roundtrip_lossless, serialize_markdown,
+        FrontmatterError, FrontmatterShape, jsonld_roundtrip_lossless, jsonld_to_md, md_to_jsonld,
+        parse_markdown, roundtrip_lossless, serialize_markdown,
     };
 
     const RATE_LIMIT_POLICY: &str = r"---
@@ -944,6 +1026,54 @@ legitimate batch consumers against gateway saturation.
         );
         assert_eq!(problem.status, 400);
         assert_eq!(problem.exit_code, Some(2));
+    }
+
+    #[test]
+    fn jsonld_roundtrip_lossless_accepts_a_conformant_document() {
+        let jsonld = serde_json::json!({
+            "@context": "https://mif-spec.dev/schema/context.jsonld",
+            "@type": "Concept",
+            "@id": "urn:mif:memory:test-001",
+            "conceptType": "semantic",
+            "content": "Test content.",
+            "created": "2026-01-01T00:00:00Z",
+        });
+        let (_, body) = jsonld_roundtrip_lossless(&jsonld, FrontmatterShape::V1Canonical).unwrap();
+        assert_eq!(body, "Test content.");
+    }
+
+    #[test]
+    fn jsonld_roundtrip_lossless_rejects_a_field_that_cannot_be_regenerated() {
+        // A `timestamp` value with no backing `created`/`modified` to
+        // regenerate it from is silently dropped by `jsonld_to_md` (always
+        // a derived-only mirror) — real data loss that must surface as
+        // drift, not a false "lossless" report.
+        let jsonld = serde_json::json!({
+            "@context": "https://mif-spec.dev/schema/context.jsonld",
+            "@type": "Concept",
+            "@id": "urn:mif:memory:timestamp-loss-test",
+            "conceptType": "semantic",
+            "content": "Test content.",
+            "timestamp": "2026-01-01T00:00:00Z",
+        });
+        let error = jsonld_roundtrip_lossless(&jsonld, FrontmatterShape::V1Canonical).unwrap_err();
+        assert!(matches!(error, FrontmatterError::RoundTripDrift { .. }));
+    }
+
+    #[test]
+    fn jsonld_roundtrip_lossless_does_not_flag_a_synthesized_field_as_lost() {
+        // Non-regression: a document with no explicit `timestamp` at all
+        // must not false-positive just because the reconstruction gains
+        // one (md_to_jsonld always synthesizes it from created/modified).
+        let jsonld = serde_json::json!({
+            "@context": "https://mif-spec.dev/schema/context.jsonld",
+            "@type": "Concept",
+            "@id": "urn:mif:memory:test-002",
+            "conceptType": "semantic",
+            "content": "Test content.",
+            "created": "2026-01-01T00:00:00Z",
+        });
+        assert!(jsonld_roundtrip_lossless(&jsonld, FrontmatterShape::V1Canonical).is_ok());
     }
 
     /// A fixture populating every field `mif.schema.json`'s root object

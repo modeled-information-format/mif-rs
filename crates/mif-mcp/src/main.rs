@@ -376,52 +376,15 @@ fn project_to_jsonld(
                 path: path.display().to_string(),
                 source,
             })?;
-        let (frontmatter, body) = mif_frontmatter::jsonld_to_md(&jsonld, shape)?;
-        // Prove the JSON-LD -> markdown -> JSON-LD round trip is genuinely
-        // lossless: every field PRESENT IN THE ORIGINAL must survive with
-        // its exact value in the reconstruction. A prior version of this
-        // function only proved the derived markdown was stable under a
-        // further cycle, never that it faithfully represented the
-        // ORIGINAL input — real data loss (e.g. a `timestamp` field with
-        // no backing `created`/`modified` to regenerate it from) passed
-        // silently. This is a subset check, not full equality: a field
-        // `md_to_jsonld` always synthesizes (`timestamp` mirrors
-        // `created`/`modified`) legitimately appears in the reconstruction
-        // even when absent from the original — that is not loss.
-        let reconstructed = mif_frontmatter::md_to_jsonld(&frontmatter, &body)?;
-        if let Some(missing) = first_field_lost_in_reconstruction(&jsonld, &reconstructed) {
-            return Err(McpError::Frontmatter(
-                mif_frontmatter::FrontmatterError::RoundTripDrift {
-                    expected: serde_json::to_string_pretty(&jsonld).unwrap_or_default(),
-                    recovered: format!(
-                        "{} (missing or changed: {missing})",
-                        serde_json::to_string_pretty(&reconstructed).unwrap_or_default()
-                    ),
-                },
-            ));
-        }
+        // mif_frontmatter::jsonld_roundtrip_lossless proves the JSON-LD ->
+        // markdown -> JSON-LD round trip is genuinely lossless (compares
+        // reconstructed values against the original, not merely that the
+        // derived markdown is stable under a further cycle — real data
+        // loss, like a `timestamp` field with no backing
+        // `created`/`modified` to regenerate it from, must surface here).
+        mif_frontmatter::jsonld_roundtrip_lossless(&jsonld, shape)?;
         Ok(jsonld)
     }
-}
-
-/// The name of the first top-level field present in `original` that is
-/// either absent from `reconstructed` or holds a different value there, or
-/// `None` if every original field survived. A field the reconstruction
-/// gains that the original never had (e.g. `md_to_jsonld`'s always-derived
-/// `timestamp` mirror) is not reported — nothing was lost. Falls back to
-/// plain equality if either value is not a JSON object.
-fn first_field_lost_in_reconstruction(
-    original: &serde_json::Value,
-    reconstructed: &serde_json::Value,
-) -> Option<String> {
-    let (Some(original), Some(reconstructed)) = (original.as_object(), reconstructed.as_object())
-    else {
-        return (original != reconstructed).then(|| "<non-object value>".to_string());
-    };
-    original
-        .iter()
-        .find(|(key, value)| reconstructed.get(key.as_str()) != Some(*value))
-        .map(|(key, _)| key.clone())
 }
 
 /// A stable, non-cryptographic hash of `contents`, used only to detect
@@ -680,9 +643,8 @@ fn emit_markdown_document_inner(
             path: file.display().to_string(),
             source,
         })?;
-    let (frontmatter, body) = mif_frontmatter::jsonld_to_md(&jsonld, shape)?;
+    let (frontmatter, body) = mif_frontmatter::jsonld_roundtrip_lossless(&jsonld, shape)?;
     let markdown = mif_frontmatter::serialize_markdown(&frontmatter, &body)?;
-    mif_frontmatter::roundtrip_lossless(&markdown)?;
     if let Some(out) = out {
         std::fs::write(out, &markdown).map_err(|source| McpError::Io {
             path: out.display().to_string(),
@@ -1178,6 +1140,31 @@ Test content via MCP.
         assert_eq!(
             value["type"],
             "https://modeled-information-format.github.io/mif-rs/references/errors/mif-mcp-invalid-json/v1"
+        );
+    }
+
+    #[test]
+    fn emit_markdown_tool_reports_json_ld_field_loss_as_problem_json() {
+        // See the identical regression in mif-cli's test module.
+        let file = write_temp_file(
+            r#"{
+                "@context": "https://mif-spec.dev/schema/context.jsonld",
+                "@type": "Concept",
+                "@id": "urn:mif:memory:mcp-emit-md-timestamp-loss-test",
+                "conceptType": "semantic",
+                "content": "Test content.",
+                "timestamp": "2026-01-01T00:00:00Z"
+            }"#,
+        );
+        let result = Mif.emit_markdown_document(Parameters(EmitMarkdownParams {
+            file: file.path().to_path_buf(),
+            out: None,
+            shape: None,
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value["type"],
+            "https://modeled-information-format.github.io/mif-rs/references/errors/roundtrip-drift/v1"
         );
     }
 
