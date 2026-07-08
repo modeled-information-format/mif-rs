@@ -701,8 +701,9 @@ pub fn roundtrip_lossless(md_text: &str) -> Result<(), FrontmatterError> {
     Ok(())
 }
 
-/// Proves a JSON-LD document's round trip through markdown is lossless:
-/// every field present in `jsonld` survives with the same value after
+/// Proves a JSON-LD document's round trip through markdown is lossless.
+///
+/// Every field present in `jsonld` survives with the same value after
 /// projecting to markdown (via [`jsonld_to_md`]) and back (via
 /// [`md_to_jsonld`]). Returns the derived `(frontmatter, body)` pair on
 /// success, so a caller that needs the markdown output doesn't have to
