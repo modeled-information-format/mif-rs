@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-07
+
+### Added
+
+- **`mif-rh-cli ontology fetch --refresh`**: an id already pinned in `ontologies.lock.json` at a version different from the registry's current one is now left untouched, with a warning naming the drift, unless `--refresh` is passed to advance it deliberately. Previously `fetch` always vendored the registry's current version unconditionally, silently overwriting an existing pin (research-harness-template#270, mif-rs#60).
+
+### Fixed
+
+- **`ontology fetch`**: the mutated `index_sha256`/`source` trust-root fields were not persisted to `ontologies.lock.json` when every requested id was left pinned-and-skipped (no per-id write occurred to do it), silently dropping a deliberate re-pin in that case.
+
 ## [0.5.0] - 2026-07-07
 
 ### Added
