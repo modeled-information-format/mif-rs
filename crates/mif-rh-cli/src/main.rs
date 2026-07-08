@@ -1116,10 +1116,13 @@ fn ontology_check_pin_safety_cmd(
             // Distinct findings, not gap count: a single finding missing
             // multiple newly required fields produces multiple gaps, and
             // counting gaps would overstate how many findings are affected.
-            let distinct_findings: std::collections::HashSet<&str> = report
+            // Keyed by (topic, finding_id), not finding_id alone: finding
+            // ids are only scoped within their own topic, so the same id
+            // in two different topics is two distinct findings, not one.
+            let distinct_findings: std::collections::HashSet<(&str, &str)> = report
                 .gaps
                 .iter()
-                .map(|gap| gap.finding_id.as_str())
+                .map(|gap| (gap.topic.as_str(), gap.finding_id.as_str()))
                 .collect();
             lines.push(format!(
                 "WARNING: {}: pinned {} -> registry {}, {} stamped finding{} missing a newly \

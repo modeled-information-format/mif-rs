@@ -965,34 +965,63 @@ pub struct PinSafetyReport {
 }
 
 /// The `required` array of an entity type's `schema` object, as strings.
-fn required_fields(schema: &serde_json::Value) -> Vec<String> {
-    schema
-        .get("required")
-        .and_then(serde_json::Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
+///
+/// # Errors
+///
+/// Returns [`MifRhError::EntityTypeSchemaInvalid`] if `required` is present
+/// but is not an array of strings. A missing `required` key is not an
+/// error — it means the entity type declares no required fields — but a
+/// PRESENT, malformed one must fail closed rather than silently default to
+/// an empty list: for a pin-safety check, treating a malformed schema as
+/// "nothing required" would produce a false "safe" verdict, the
+/// worst-case failure mode for this specific check.
+fn required_fields(
+    entity_type: &str,
+    schema: &serde_json::Value,
+) -> Result<Vec<String>, MifRhError> {
+    let Some(required) = schema.get("required") else {
+        return Ok(Vec::new());
+    };
+    let Some(values) = required.as_array() else {
+        return Err(MifRhError::EntityTypeSchemaInvalid {
+            entity_type: entity_type.to_string(),
+            detail: "schema.required is present but is not an array".to_string(),
+        });
+    };
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| MifRhError::EntityTypeSchemaInvalid {
+                    entity_type: entity_type.to_string(),
+                    detail: format!("schema.required contains a non-string element: {value}"),
+                })
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 /// The `required` fields `new`'s schema adds for an entity type present in
 /// both `old` and `new`. An entity type absent from `old` is skipped
 /// entirely: it is wholly new, so no existing stamped finding could have
 /// been typed with it, and nothing about it can be "newly" required.
+///
+/// # Errors
+///
+/// Returns [`MifRhError::EntityTypeSchemaInvalid`] if either pack's
+/// `schema.required` is malformed; see [`required_fields`].
 fn diff_newly_required(
     old: &crate::ontology_pack::OntologyPack,
     new: &crate::ontology_pack::OntologyPack,
-) -> Vec<NewlyRequiredField> {
+) -> Result<Vec<NewlyRequiredField>, MifRhError> {
     let mut out = Vec::new();
     for new_type in &new.entity_types {
         let Some(old_type) = old.entity_types.iter().find(|t| t.name == new_type.name) else {
             continue;
         };
-        let old_required = required_fields(&old_type.schema);
-        for field in required_fields(&new_type.schema) {
+        let old_required = required_fields(&old_type.name, &old_type.schema)?;
+        for field in required_fields(&new_type.name, &new_type.schema)? {
             if !old_required.contains(&field) {
                 out.push(NewlyRequiredField {
                     entity_type: new_type.name.clone(),
@@ -1001,7 +1030,7 @@ fn diff_newly_required(
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// Cross-references `newly_required` against every stamped finding (basis
@@ -1233,9 +1262,12 @@ pub fn check_pin_safety(
                 got,
             });
         }
-        let new_pack = parse_pack(&String::from_utf8_lossy(&new_bytes), &entry.file)?;
+        let new_pack = parse_pack(
+            &String::from_utf8_lossy(&new_bytes),
+            &format!("{source}/{}", entry.file),
+        )?;
 
-        let newly_required = diff_newly_required(&old_pack, &new_pack);
+        let newly_required = diff_newly_required(&old_pack, &new_pack)?;
         let gaps = if newly_required.is_empty() {
             Vec::new()
         } else {
@@ -2248,6 +2280,62 @@ mod tests {
         assert!(matches!(
             error,
             super::MifRhError::MalformedOntologyId { .. }
+        ));
+    }
+
+    #[test]
+    fn check_pin_safety_fails_closed_on_a_malformed_schema_required_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_yaml = "ontology:\n  id: edu-fixture\n  version: \"0.1.0\"\n  extends: \
+                         [mif-base]\nentity_types:\n  - name: title\n    schema:\n      \
+                         required: [name]\n      properties:\n        name: {type: string}\n";
+        fs::create_dir_all(dir.path().join("packs/ontologies/edu-fixture")).unwrap();
+        fs::write(
+            dir.path()
+                .join("packs/ontologies/edu-fixture/edu-fixture.ontology.yaml"),
+            old_yaml,
+        )
+        .unwrap();
+
+        // `required` is present but is a string, not an array: malformed.
+        let registry = dir.path().join("registry");
+        fs::create_dir_all(&registry).unwrap();
+        let new_yaml = "ontology:\n  id: edu-fixture\n  version: \"0.2.0\"\n  extends: \
+                         [mif-base]\nentity_types:\n  - name: title\n    schema:\n      \
+                         required: \"name\"\n      properties:\n        name: {type: string}\n";
+        let sha = sha256_of(new_yaml.as_bytes());
+        let index = format!(
+            r#"{{"ontologies":{{"edu-fixture":{{"version":"0.2.0","sha256":"{sha}","file":"edu-fixture.ontology.yaml","extends":["mif-base"]}}}}}}"#
+        );
+        fs::write(registry.join("index.json"), &index).unwrap();
+        fs::write(registry.join("edu-fixture.ontology.yaml"), new_yaml).unwrap();
+
+        let source = registry.display().to_string();
+        let lock = serde_json::json!({
+            "schema": "mif-ontology-lock/v1",
+            "source": source,
+            "index_sha256": sha256_of(index.as_bytes()),
+            "ontologies": {
+                "edu-fixture": {"version": "0.1.0", "sha256": "irrelevant-for-this-test"}
+            }
+        });
+        fs::write(
+            dir.path().join("ontologies.lock.json"),
+            serde_json::to_string(&lock).unwrap(),
+        )
+        .unwrap();
+
+        let error = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &dir.path().join("reports"),
+            &[],
+            &["edu-fixture".to_string()],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            super::MifRhError::EntityTypeSchemaInvalid { .. }
         ));
     }
 }
