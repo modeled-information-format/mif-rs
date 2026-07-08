@@ -351,6 +351,38 @@ pub enum MifRhError {
         /// The unresolvable ontology id.
         id: String,
     },
+    /// `ontologies.lock.json`'s pinned source differs from the source a
+    /// read-only pin-safety check was asked to evaluate against — the
+    /// lock's per-id version/sha256 pins were established against a
+    /// different registry and are not meaningful trust anchors for this
+    /// one. Unlike `fetch`, which legitimately adopts a new source on
+    /// first use (and re-pins it), a read-only check never mutates the
+    /// lock, so it must fail closed rather than silently compare a
+    /// mismatched source's registry entries against pins it did not
+    /// establish.
+    #[error(
+        "ontologies.lock.json is pinned to source '{lock_source}', not '{requested_source}' — \
+         refusing to evaluate pin safety against a different registry than the one the lock \
+         trusts"
+    )]
+    LockSourceMismatch {
+        /// The source recorded in the lock file.
+        lock_source: String,
+        /// The source the check was asked to evaluate against.
+        requested_source: String,
+    },
+    /// A checksum-verified, freshly-fetched ontology pack's bytes were not
+    /// valid UTF-8 — refusing to lossily convert content whose exact bytes
+    /// were already pinned by checksum. A lossy conversion would silently
+    /// substitute replacement characters, meaning the diffed schema would
+    /// not be the schema that was actually hashed and fetched.
+    #[error("ontology '{id}' file '{file}' is not valid UTF-8")]
+    OntologyPackNotUtf8 {
+        /// The ontology id being diffed.
+        id: String,
+        /// The index's declared file name.
+        file: String,
+    },
     /// The registry index's sha256 no longer matches the value pinned in
     /// `ontologies.lock.json` for the same source (trust-on-first-use, then
     /// pin) — the trust root moved.
@@ -777,6 +809,20 @@ impl MifRhError {
                 status: 404,
                 exit_code: 1,
             },
+            Self::LockSourceMismatch { .. } => ProblemMeta {
+                slug: "lock-source-mismatch",
+                version: "v1",
+                title: "Lock file is pinned to a different registry source",
+                status: 409,
+                exit_code: 1,
+            },
+            Self::OntologyPackNotUtf8 { .. } => ProblemMeta {
+                slug: "ontology-pack-not-utf8",
+                version: "v1",
+                title: "Fetched ontology pack is not valid UTF-8",
+                status: 422,
+                exit_code: 1,
+            },
             Self::IndexPinMismatch { .. } => ProblemMeta {
                 slug: "index-pin-mismatch",
                 version: "v1",
@@ -1068,6 +1114,30 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 "Author the missing ontology",
                 "quickfix",
                 Applicability::MaybeIncorrect,
+            ),
+        ),
+        MifRhError::LockSourceMismatch { .. } => (
+            SuggestedFix::new(
+                "Re-run against the source ontologies.lock.json is actually pinned to, or \
+                 delete the lock to intentionally re-pin against the new source.",
+                Applicability::Unspecified,
+            ),
+            CodeAction::new(
+                "Match the requested source to the pinned lock source",
+                "quickfix",
+                Applicability::Unspecified,
+            ),
+        ),
+        MifRhError::OntologyPackNotUtf8 { .. } => (
+            SuggestedFix::new(
+                "The registry-published ontology pack file is corrupt or was published with \
+                 non-UTF-8 content; investigate upstream and re-publish a valid pack.",
+                Applicability::Unspecified,
+            ),
+            CodeAction::new(
+                "Investigate the corrupt registry pack",
+                "quickfix",
+                Applicability::Unspecified,
             ),
         ),
         MifRhError::IndexPinMismatch { .. } => (
@@ -1553,6 +1623,14 @@ mod tests {
             },
             MifRhError::OntologyNotInRegistry {
                 id: "clinical-trials".to_string(),
+            },
+            MifRhError::LockSourceMismatch {
+                lock_source: "https://example.test/ontologies".to_string(),
+                requested_source: "https://other.test/ontologies".to_string(),
+            },
+            MifRhError::OntologyPackNotUtf8 {
+                id: "edu-fixture".to_string(),
+                file: "edu-fixture.ontology.yaml".to_string(),
             },
             MifRhError::IndexPinMismatch {
                 registry_source: "https://example.test/ontologies".to_string(),

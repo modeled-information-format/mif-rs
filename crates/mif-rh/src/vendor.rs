@@ -1123,6 +1123,31 @@ fn find_pin_safety_gaps(
     Ok(gaps)
 }
 
+/// Guards against trusting `lock`'s per-id version pins when it was
+/// established against a different registry source than `source`.
+///
+/// Unlike `fetch`, [`check_pin_safety`] never re-pins the lock — it is
+/// read-only — so it must never treat `lock.ontologies`' per-id pins as
+/// meaningful against a source other than the one the lock itself trusts.
+/// `fetch` legitimately adopts a new source on first use (writing
+/// `lock.source = source`); a read-only check has no such adoption step,
+/// so a mismatch here can only mean the caller is checking pin safety
+/// against the wrong registry.
+///
+/// # Errors
+///
+/// Returns [`MifRhError::LockSourceMismatch`] if `lock.source` is set and
+/// differs from `source`.
+fn check_lock_source(lock: &LockFile, source: &str) -> Result<(), MifRhError> {
+    if !lock.source.is_empty() && lock.source != source {
+        return Err(MifRhError::LockSourceMismatch {
+            lock_source: lock.source.clone(),
+            requested_source: source.to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Warns only when a pinned ontology's advanced schema actually breaks an
 /// already-stamped finding.
 ///
@@ -1152,14 +1177,17 @@ fn find_pin_safety_gaps(
 /// # Errors
 ///
 /// Returns [`MifRhError::MalformedOntologyId`] if a requested id is not a
-/// bare, lowercase slug, [`MifRhError::RegistryFetch`] if the registry
-/// index or a drifted id's file cannot be fetched,
-/// [`MifRhError::RegistryIndexInvalid`] if the index is not valid JSON,
-/// [`MifRhError::IndexPinMismatch`] if the source's index sha256 no longer
-/// matches the lock's pinned value, [`MifRhError::OntologyNotInRegistry`]
-/// if a requested id has no index entry, [`MifRhError::UnsafeIndexPath`] if
-/// the index names an unsafe file path, [`MifRhError::ChecksumMismatch`] if
-/// a fetched file's sha256 does not match the index,
+/// bare, lowercase slug, [`MifRhError::LockSourceMismatch`] if
+/// `ontologies.lock.json` is pinned to a different source than `source`,
+/// [`MifRhError::RegistryFetch`] if the registry index or a drifted id's
+/// file cannot be fetched, [`MifRhError::RegistryIndexInvalid`] if the
+/// index is not valid JSON, [`MifRhError::IndexPinMismatch`] if the
+/// source's index sha256 no longer matches the lock's pinned value,
+/// [`MifRhError::OntologyNotInRegistry`] if a requested id has no index
+/// entry, [`MifRhError::UnsafeIndexPath`] if the index names an unsafe
+/// file path, [`MifRhError::ChecksumMismatch`] if a fetched file's sha256
+/// does not match the index, [`MifRhError::OntologyPackNotUtf8`] if a
+/// checksum-verified fetched file is not valid UTF-8,
 /// [`MifRhError::OntologyPackYaml`] if the vendored or registry pack YAML
 /// is malformed, or [`MifRhError::Io`]/[`MifRhError::Json`] if a topic's
 /// `ontology-map.json` cannot be read or parsed. An individual finding
@@ -1182,6 +1210,7 @@ pub fn check_pin_safety(
             detail: err.to_string(),
         })?;
     let lock = LockFile::load_or_default(&root.join("ontologies.lock.json"))?;
+    check_lock_source(&lock, source)?;
     // Same trust-on-first-use check `fetch` enforces before trusting index
     // content (`vendor.rs`'s module doc: the index is "fully
     // attacker-controlled"). Read-only here — never re-pins, only refuses
@@ -1265,10 +1294,16 @@ pub fn check_pin_safety(
                 got,
             });
         }
-        let new_pack = parse_pack(
-            &String::from_utf8_lossy(&new_bytes),
-            &format!("{source}/{}", entry.file),
-        )?;
+        // Fail closed on invalid UTF-8 rather than `from_utf8_lossy`: the
+        // bytes are already checksum-verified, so the schema diffed below
+        // must be exactly the schema that was hashed and fetched, not a
+        // lossy substitution with replacement characters.
+        let new_text =
+            String::from_utf8(new_bytes).map_err(|_| MifRhError::OntologyPackNotUtf8 {
+                id: id.clone(),
+                file: entry.file.clone(),
+            })?;
+        let new_pack = parse_pack(&new_text, &format!("{source}/{}", entry.file))?;
 
         let newly_required = diff_newly_required(&old_pack, &new_pack)?;
         let gaps = if newly_required.is_empty() {
@@ -2239,6 +2274,69 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, super::MifRhError::ChecksumMismatch { .. }));
+    }
+
+    #[test]
+    fn check_pin_safety_fails_closed_on_a_lock_source_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = seed_pin_safety_fixture(dir.path(), "0.1.0", "0.2.0");
+        // Point the lock at a different source than the one this call
+        // checks against — its per-id pins were established there, not
+        // against `source`, so they must not be trusted here.
+        let lock_path = dir.path().join("ontologies.lock.json");
+        let mut lock: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&lock_path).unwrap()).unwrap();
+        lock["source"] = serde_json::json!("https://a-different-registry.test/ontologies");
+        fs::write(&lock_path, serde_json::to_string(&lock).unwrap()).unwrap();
+
+        let error = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &dir.path().join("reports"),
+            &[],
+            &["edu-fixture".to_string()],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            super::MifRhError::LockSourceMismatch { .. }
+        ));
+    }
+
+    #[test]
+    fn check_pin_safety_fails_closed_on_non_utf8_registry_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = seed_pin_safety_fixture(dir.path(), "0.1.0", "0.2.0");
+        // Replace the registry's (checksum-verified) file with bytes that
+        // are not valid UTF-8; the index and lock are updated to match so
+        // the failure isolates the UTF-8 check from the checksum check.
+        let registry_file = dir.path().join("registry/edu-fixture.ontology.yaml");
+        let invalid_utf8: &[u8] = &[0xff, 0xfe, 0xfd];
+        fs::write(&registry_file, invalid_utf8).unwrap();
+        let index_path = dir.path().join("registry/index.json");
+        let mut index: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&index_path).unwrap()).unwrap();
+        index["ontologies"]["edu-fixture"]["sha256"] = serde_json::json!(sha256_of(invalid_utf8));
+        fs::write(&index_path, serde_json::to_string(&index).unwrap()).unwrap();
+        let lock_path = dir.path().join("ontologies.lock.json");
+        let mut lock: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&lock_path).unwrap()).unwrap();
+        lock["index_sha256"] =
+            serde_json::json!(sha256_of(fs::read(&index_path).unwrap().as_slice()));
+        fs::write(&lock_path, serde_json::to_string(&lock).unwrap()).unwrap();
+
+        let error = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &dir.path().join("reports"),
+            &[],
+            &["edu-fixture".to_string()],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            super::MifRhError::OntologyPackNotUtf8 { .. }
+        ));
     }
 
     #[test]
