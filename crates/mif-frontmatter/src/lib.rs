@@ -143,6 +143,9 @@ pub enum FrontmatterError {
         /// The canonical serialization recovered after the round trip.
         recovered: String,
     },
+    /// A [`FrontmatterShape`] name was not recognized.
+    #[error("unknown frontmatter shape: {0:?} (must be \"v1-canonical\" or \"pre-projected\")")]
+    UnknownShape(String),
 }
 
 impl FrontmatterError {
@@ -218,6 +221,13 @@ impl FrontmatterError {
                 status: 422,
                 exit_code: 4,
             },
+            Self::UnknownShape(_) => ProblemMeta {
+                slug: "unknown-frontmatter-shape",
+                version: "v1",
+                title: "Unknown frontmatter shape",
+                status: 400,
+                exit_code: 2,
+            },
         }
     }
 }
@@ -269,6 +279,9 @@ impl ToProblem for FrontmatterError {
                  markdown -> JSON-LD -> markdown round trip; simplify it or report the drift \
                  upstream if it should be supported.",
             ),
+            Self::UnknownShape(_) => {
+                correctable_input("Use \"v1-canonical\" or \"pre-projected\".")
+            },
             Self::YamlSerialize { .. } | Self::JsonRoundTrip { .. } => unspecified_internal(),
         };
         self.meta()
@@ -431,6 +444,26 @@ pub enum FrontmatterShape {
     /// report documents) — passed through verbatim, with no
     /// bare-id-to-URN projection and no `id`/`type` shorthand keys.
     PreProjected,
+}
+
+impl TryFrom<&str> for FrontmatterShape {
+    type Error = FrontmatterError;
+
+    /// Parses a shape name: `"v1-canonical"` or `"pre-projected"`. The
+    /// single parser both `mif-cli` and `mif-mcp` call, so a caller-facing
+    /// shape argument is validated identically everywhere rather than each
+    /// binary hand-rolling its own string match.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FrontmatterError::UnknownShape`] for any other string.
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "v1-canonical" => Ok(Self::V1Canonical),
+            "pre-projected" => Ok(Self::PreProjected),
+            other => Err(FrontmatterError::UnknownShape(other.to_string())),
+        }
+    }
 }
 
 /// Detects which [`FrontmatterShape`] `frontmatter` uses, by whether it
@@ -886,6 +919,31 @@ legitimate batch consumers against gateway saturation.
         );
         assert_eq!(drift.exit_code, Some(4));
         assert_ne!(missing.problem_type, drift.problem_type);
+    }
+
+    #[test]
+    fn frontmatter_shape_try_from_accepts_the_two_known_names() {
+        assert_eq!(
+            FrontmatterShape::try_from("v1-canonical").unwrap(),
+            FrontmatterShape::V1Canonical
+        );
+        assert_eq!(
+            FrontmatterShape::try_from("pre-projected").unwrap(),
+            FrontmatterShape::PreProjected
+        );
+    }
+
+    #[test]
+    fn frontmatter_shape_try_from_rejects_unknown_names() {
+        let error = FrontmatterShape::try_from("PreProjected").unwrap_err();
+        assert!(matches!(error, FrontmatterError::UnknownShape(_)));
+        let problem = error.to_problem();
+        assert_eq!(
+            problem.problem_type,
+            "https://modeled-information-format.github.io/mif-rs/references/errors/unknown-frontmatter-shape/v1"
+        );
+        assert_eq!(problem.status, 400);
+        assert_eq!(problem.exit_code, Some(2));
     }
 
     /// A fixture populating every field `mif.schema.json`'s root object

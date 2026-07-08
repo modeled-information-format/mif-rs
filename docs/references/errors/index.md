@@ -42,6 +42,7 @@ that exact problem type, one page per `{slug}/{version}` pair below.
 - [jsonld-not-an-object/v1](/mif-rs/references/errors/jsonld-not-an-object/v1/)
 - [json-roundtrip-failure/v1](/mif-rs/references/errors/json-roundtrip-failure/v1/)
 - [roundtrip-drift/v1](/mif-rs/references/errors/roundtrip-drift/v1/)
+- [unknown-frontmatter-shape/v1](/mif-rs/references/errors/unknown-frontmatter-shape/v1/)
 
 ## Embedding (`mif-embed`)
 
