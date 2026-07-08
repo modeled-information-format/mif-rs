@@ -1148,6 +1148,50 @@ fn check_lock_source(lock: &LockFile, source: &str) -> Result<(), MifRhError> {
     Ok(())
 }
 
+/// Fetches a drifted id's registry file and parses it into an
+/// [`OntologyPack`], applying the same integrity checks `fetch` enforces on
+/// this exact attacker-controlled path: `entry.file` must be a bare
+/// filename (never a path that could escape the intended directory), the
+/// downloaded bytes must match the index's own pinned sha256, and the bytes
+/// must be valid UTF-8 (fail closed rather than `from_utf8_lossy`, since the
+/// schema diffed by the caller must be exactly the checksum-verified bytes,
+/// not a lossy substitution).
+///
+/// # Errors
+///
+/// Returns [`MifRhError::UnsafeIndexPath`] if `entry.file` is not a bare
+/// filename, [`MifRhError::RegistryFetch`] if the file cannot be fetched,
+/// [`MifRhError::ChecksumMismatch`] if its sha256 does not match `entry`,
+/// [`MifRhError::OntologyPackNotUtf8`] if the bytes are not valid UTF-8, or
+/// [`MifRhError::OntologyPackYaml`] if the pack YAML is malformed.
+fn fetch_and_parse_registry_pack(
+    source: &str,
+    id: &str,
+    entry: &IndexEntry,
+) -> Result<crate::ontology_pack::OntologyPack, MifRhError> {
+    if !is_bare_filename(&entry.file) {
+        return Err(MifRhError::UnsafeIndexPath {
+            id: id.to_string(),
+            file: entry.file.clone(),
+        });
+    }
+    let new_bytes = fetch_raw(source, &entry.file)?;
+    let got = sha256_hex(&new_bytes);
+    if got != entry.sha256 {
+        return Err(MifRhError::ChecksumMismatch {
+            id: id.to_string(),
+            file: entry.file.clone(),
+            expected: entry.sha256.clone(),
+            got,
+        });
+    }
+    let new_text = String::from_utf8(new_bytes).map_err(|_| MifRhError::OntologyPackNotUtf8 {
+        id: id.to_string(),
+        file: entry.file.clone(),
+    })?;
+    parse_pack(&new_text, &format!("{source}/{}", entry.file))
+}
+
 /// Warns only when a pinned ontology's advanced schema actually breaks an
 /// already-stamped finding.
 ///
@@ -1202,6 +1246,9 @@ pub fn check_pin_safety(
     topics: &[String],
     ids: &[String],
 ) -> Result<Vec<PinSafetyReport>, MifRhError> {
+    // Checked before fetching the index: a source mismatch fails closed regardless of its content.
+    let lock = LockFile::load_or_default(&root.join("ontologies.lock.json"))?;
+    check_lock_source(&lock, source)?;
     let index_bytes = fetch_raw(source, "index.json")?;
     let index_sha256 = sha256_hex(&index_bytes);
     let index: RegistryIndex =
@@ -1209,8 +1256,6 @@ pub fn check_pin_safety(
             registry_source: source.to_string(),
             detail: err.to_string(),
         })?;
-    let lock = LockFile::load_or_default(&root.join("ontologies.lock.json"))?;
-    check_lock_source(&lock, source)?;
     // Same trust-on-first-use check `fetch` enforces before trusting index
     // content (`vendor.rs`'s module doc: the index is "fully
     // attacker-controlled"). Read-only here — never re-pins, only refuses
@@ -1227,7 +1272,12 @@ pub fn check_pin_safety(
     }
 
     let mut reports = Vec::new();
+    let mut seen_ids = HashSet::new();
     for id in ids {
+        // Skip a repeated id: nothing new to analyze, and avoids duplicate fetches/output.
+        if !seen_ids.insert(id.as_str()) {
+            continue;
+        }
         // `id` is joined onto a filesystem path below (`old_path`), so it
         // must be validated the same way `resolve_fetch_set` validates
         // every id (including directly-requested ones) before any use —
@@ -1273,37 +1323,7 @@ pub fn check_pin_safety(
             continue;
         };
 
-        // Same integrity checks `fetch` enforces on this exact
-        // attacker-controlled path before trusting a fetched file:
-        // `entry.file` must be a bare filename (never a path that could
-        // escape the intended directory), and the downloaded bytes must
-        // match the index's own pinned sha256.
-        if !is_bare_filename(&entry.file) {
-            return Err(MifRhError::UnsafeIndexPath {
-                id: id.clone(),
-                file: entry.file.clone(),
-            });
-        }
-        let new_bytes = fetch_raw(source, &entry.file)?;
-        let got = sha256_hex(&new_bytes);
-        if got != entry.sha256 {
-            return Err(MifRhError::ChecksumMismatch {
-                id: id.clone(),
-                file: entry.file.clone(),
-                expected: entry.sha256.clone(),
-                got,
-            });
-        }
-        // Fail closed on invalid UTF-8 rather than `from_utf8_lossy`: the
-        // bytes are already checksum-verified, so the schema diffed below
-        // must be exactly the schema that was hashed and fetched, not a
-        // lossy substitution with replacement characters.
-        let new_text =
-            String::from_utf8(new_bytes).map_err(|_| MifRhError::OntologyPackNotUtf8 {
-                id: id.clone(),
-                file: entry.file.clone(),
-            })?;
-        let new_pack = parse_pack(&new_text, &format!("{source}/{}", entry.file))?;
+        let new_pack = fetch_and_parse_registry_pack(source, id, entry)?;
 
         let newly_required = diff_newly_required(&old_pack, &new_pack)?;
         let gaps = if newly_required.is_empty() {
@@ -2074,6 +2094,27 @@ mod tests {
         )
         .unwrap();
         assert!(reports.is_empty());
+    }
+
+    #[test]
+    fn check_pin_safety_dedupes_a_repeated_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = seed_pin_safety_fixture(dir.path(), "0.1.0", "0.2.0");
+
+        let reports = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &dir.path().join("reports"),
+            &[],
+            &["edu-fixture".to_string(), "edu-fixture".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(
+            reports.len(),
+            1,
+            "a duplicate id in the request must be analyzed once, not once per repetition"
+        );
     }
 
     #[test]
