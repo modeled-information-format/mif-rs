@@ -20,6 +20,8 @@ that exact problem type, one page per `{slug}/{version}` pair below.
 
 - [schema-compilation/v1](/mif-rs/references/errors/schema-compilation/v1/)
 - [invalid-document/v1](/mif-rs/references/errors/invalid-document/v1/)
+- [level-floor-violation/v1](/mif-rs/references/errors/level-floor-violation/v1/)
+- [unsupported-level/v1](/mif-rs/references/errors/unsupported-level/v1/)
 
 ## Ontology resolution (`mif-ontology`)
 
