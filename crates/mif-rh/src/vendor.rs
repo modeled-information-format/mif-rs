@@ -1113,16 +1113,18 @@ fn find_pin_safety_gaps(
 ///
 /// # Errors
 ///
-/// Returns [`MifRhError::RegistryFetch`] if the registry index or a
-/// drifted id's file cannot be fetched, [`MifRhError::RegistryIndexInvalid`]
-/// if the index is not valid JSON, [`MifRhError::IndexPinMismatch`] if the
-/// source's index sha256 no longer matches the lock's pinned value,
-/// [`MifRhError::OntologyNotInRegistry`] if a requested id has no index
-/// entry, [`MifRhError::UnsafeIndexPath`] if the index names an unsafe file
-/// path, [`MifRhError::ChecksumMismatch`] if a fetched file's sha256 does
-/// not match the index, [`MifRhError::OntologyPackYaml`] if the vendored or
-/// registry pack YAML is malformed, or [`MifRhError::Io`]/[`MifRhError::Json`]
-/// if a topic's `ontology-map.json` or a finding file cannot be read.
+/// Returns [`MifRhError::MalformedOntologyId`] if a requested id is not a
+/// bare, lowercase slug, [`MifRhError::RegistryFetch`] if the registry
+/// index or a drifted id's file cannot be fetched,
+/// [`MifRhError::RegistryIndexInvalid`] if the index is not valid JSON,
+/// [`MifRhError::IndexPinMismatch`] if the source's index sha256 no longer
+/// matches the lock's pinned value, [`MifRhError::OntologyNotInRegistry`]
+/// if a requested id has no index entry, [`MifRhError::UnsafeIndexPath`] if
+/// the index names an unsafe file path, [`MifRhError::ChecksumMismatch`] if
+/// a fetched file's sha256 does not match the index,
+/// [`MifRhError::OntologyPackYaml`] if the vendored or registry pack YAML
+/// is malformed, or [`MifRhError::Io`]/[`MifRhError::Json`] if a topic's
+/// `ontology-map.json` or a finding file cannot be read.
 pub fn check_pin_safety(
     root: &Path,
     source: &str,
@@ -1155,6 +1157,14 @@ pub fn check_pin_safety(
 
     let mut reports = Vec::new();
     for id in ids {
+        // `id` is joined onto a filesystem path below (`old_path`), so it
+        // must be validated the same way `resolve_fetch_set` validates
+        // every id (including directly-requested ones) before any use —
+        // a caller-supplied id is just as untrusted a path component as
+        // one discovered via the registry's `extends` chain.
+        if !is_wellformed_id(id) {
+            return Err(MifRhError::MalformedOntologyId { id: id.clone() });
+        }
         let Some(locked) = lock.ontologies.get(id) else {
             continue; // nothing pinned, nothing to check
         };
@@ -2207,5 +2217,24 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, super::MifRhError::IndexPinMismatch { .. }));
+    }
+
+    #[test]
+    fn check_pin_safety_rejects_a_malformed_id_before_touching_the_filesystem() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = seed_pin_safety_fixture(dir.path(), "0.1.0", "0.2.0");
+
+        let error = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &dir.path().join("reports"),
+            &[],
+            &["../../../../etc/passwd".to_string()],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            super::MifRhError::MalformedOntologyId { .. }
+        ));
     }
 }
