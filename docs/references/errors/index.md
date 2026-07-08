@@ -67,12 +67,14 @@ that exact problem type, one page per `{slug}/{version}` pair below.
 
 ## CLI and MCP server (`mif-cli`, `mif-mcp`)
 
-`invalid-json` and `document-not-found` are the only problem types unique to
-`mif-cli`/`mif-mcp` — they also independently define their own `io` problem
-type (shared with `mif-ontology`; see [io/v1](/mif-rs/references/errors/io/v1/)
-above) rather than delegating an I/O failure through the library layer. Every
-other failure they report delegates verbatim to the wrapped library crate's
-own problem type.
+`invalid-json`, `document-not-found`, and the per-binary
+`mif-cli-json-serialize-failure`/`mif-mcp-json-serialize-failure` pair are
+the only problem types unique to `mif-cli`/`mif-mcp` — they also
+independently define their own `io` problem type (shared with
+`mif-ontology`; see [io/v1](/mif-rs/references/errors/io/v1/) above) rather
+than delegating an I/O failure through the library layer. Every other
+failure they report delegates verbatim to the wrapped library crate's own
+problem type.
 
 - [invalid-json/v1](/mif-rs/references/errors/invalid-json/v1/)
 - [document-not-found/v1](/mif-rs/references/errors/document-not-found/v1/)
