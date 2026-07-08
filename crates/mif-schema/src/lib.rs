@@ -125,9 +125,10 @@ pub enum MifSchemaError {
 }
 
 impl MifSchemaError {
-    /// The individual validation error messages, if this is an
-    /// [`MifSchemaError::Invalid`] or [`MifSchemaError::LevelFloorViolation`].
-    /// Empty for [`MifSchemaError::SchemaCompilation`] and
+    /// The individual validation error messages if this is
+    /// [`MifSchemaError::Invalid`], or the missing field names (not full
+    /// messages) if this is [`MifSchemaError::LevelFloorViolation`]. Empty
+    /// for [`MifSchemaError::SchemaCompilation`] and
     /// [`MifSchemaError::UnsupportedLevel`].
     #[must_use]
     pub fn messages(&self) -> &[String] {
