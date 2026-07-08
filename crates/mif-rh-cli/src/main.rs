@@ -278,6 +278,15 @@ enum OntologyCommand {
         /// `<root>/.ontologies.source`, then the canonical registry.
         #[arg(long)]
         source: Option<String>,
+        /// Advance an id already pinned in `ontologies.lock.json` to the
+        /// registry's current version. Without this, an id already pinned
+        /// is left untouched (with a warning) whenever the registry has
+        /// moved past it — the lock IS the version pin (rht#270): a corpus
+        /// must not have an ontology's schema silently advance underneath
+        /// its already-stamped findings. Has no effect on an id with no
+        /// existing lock entry (a first-time fetch always vendors current).
+        #[arg(long)]
+        refresh: bool,
     },
     /// Rebuild the ontology-catalog section of the catalog sidecar
     /// (`.claude/enabled-packs.json`'s `.ontologies` key) from committed
@@ -868,12 +877,14 @@ fn ontology_cmd(action: &OntologyCommand) -> Result<Outcome, CliError> {
             root,
             config,
             source,
+            refresh,
         } => ontology_fetch_cmd(
             ids,
             *all_enabled,
             root.as_deref(),
             config.as_deref(),
             source.as_deref(),
+            *refresh,
         ),
         OntologyCommand::Sync {
             root,
@@ -916,6 +927,7 @@ fn ontology_fetch_cmd(
     root: Option<&Path>,
     config: Option<&Path>,
     source: Option<&str>,
+    refresh: bool,
 ) -> Result<Outcome, CliError> {
     let root = effective_path(root, ".");
     let resolved_source =
@@ -934,11 +946,17 @@ fn ontology_fetch_cmd(
             exit_code: 0,
         });
     }
-    let report = mif_rh::vendor::fetch(&root, &resolved_source, &fetch_ids)?;
-    let message = if report.vendored.is_empty() {
-        "ontology fetch: nothing to fetch (all requested layers are committed base layers or \
-         already vendored)"
-            .to_string()
+    let report = mif_rh::vendor::fetch(&root, &resolved_source, &fetch_ids, refresh)?;
+    let mut message = if report.vendored.is_empty() {
+        if report.pinned_skipped.is_empty() {
+            "ontology fetch: nothing to fetch (all requested layers are committed base layers \
+             or already vendored)"
+                .to_string()
+        } else {
+            "ontology fetch: nothing newly vendored (every requested layer is either already \
+             vendored or held at its pinned version)"
+                .to_string()
+        }
     } else {
         let names: Vec<String> = report
             .vendored
@@ -952,6 +970,36 @@ fn ontology_fetch_cmd(
             root.join("ontologies.lock.json").display()
         )
     };
+    // rht#270: never let a version-pin skip pass silently — every id left
+    // at its pinned version because the registry has moved past it is
+    // named here, so a `copier update` run surfaces the drift instead of
+    // burying it in an otherwise-quiet success message.
+    if !report.pinned_skipped.is_empty() {
+        use std::fmt::Write as _;
+
+        let drift: Vec<String> = report
+            .pinned_skipped
+            .iter()
+            .map(|p| {
+                format!(
+                    "{} (pinned {}, registry has {})",
+                    p.id, p.locked_version, p.registry_version
+                )
+            })
+            .collect();
+        let _ = write!(
+            message,
+            "\nWARNING: {} ontology pack{} left at the pinned version, not the registry's \
+             current one: {}. Pass --refresh to advance deliberately.",
+            report.pinned_skipped.len(),
+            if report.pinned_skipped.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
+            drift.join(", ")
+        );
+    }
     Ok(Outcome {
         message,
         exit_code: 0,
@@ -4121,7 +4169,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_ontology_root(dir.path());
 
-        let outcome = ontology_fetch_cmd(&[], false, Some(dir.path()), None, None).unwrap();
+        let outcome = ontology_fetch_cmd(&[], false, Some(dir.path()), None, None, false).unwrap();
         assert_eq!(outcome.exit_code, 0);
         assert!(outcome.message.contains("nothing to fetch"));
     }
