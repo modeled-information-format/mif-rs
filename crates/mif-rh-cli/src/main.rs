@@ -280,8 +280,9 @@ enum OntologyCommand {
         source: Option<String>,
         /// Advance an id already pinned in `ontologies.lock.json` to the
         /// registry's current version. Without this, an id already pinned
-        /// is left untouched (with a warning) whenever the registry has
-        /// moved past it — the lock IS the version pin (rht#270): a corpus
+        /// is left untouched (with a warning) whenever the registry's
+        /// current version differs from it — the lock IS the version pin
+        /// (rht#270): a corpus
         /// must not have an ontology's schema silently advance underneath
         /// its already-stamped findings. Has no effect on an id with no
         /// existing lock entry (a first-time fetch always vendors current).

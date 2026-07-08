@@ -272,7 +272,7 @@ pub struct VendoredOntology {
 
 /// One ontology [`fetch`] left untouched at its pinned version.
 ///
-/// Its `ontologies.lock.json` entry is older than the registry's current
+/// Its `ontologies.lock.json` entry differs from the registry's current
 /// version, and `refresh` was not set (research-harness-template#270: a
 /// pinned corpus must not silently advance underneath an already-stamped
 /// finding set).
@@ -298,7 +298,7 @@ pub struct FetchReport {
     pub pinned_skipped: Vec<PinnedSkipped>,
 }
 
-/// Whether `id` is already pinned in `lock` at a version older than
+/// Whether `id` is already pinned in `lock` at a version different from
 /// `entry`'s (the registry's current one) and `refresh` was not set — the
 /// rht#270 drift `fetch` must hold rather than silently advance past.
 fn pinned_below_registry(
@@ -475,11 +475,12 @@ pub fn fetch(
             version: entry.version.clone(),
         });
     }
-    if fetch_list.is_empty() {
-        // Nothing to vendor (every requested id was a committed base
-        // layer) — still worth persisting the pin so a later fetch from
-        // this source has one to compare against, but no per-id write
-        // happened above to do it.
+    if vendored.is_empty() {
+        // No per-id write happened above to persist the mutated
+        // index_sha256/source: either fetch_list was empty (every requested
+        // id was a committed base layer), or every entry in it was pinned
+        // and skipped. Either way the pin/trust-root mutations made before
+        // the loop still need to land on disk.
         crate::write_json_atomic(&lock_path, &lock)?;
     }
 
@@ -1104,6 +1105,45 @@ mod tests {
             dir.path()
                 .join("packs/ontologies/edu-fixture/edu-fixture.ontology.yaml")
                 .exists()
+        );
+    }
+
+    #[test]
+    fn fetch_persists_a_cleared_index_pin_even_when_every_id_is_pinned_skipped() {
+        // Regression: when every requested id is pinned-and-skipped, no
+        // per-id write happens in the loop, so the index_sha256/source
+        // mutated before the loop must still be persisted by the
+        // fallback write after it — otherwise a deliberate re-pin (clear
+        // index_sha256, re-fetch) silently fails to record the new trust
+        // root whenever it also happens to hit only already-pinned ids.
+        let dir = tempfile::tempdir().unwrap();
+        write_base_layer(dir.path());
+        let source = seed_registry_ahead_of_a_pinned_lock(dir.path(), "0.2.0", "0.1.0");
+
+        // Clear index_sha256, simulating a deliberate re-pin in progress.
+        let mut lock: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(dir.path().join("ontologies.lock.json")).unwrap(),
+        )
+        .unwrap();
+        lock.as_object_mut().unwrap().remove("index_sha256");
+        fs::write(
+            dir.path().join("ontologies.lock.json"),
+            serde_json::to_string(&lock).unwrap(),
+        )
+        .unwrap();
+
+        let report = fetch(dir.path(), &source, &["edu-fixture".to_string()], false).unwrap();
+        assert!(report.vendored.is_empty());
+        assert_eq!(report.pinned_skipped.len(), 1);
+
+        let after: super::LockFile = serde_json::from_str(
+            &fs::read_to_string(dir.path().join("ontologies.lock.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            after.index_sha256.is_some(),
+            "the re-pinned index_sha256 must be persisted even though every \
+             requested id was pinned-skipped"
         );
     }
 
