@@ -213,10 +213,16 @@ fn is_wellformed_id(id: &str) -> bool {
 /// Windows-style separator (`..\..\etc`) or an absolute path (`C:\...`)
 /// through unchecked.
 fn is_bare_filename(file: &str) -> bool {
+    // `Path::components()` alone is insufficient: a trailing slash (e.g.
+    // "foo/") still yields a single `Normal` component with nothing after
+    // it, so it would otherwise pass as if it were the bare filename "foo".
+    // Rejecting any '/' directly closes that gap without relying on
+    // component parsing to catch it.
     let mut components = std::path::Path::new(file).components();
     matches!(components.next(), Some(std::path::Component::Normal(_)))
         && components.next().is_none()
         && !file.contains('\\')
+        && !file.contains('/')
 }
 
 /// Resolves `requested`'s `extends` closure against `index` (breadth-first,
@@ -1381,8 +1387,8 @@ mod tests {
     use std::fs;
 
     use super::{
-        DEFAULT_REGISTRY_SOURCE, diff_newly_required, fetch, is_wellformed_id, lock_check,
-        resolve_source, sync_catalog, sync_registry,
+        DEFAULT_REGISTRY_SOURCE, diff_newly_required, fetch, is_bare_filename, is_wellformed_id,
+        lock_check, resolve_source, sync_catalog, sync_registry,
     };
     use crate::ontology_pack::parse_pack;
 
@@ -1453,6 +1459,18 @@ mod tests {
         assert!(!is_wellformed_id("../etc"));
         assert!(!is_wellformed_id("Clinical"));
         assert!(!is_wellformed_id("has space"));
+    }
+
+    #[test]
+    fn is_bare_filename_rejects_a_trailing_slash() {
+        // Path::components() alone treats "foo/" as a single Normal("foo")
+        // component with nothing after it, so it would otherwise pass as
+        // if it were the bare filename "foo" — this must be rejected.
+        assert!(!is_bare_filename("foo/"));
+        assert!(!is_bare_filename("foo/bar"));
+        assert!(!is_bare_filename("/foo"));
+        assert!(!is_bare_filename("foo\\bar"));
+        assert!(is_bare_filename("edu-fixture.ontology.yaml"));
     }
 
     #[test]
