@@ -207,6 +207,21 @@ fn is_wellformed_id(id: &str) -> bool {
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+/// Whether `file` (an index entry's attacker-controlled `file` field) is
+/// safe to join onto a filesystem path: exactly one normal path component
+/// (a bare filename). Checking only for `/` and `..` would still let a
+/// Windows-style separator (`..\..\etc`) or an absolute path (`C:\...`)
+/// through unchecked.
+fn is_bare_filename(file: &str) -> bool {
+    matches!(
+        std::path::Path::new(file)
+            .components()
+            .collect::<Vec<_>>()
+            .as_slice(),
+        [std::path::Component::Normal(_)]
+    ) && !file.contains('\\')
+}
+
 /// Resolves `requested`'s `extends` closure against `index` (breadth-first,
 /// skipping committed base layers), returning the domain layers that must
 /// actually be fetched, in discovery order.
@@ -407,18 +422,10 @@ pub fn fetch(
             pinned_skipped.push(skip);
             continue;
         }
-        // `entry.file` is later joined onto a filesystem path, so it must be
-        // exactly one normal path component (a bare filename) — checking
-        // only for `/` and `..` still lets a Windows-style separator
-        // (`..\..\etc`) or an absolute path (`C:\...`) through unchecked.
-        let is_bare_filename = matches!(
-            std::path::Path::new(&entry.file)
-                .components()
-                .collect::<Vec<_>>()
-                .as_slice(),
-            [std::path::Component::Normal(_)]
-        ) && !entry.file.contains('\\');
-        if !is_bare_filename {
+        // `entry.file` is later joined onto a filesystem path, so it must
+        // be a bare filename, never a path that could escape the intended
+        // directory.
+        if !is_bare_filename(&entry.file) {
             return Err(MifRhError::UnsafeIndexPath {
                 id: id.clone(),
                 file: entry.file.clone(),
@@ -1081,13 +1088,13 @@ fn find_pin_safety_gaps(
 /// Warns only when a pinned ontology's advanced schema actually breaks an
 /// already-stamped finding.
 ///
-/// For each of `ids` currently pinned in `root/ontologies.lock.json` at a
-/// version behind the registry's current one, diffs the vendored (old) and
-/// registry (new) schema's `entity_types[].schema.required` lists, and
-/// cross-references any newly required field against `topics`' already-
-/// stamped findings — the narrower, smarter follow-up to `fetch`'s plain
-/// version-drift warning (research-harness-template#270's proposed fix #2;
-/// tracked as mif-rs#61).
+/// For each of `ids` currently pinned in `root/ontologies.lock.json` whose
+/// locked version differs from the registry's current one, diffs the
+/// vendored (old) and registry (new) schema's `entity_types[].schema.required`
+/// lists, and cross-references any newly required field against `topics`'
+/// already-stamped findings — the narrower, smarter follow-up to `fetch`'s
+/// plain version-drift warning (research-harness-template#270's proposed
+/// fix #2; tracked as mif-rs#61).
 ///
 /// An id with no lock entry, or already at the registry's current version,
 /// produces no report entry — nothing pinned, or nothing drifted, to
@@ -1099,17 +1106,23 @@ fn find_pin_safety_gaps(
 /// Read-only: never touches `ontologies.lock.json`, never vendors, never
 /// advances a pin. Downloads the registry's current file for a drifted id
 /// purely to diff it — unlike `fetch`, which never re-fetches a
-/// pinned-skipped id's file at all.
+/// pinned-skipped id's file at all — applying the same integrity checks
+/// `fetch` applies to that same attacker-controlled path (index-pin
+/// verification, bare-filename validation, sha256 verification against the
+/// index) before trusting any fetched byte.
 ///
 /// # Errors
 ///
 /// Returns [`MifRhError::RegistryFetch`] if the registry index or a
 /// drifted id's file cannot be fetched, [`MifRhError::RegistryIndexInvalid`]
-/// if the index is not valid JSON, [`MifRhError::OntologyNotInRegistry`] if
-/// a requested id has no index entry, [`MifRhError::OntologyPackYaml`] if
-/// the vendored or registry pack YAML is malformed, or
-/// [`MifRhError::Io`]/[`MifRhError::Json`] if a topic's `ontology-map.json`
-/// or a finding file cannot be read.
+/// if the index is not valid JSON, [`MifRhError::IndexPinMismatch`] if the
+/// source's index sha256 no longer matches the lock's pinned value,
+/// [`MifRhError::OntologyNotInRegistry`] if a requested id has no index
+/// entry, [`MifRhError::UnsafeIndexPath`] if the index names an unsafe file
+/// path, [`MifRhError::ChecksumMismatch`] if a fetched file's sha256 does
+/// not match the index, [`MifRhError::OntologyPackYaml`] if the vendored or
+/// registry pack YAML is malformed, or [`MifRhError::Io`]/[`MifRhError::Json`]
+/// if a topic's `ontology-map.json` or a finding file cannot be read.
 pub fn check_pin_safety(
     root: &Path,
     source: &str,
@@ -1118,12 +1131,27 @@ pub fn check_pin_safety(
     ids: &[String],
 ) -> Result<Vec<PinSafetyReport>, MifRhError> {
     let index_bytes = fetch_raw(source, "index.json")?;
+    let index_sha256 = sha256_hex(&index_bytes);
     let index: RegistryIndex =
         serde_json::from_slice(&index_bytes).map_err(|err| MifRhError::RegistryIndexInvalid {
             registry_source: source.to_string(),
             detail: err.to_string(),
         })?;
     let lock = LockFile::load_or_default(&root.join("ontologies.lock.json"))?;
+    // Same trust-on-first-use check `fetch` enforces before trusting index
+    // content (`vendor.rs`'s module doc: the index is "fully
+    // attacker-controlled"). Read-only here — never re-pins, only refuses
+    // to proceed on a mismatch.
+    if let Some(pinned) = &lock.index_sha256
+        && lock.source == source
+        && *pinned != index_sha256
+    {
+        return Err(MifRhError::IndexPinMismatch {
+            registry_source: source.to_string(),
+            pinned: pinned.clone(),
+            got: index_sha256,
+        });
+    }
 
     let mut reports = Vec::new();
     for id in ids {
@@ -1163,7 +1191,27 @@ pub fn check_pin_safety(
             continue;
         };
 
+        // Same integrity checks `fetch` enforces on this exact
+        // attacker-controlled path before trusting a fetched file:
+        // `entry.file` must be a bare filename (never a path that could
+        // escape the intended directory), and the downloaded bytes must
+        // match the index's own pinned sha256.
+        if !is_bare_filename(&entry.file) {
+            return Err(MifRhError::UnsafeIndexPath {
+                id: id.clone(),
+                file: entry.file.clone(),
+            });
+        }
         let new_bytes = fetch_raw(source, &entry.file)?;
+        let got = sha256_hex(&new_bytes);
+        if got != entry.sha256 {
+            return Err(MifRhError::ChecksumMismatch {
+                id: id.clone(),
+                file: entry.file.clone(),
+                expected: entry.sha256.clone(),
+                got,
+            });
+        }
         let new_pack = parse_pack(&String::from_utf8_lossy(&new_bytes), &entry.file)?;
 
         let newly_required = diff_newly_required(&old_pack, &new_pack);
@@ -2077,5 +2125,87 @@ mod tests {
             error,
             super::MifRhError::OntologyNotInRegistry { .. }
         ));
+    }
+
+    #[test]
+    fn check_pin_safety_fails_closed_on_a_checksum_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = seed_pin_safety_fixture(dir.path(), "0.1.0", "0.2.0");
+        // Corrupt the registry's declared sha256 for the drifted id's file.
+        let index_path = dir.path().join("registry/index.json");
+        let mut index: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&index_path).unwrap()).unwrap();
+        index["ontologies"]["edu-fixture"]["sha256"] =
+            serde_json::json!("0000000000000000000000000000000000000000000000000000000000000000");
+        fs::write(&index_path, serde_json::to_string(&index).unwrap()).unwrap();
+        // Re-write the lock's index_sha256 to match the corrupted index, so
+        // this test isolates the file-checksum check from the index-pin
+        // check.
+        let lock_path = dir.path().join("ontologies.lock.json");
+        let mut lock: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&lock_path).unwrap()).unwrap();
+        lock["index_sha256"] =
+            serde_json::json!(sha256_of(fs::read(&index_path).unwrap().as_slice()));
+        fs::write(&lock_path, serde_json::to_string(&lock).unwrap()).unwrap();
+
+        let error = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &dir.path().join("reports"),
+            &[],
+            &["edu-fixture".to_string()],
+        )
+        .unwrap_err();
+        assert!(matches!(error, super::MifRhError::ChecksumMismatch { .. }));
+    }
+
+    #[test]
+    fn check_pin_safety_rejects_an_unsafe_index_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = seed_pin_safety_fixture(dir.path(), "0.1.0", "0.2.0");
+        let index_path = dir.path().join("registry/index.json");
+        let mut index: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&index_path).unwrap()).unwrap();
+        index["ontologies"]["edu-fixture"]["file"] = serde_json::json!("../../../../etc/passwd");
+        fs::write(&index_path, serde_json::to_string(&index).unwrap()).unwrap();
+        let lock_path = dir.path().join("ontologies.lock.json");
+        let mut lock: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&lock_path).unwrap()).unwrap();
+        lock["index_sha256"] =
+            serde_json::json!(sha256_of(fs::read(&index_path).unwrap().as_slice()));
+        fs::write(&lock_path, serde_json::to_string(&lock).unwrap()).unwrap();
+
+        let error = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &dir.path().join("reports"),
+            &[],
+            &["edu-fixture".to_string()],
+        )
+        .unwrap_err();
+        assert!(matches!(error, super::MifRhError::UnsafeIndexPath { .. }));
+    }
+
+    #[test]
+    fn check_pin_safety_refuses_a_registry_index_that_no_longer_matches_the_pinned_trust_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = seed_pin_safety_fixture(dir.path(), "0.1.0", "0.2.0");
+        // seed_pin_safety_fixture already pins the real index sha256;
+        // corrupt it to simulate a swapped/tampered registry source.
+        let lock_path = dir.path().join("ontologies.lock.json");
+        let mut lock: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&lock_path).unwrap()).unwrap();
+        lock["index_sha256"] = serde_json::json!("not-the-real-index-sha256");
+        fs::write(&lock_path, serde_json::to_string(&lock).unwrap()).unwrap();
+
+        let error = super::check_pin_safety(
+            dir.path(),
+            &source,
+            &dir.path().join("reports"),
+            &[],
+            &["edu-fixture".to_string()],
+        )
+        .unwrap_err();
+        assert!(matches!(error, super::MifRhError::IndexPinMismatch { .. }));
     }
 }

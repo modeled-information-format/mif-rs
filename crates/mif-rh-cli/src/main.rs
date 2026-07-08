@@ -1115,6 +1115,12 @@ fn ontology_check_pin_safety_cmd(
         }
     }
 
+    // Always exit 0, even on a WARNING line: this is an informational
+    // report, matching `ontology fetch`'s own pinned-skipped warning
+    // (`ontology_fetch_cmd`, above) — a CI job that wants a hard gate on a
+    // breaking-change gap should check the message text (the "WARNING:"
+    // prefix) rather than the exit code, since this command deliberately
+    // never fails closed.
     Ok(Outcome {
         message: format!("ontology check-pin-safety:\n{}", lines.join("\n")),
         exit_code: 0,
@@ -4352,19 +4358,37 @@ mod tests {
         )
         .unwrap();
 
-        // Registry (new) pack: `title` now also requires `isbn`. Unlike
-        // `fetch`, `check_pin_safety` is read-only and never verifies a
-        // sha256 against the index (it doesn't vendor anything) — the
-        // `sha256`/`index_sha256` fields below are placeholders, never
-        // checked.
+        // Registry (new) pack: `title` now also requires `isbn`.
+        // `check_pin_safety` verifies the fetched file's sha256 against the
+        // index, the same integrity check `fetch` applies — the index
+        // entry's `sha256` below must be real, not a placeholder. No
+        // `index_sha256` is set in the lock, so the trust-on-first-use
+        // check (only active when a prior pin exists) is not exercised
+        // here.
         let registry = dir.path().join("registry");
         fs::create_dir_all(&registry).unwrap();
         let new_yaml = "ontology:\n  id: edu-fixture\n  version: \"0.2.0\"\n  extends: \
                          [mif-base]\nentity_types:\n  - name: title\n    schema:\n      \
                          required: [name, isbn]\n      properties:\n        name: {type: \
                          string}\n        isbn: {type: string}\n";
-        let index = r#"{"ontologies":{"edu-fixture":{"version":"0.2.0","sha256":"irrelevant","file":"edu-fixture.ontology.yaml","extends":["mif-base"]}}}"#;
-        fs::write(registry.join("index.json"), index).unwrap();
+        let new_yaml_sha256 = {
+            use std::fmt::Write as _;
+
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(new_yaml.as_bytes());
+            hasher
+                .finalize()
+                .iter()
+                .fold(String::new(), |mut hex, byte| {
+                    let _ = write!(hex, "{byte:02x}");
+                    hex
+                })
+        };
+        let index = format!(
+            r#"{{"ontologies":{{"edu-fixture":{{"version":"0.2.0","sha256":"{new_yaml_sha256}","file":"edu-fixture.ontology.yaml","extends":["mif-base"]}}}}}}"#
+        );
+        fs::write(registry.join("index.json"), &index).unwrap();
         fs::write(registry.join("edu-fixture.ontology.yaml"), new_yaml).unwrap();
 
         let source = registry.display().to_string();
@@ -4373,7 +4397,6 @@ mod tests {
             serde_json::to_string(&serde_json::json!({
                 "schema": "mif-ontology-lock/v1",
                 "source": source,
-                "index_sha256": "irrelevant",
                 "ontologies": {"edu-fixture": {"version": "0.1.0", "sha256": "irrelevant"}}
             }))
             .unwrap(),
