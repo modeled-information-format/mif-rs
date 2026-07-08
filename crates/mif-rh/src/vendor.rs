@@ -1020,9 +1020,12 @@ fn diff_newly_required(
         let Some(old_type) = old.entity_types.iter().find(|t| t.name == new_type.name) else {
             continue;
         };
-        let old_required = required_fields(&old_type.name, &old_type.schema)?;
+        let old_required: HashSet<String> = required_fields(&old_type.name, &old_type.schema)?
+            .into_iter()
+            .collect();
+        let mut seen_new = HashSet::new();
         for field in required_fields(&new_type.name, &new_type.schema)? {
-            if !old_required.contains(&field) {
+            if !old_required.contains(&field) && seen_new.insert(field.clone()) {
                 out.push(NewlyRequiredField {
                     entity_type: new_type.name.clone(),
                     field,
@@ -1291,9 +1294,10 @@ mod tests {
     use std::fs;
 
     use super::{
-        DEFAULT_REGISTRY_SOURCE, fetch, is_wellformed_id, lock_check, resolve_source, sync_catalog,
-        sync_registry,
+        DEFAULT_REGISTRY_SOURCE, diff_newly_required, fetch, is_wellformed_id, lock_check,
+        resolve_source, sync_catalog, sync_registry,
     };
+    use crate::ontology_pack::parse_pack;
 
     const EDU_INDEX: &str = r#"{
         "ontologies": {
@@ -1979,6 +1983,29 @@ mod tests {
             format!(r#"{{"@id":"f-1","entity":{entity_json}}}"#),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn diff_newly_required_dedupes_a_field_repeated_in_the_new_schema() {
+        let old_yaml = "ontology:\n  id: edu-fixture\n  version: \"0.1.0\"\n  extends: \
+                        [mif-base]\nentity_types:\n  - name: title\n    schema:\n      required: \
+                        [name]\n      properties:\n        name: {type: string}\n";
+        let new_yaml = "ontology:\n  id: edu-fixture\n  version: \"0.2.0\"\n  extends: \
+                        [mif-base]\nentity_types:\n  - name: title\n    schema:\n      required: \
+                        [name, isbn, isbn]\n      properties:\n        name: {type: string}\n        \
+                        isbn: {type: string}\n";
+        let old_pack = parse_pack(old_yaml, "old").unwrap();
+        let new_pack = parse_pack(new_yaml, "new").unwrap();
+
+        let newly_required = diff_newly_required(&old_pack, &new_pack).unwrap();
+
+        assert_eq!(
+            newly_required.len(),
+            1,
+            "a required field repeated in the new schema must be reported once, not once per repetition"
+        );
+        assert_eq!(newly_required[0].entity_type, "title");
+        assert_eq!(newly_required[0].field, "isbn");
     }
 
     #[test]
