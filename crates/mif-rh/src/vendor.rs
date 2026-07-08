@@ -213,13 +213,10 @@ fn is_wellformed_id(id: &str) -> bool {
 /// Windows-style separator (`..\..\etc`) or an absolute path (`C:\...`)
 /// through unchecked.
 fn is_bare_filename(file: &str) -> bool {
-    matches!(
-        std::path::Path::new(file)
-            .components()
-            .collect::<Vec<_>>()
-            .as_slice(),
-        [std::path::Component::Normal(_)]
-    ) && !file.contains('\\')
+    let mut components = std::path::Path::new(file).components();
+    matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+        && !file.contains('\\')
 }
 
 /// Resolves `requested`'s `extends` closure against `index` (breadth-first,
@@ -1133,7 +1130,11 @@ fn find_pin_safety_gaps(
 /// a fetched file's sha256 does not match the index,
 /// [`MifRhError::OntologyPackYaml`] if the vendored or registry pack YAML
 /// is malformed, or [`MifRhError::Io`]/[`MifRhError::Json`] if a topic's
-/// `ontology-map.json` or a finding file cannot be read.
+/// `ontology-map.json` cannot be read or parsed. An individual finding
+/// file that cannot be read or parsed is silently skipped rather than
+/// propagated (the same treatment `collect_topic_samples` gives an
+/// unreadable finding) — a gap-analysis finding is review's concern, not
+/// this function's.
 pub fn check_pin_safety(
     root: &Path,
     source: &str,

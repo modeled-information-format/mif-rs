@@ -1106,7 +1106,20 @@ fn ontology_check_pin_safety_cmd(
             let gap_details: Vec<String> = report
                 .gaps
                 .iter()
-                .map(|gap| format!("{}/{} (missing {})", gap.topic, gap.finding_id, gap.field))
+                .map(|gap| {
+                    format!(
+                        "{}/{} ({} missing {})",
+                        gap.topic, gap.finding_id, gap.entity_type, gap.field
+                    )
+                })
+                .collect();
+            // Distinct findings, not gap count: a single finding missing
+            // multiple newly required fields produces multiple gaps, and
+            // counting gaps would overstate how many findings are affected.
+            let distinct_findings: std::collections::HashSet<&str> = report
+                .gaps
+                .iter()
+                .map(|gap| gap.finding_id.as_str())
                 .collect();
             lines.push(format!(
                 "WARNING: {}: pinned {} -> registry {}, {} stamped finding{} missing a newly \
@@ -1114,8 +1127,12 @@ fn ontology_check_pin_safety_cmd(
                 report.id,
                 report.locked_version,
                 report.registry_version,
-                report.gaps.len(),
-                if report.gaps.len() == 1 { "" } else { "s" },
+                distinct_findings.len(),
+                if distinct_findings.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
                 gap_details.join(", ")
             ));
         }
