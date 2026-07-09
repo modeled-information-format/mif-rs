@@ -130,8 +130,15 @@ enum Command {
     /// embedding similarity with confidence tiers (MIF ADR-020). Prints a
     /// JSON array of hypotheses; never writes to `reports/`.
     SuggestType {
-        /// The text to classify. Omit when using `--finding`.
-        #[arg(required_unless_present = "finding", conflicts_with = "finding")]
+        /// The text to classify. Omit when using `--finding`. Accepts a
+        /// value starting with `-` (free-authored prose, e.g. a Markdown
+        /// bullet); the accepted trade-off is that an omitted value lets
+        /// the next token be consumed as this one instead of erroring.
+        #[arg(
+            required_unless_present = "finding",
+            conflicts_with = "finding",
+            allow_hyphen_values = true
+        )]
         text: Option<String>,
         /// Path to a finding JSON file whose indexed text (discovery text,
         /// else its entity's name) is the query.
@@ -488,14 +495,20 @@ enum HarnessCommand {
         /// Write the envelope here.
         #[arg(long)]
         out: PathBuf,
-        /// The source's title. Defaults to `slug`.
-        #[arg(long)]
+        /// The source's title. Defaults to `slug`. Accepts a value
+        /// starting with `-`; the accepted trade-off is that an omitted
+        /// value lets the next token be consumed as this one instead of
+        /// erroring.
+        #[arg(long, allow_hyphen_values = true)]
         title: Option<String>,
         /// Read content from this file.
         #[arg(long = "content-file")]
         content_file: Option<PathBuf>,
-        /// Content given directly on the command line.
-        #[arg(long)]
+        /// Content given directly on the command line. Accepts a value
+        /// starting with `-`; the accepted trade-off is that an omitted
+        /// value lets the next token be consumed as this one instead of
+        /// erroring.
+        #[arg(long, allow_hyphen_values = true)]
         content: Option<String>,
         /// The provenance `sourceType`. Defaults to `agent_inferred`.
         #[arg(long = "source-type")]
@@ -650,8 +663,12 @@ enum HarnessCommand {
         /// Write the corpus synthesis markdown here.
         markdown_out: PathBuf,
         /// Previously authored "Cross-Corpus Insights" prose to preserve
-        /// across rebuilds (omit to seed the draft marker).
-        #[arg(long)]
+        /// across rebuilds (omit to seed the draft marker). Accepts a
+        /// value starting with `-` (e.g. an authored Markdown bullet); the
+        /// accepted trade-off is that passing this flag with no value lets
+        /// the next token be silently consumed as this one instead of
+        /// erroring, so always pair `--preserved-insights` with a value.
+        #[arg(long, allow_hyphen_values = true)]
         preserved_insights: Option<String>,
     },
     /// Prove a knowledge graph is MIF-derived (urn:mif: ids, typed

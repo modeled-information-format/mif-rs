@@ -70,6 +70,8 @@ enum Command {
     /// Free-text semantic search over previously ingested documents.
     Search {
         /// The query text to embed and rank stored documents against.
+        /// Accepts a value starting with `-` (free-authored prose).
+        #[arg(allow_hyphen_values = true)]
         query: String,
         /// Path to the `SQLite` vector store database. Defaults to
         /// `.mif/vectors.db`.

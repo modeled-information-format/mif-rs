@@ -392,3 +392,105 @@ fn review_runs_a_configured_relationship_script_exactly_once() {
         "the relationship script must run exactly once, got: {runs:?}"
     );
 }
+
+/// Regression test for #69: `--preserved-insights` carries free-authored
+/// prose that can legitimately open with a Markdown bullet (`- ...`).
+/// Without `allow_hyphen_values`, clap mistakes the value for an
+/// unrecognized flag instead of the option's argument.
+#[test]
+fn synthesize_corpus_accepts_preserved_insights_starting_with_a_hyphen() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("concordance.json"),
+        r#"{"nodes": [], "edges": []}"#,
+    )
+    .unwrap();
+
+    let output = bin(dir.path())
+        .args([
+            "harness",
+            "synthesize-corpus",
+            "concordance.json",
+            "map.json",
+            "out.md",
+        ])
+        .args(["--preserved-insights", "- a leading bullet"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(dir.path().join("out.md").exists());
+}
+
+/// Same class of bug as the preserved-insights case above: `--title` and
+/// `--content` are also arbitrary freeform text (a source title or inline
+/// content) that can legitimately start with `-`.
+#[test]
+fn wrap_source_accepts_title_and_content_starting_with_a_hyphen() {
+    let dir = tempfile::tempdir().unwrap();
+    let schema_path = dir.path().join("source-envelope.schema.json");
+    std::fs::write(
+        &schema_path,
+        r#"{
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": ["@id", "content", "title"],
+            "properties": {
+                "@id": {"type": "string"},
+                "content": {"type": "string", "minLength": 1},
+                "title": {"type": "string"}
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let output = bin(dir.path())
+        .args(["harness", "wrap-source"])
+        .args(["--url", "https://example.com/paper"])
+        .args(["--content-type", "text/html"])
+        .args(["--namespace", "physics"])
+        .args(["--slug", "example-paper"])
+        .args(["--out", "envelope.json"])
+        .args(["--title", "- a leading dash title"])
+        .args(["--content", "- a leading dash body"])
+        .arg("--schema")
+        .arg(&schema_path)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0), "{}", stderr_of(&output));
+    assert!(dir.path().join("envelope.json").exists());
+}
+
+/// Same class of bug as the two tests above, on a positional rather than
+/// a `--flag` argument: `suggest-type`'s free-text `TEXT` positional is
+/// arbitrary prose that can legitimately start with `-`. A missing
+/// catalog fixture makes a full success run impractical here (it also
+/// needs a downloaded embedding model), so this asserts the narrower
+/// thing that actually matters for #69: clap must parse the leading-hyphen
+/// value as the positional argument, not misparse it as an unrecognized
+/// flag (clap's own usage-error exit code is 2). The run then fails for
+/// an unrelated, expected reason (no `.claude/enabled-packs.json` catalog
+/// in the empty temp dir), which is not what this test is about.
+#[test]
+fn suggest_type_accepts_free_text_starting_with_a_hyphen() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let output = bin(dir.path())
+        .args(["suggest-type", "- some free text", "--topic", "foo"])
+        .output()
+        .unwrap();
+
+    assert_ne!(
+        output.status.code(),
+        Some(2),
+        "a clap usage-error exit code means the leading-hyphen text was \
+         misparsed as a flag: {}",
+        stderr_of(&output)
+    );
+    let stderr = stderr_of(&output);
+    assert!(
+        !stderr.contains("unexpected argument"),
+        "clap must not misparse the leading-hyphen text as a flag: {stderr}"
+    );
+}
