@@ -659,7 +659,7 @@ fn emit_markdown(
             out.display()
         ))
     } else {
-        Ok(markdown)
+        Ok(markdown.trim_end_matches('\n').to_string())
     }
 }
 
