@@ -214,3 +214,32 @@ fn an_out_of_range_level_exits_with_the_mapped_error_code() {
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
 }
+
+/// Regression test (mif-rs#69's bug class): `search`'s `QUERY` positional
+/// is free-authored prose that can legitimately start with `-`. Without
+/// `allow_hyphen_values`, clap misparses it as an unrecognized flag.
+/// A full success run needs a downloaded embedding model, so this proves
+/// the narrower thing that matters: clap accepts the value and the run
+/// reaches vector-store resolution (an unrelated, expected failure in an
+/// empty temp dir with no `.mif/` directory yet) instead of failing at
+/// argument parsing.
+#[test]
+fn search_accepts_a_query_starting_with_a_hyphen() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mif-cli"))
+        .current_dir(dir.path())
+        .args(["search", "-foo bar"])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("unexpected argument") && !stderr.contains("Usage: mif-cli search"),
+        "clap must not misparse the leading-hyphen query as a flag: {stderr}"
+    );
+    assert!(
+        stderr.contains("missing-parent-dir"),
+        "expected the query to reach vector-store resolution, got: {stderr}"
+    );
+}
