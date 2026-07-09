@@ -361,6 +361,30 @@ enum OntologyCommand {
         #[arg(long)]
         reports_dir: Option<PathBuf>,
     },
+    /// For each pinned id the registry has advanced past, diff the vendored
+    /// and registry schemas' required fields and warn only when a stamped
+    /// finding is actually missing a newly required one — narrower than
+    /// `fetch`'s plain version-drift warning. Read-only: never vendors,
+    /// never advances a pin.
+    CheckPinSafety {
+        /// Ontology ids to check.
+        ids: Vec<String>,
+        /// Repo root `packs/ontologies/`/`ontologies.lock.json` resolve
+        /// against. Defaults to the current directory.
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Path to the harness config (read for the topic list to scan).
+        /// Defaults to `harness.config.json`.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Override the registry source. See `ontology fetch --source`.
+        #[arg(long)]
+        source: Option<String>,
+        /// Root `reports/` directory whose topics' stamped findings are
+        /// checked. Defaults to `reports`.
+        #[arg(long)]
+        reports_dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -919,6 +943,19 @@ fn ontology_cmd(action: &OntologyCommand) -> Result<Outcome, CliError> {
             out.as_deref(),
             reports_dir.as_deref(),
         ),
+        OntologyCommand::CheckPinSafety {
+            ids,
+            root,
+            config,
+            source,
+            reports_dir,
+        } => ontology_check_pin_safety_cmd(
+            ids,
+            root.as_deref(),
+            config.as_deref(),
+            source.as_deref(),
+            reports_dir.as_deref(),
+        ),
     }
 }
 
@@ -1003,6 +1040,115 @@ fn ontology_fetch_cmd(
     }
     Ok(Outcome {
         message,
+        exit_code: 0,
+    })
+}
+
+fn ontology_check_pin_safety_cmd(
+    ids: &[String],
+    root: Option<&Path>,
+    config: Option<&Path>,
+    source: Option<&str>,
+    reports_dir: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    if ids.is_empty() {
+        return Ok(Outcome {
+            message: "ontology check-pin-safety: no ids given".to_string(),
+            exit_code: 0,
+        });
+    }
+    let root = effective_path(root, ".");
+    let reports_dir = effective_path(reports_dir, DEFAULT_REPORTS_DIR);
+    let resolved_source =
+        mif_rh::vendor::resolve_source(&root, ontology_source_override(source).as_deref());
+    let config_path = effective_path(config, DEFAULT_CONFIG);
+    let harness_config = mif_rh::HarnessConfig::load(&config_path)?;
+    let topics: Vec<String> = harness_config.topics.iter().map(|t| t.id.clone()).collect();
+
+    let reports = mif_rh::check_pin_safety(&root, &resolved_source, &reports_dir, &topics, ids)?;
+
+    if reports.is_empty() {
+        return Ok(Outcome {
+            message: "ontology check-pin-safety: no drifted pinned ontologies among the \
+                      requested ids"
+                .to_string(),
+            exit_code: 0,
+        });
+    }
+
+    let mut lines = Vec::new();
+    for report in &reports {
+        if !report.analyzed {
+            lines.push(format!(
+                "{}: pinned {} -> registry {} (analysis skipped: the vendored pack is not on \
+                 disk to diff against)",
+                report.id, report.locked_version, report.registry_version
+            ));
+        } else if report.newly_required.is_empty() {
+            lines.push(format!(
+                "{}: pinned {} -> registry {} (nothing newly required)",
+                report.id, report.locked_version, report.registry_version
+            ));
+        } else if report.gaps.is_empty() {
+            let fields: Vec<String> = report
+                .newly_required
+                .iter()
+                .map(|nrf| format!("{}.{}", nrf.entity_type, nrf.field))
+                .collect();
+            lines.push(format!(
+                "{}: pinned {} -> registry {}, newly requires {} (no stamped finding affected)",
+                report.id,
+                report.locked_version,
+                report.registry_version,
+                fields.join(", ")
+            ));
+        } else {
+            let gap_details: Vec<String> = report
+                .gaps
+                .iter()
+                .map(|gap| {
+                    format!(
+                        "{}/{} ({} missing {})",
+                        gap.topic, gap.finding_id, gap.entity_type, gap.field
+                    )
+                })
+                .collect();
+            // Distinct findings, not gap count: a single finding missing
+            // multiple newly required fields produces multiple gaps, and
+            // counting gaps would overstate how many findings are affected.
+            // Keyed by (topic, finding_id), not finding_id alone: finding
+            // ids are only scoped within their own topic, so the same id
+            // in two different topics is two distinct findings, not one.
+            let distinct_findings: std::collections::HashSet<(&str, &str)> = report
+                .gaps
+                .iter()
+                .map(|gap| (gap.topic.as_str(), gap.finding_id.as_str()))
+                .collect();
+            lines.push(format!(
+                "WARNING: {}: pinned {} -> registry {}, {} stamped finding{} missing a newly \
+                 required field: {}",
+                report.id,
+                report.locked_version,
+                report.registry_version,
+                distinct_findings.len(),
+                if distinct_findings.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                gap_details.join(", ")
+            ));
+        }
+    }
+
+    // Always exit 0, even on a WARNING line: this is an informational
+    // report, matching `ontology fetch`'s own pinned-skipped warning
+    // (`ontology_fetch_cmd`, above) — a CI job that wants a hard gate on a
+    // breaking-change gap should check the message text (the "WARNING:"
+    // prefix) rather than the exit code, since this command deliberately
+    // never fails closed.
+    Ok(Outcome {
+        message: format!("ontology check-pin-safety:\n{}", lines.join("\n")),
         exit_code: 0,
     })
 }
@@ -2869,8 +3015,9 @@ mod tests {
         harness_site_toggle_plugin_cmd, harness_site_toggle_primary_cmd,
         harness_synthesize_artifact_cmd, harness_synthesize_corpus_cmd, harness_topic_metadata_cmd,
         harness_validate_concordance_cmd, harness_wrap_source_cmd, ontology_author_cmd,
-        ontology_fetch_cmd, ontology_lock_check_cmd, ontology_sync_cmd, ontology_sync_registry_cmd,
-        resolve, review, suggest_type_cmd, topic_from_path,
+        ontology_check_pin_safety_cmd, ontology_fetch_cmd, ontology_lock_check_cmd,
+        ontology_sync_cmd, ontology_sync_registry_cmd, resolve, review, suggest_type_cmd,
+        topic_from_path,
     };
 
     fn write_fixture(dir: &std::path::Path) {
@@ -4173,6 +4320,188 @@ mod tests {
         let outcome = ontology_fetch_cmd(&[], false, Some(dir.path()), None, None, false).unwrap();
         assert_eq!(outcome.exit_code, 0);
         assert!(outcome.message.contains("nothing to fetch"));
+    }
+
+    #[test]
+    fn ontology_check_pin_safety_cmd_reports_nothing_given_no_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ontology_root(dir.path());
+
+        let outcome =
+            ontology_check_pin_safety_cmd(&[], Some(dir.path()), None, None, None).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("no ids given"));
+    }
+
+    #[test]
+    fn ontology_check_pin_safety_cmd_reports_nothing_for_an_unpinned_id() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ontology_root(dir.path());
+        let config_path = dir.path().join("harness.config.json");
+
+        // A reachable registry with an index entry for edu-fixture, but no
+        // ontologies.lock.json at all: check_pin_safety must always fetch
+        // the index first (to resolve `--source`), then find nothing
+        // pinned for the requested id and skip it.
+        let registry = dir.path().join("registry");
+        fs::create_dir_all(&registry).unwrap();
+        fs::write(
+            registry.join("index.json"),
+            r#"{"ontologies":{"edu-fixture":{"version":"0.1.0","sha256":"irrelevant","file":"edu-fixture.ontology.yaml","extends":["mif-base"]}}}"#,
+        )
+        .unwrap();
+        let source = registry.display().to_string();
+
+        let outcome = ontology_check_pin_safety_cmd(
+            &["edu-fixture".to_string()],
+            Some(dir.path()),
+            Some(config_path.as_path()),
+            Some(&source),
+            None,
+        )
+        .unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(
+            outcome
+                .message
+                .contains("no drifted pinned ontologies among the requested ids")
+        );
+    }
+
+    #[test]
+    fn ontology_check_pin_safety_cmd_warns_about_a_stamped_finding_missing_a_new_field() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ontology_root(dir.path());
+
+        // Vendored (old) pack: `title` requires only `name`.
+        fs::create_dir_all(dir.path().join("packs/ontologies/edu-fixture")).unwrap();
+        fs::write(
+            dir.path()
+                .join("packs/ontologies/edu-fixture/edu-fixture.ontology.yaml"),
+            "ontology:\n  id: edu-fixture\n  version: \"0.1.0\"\n  extends: \
+             [mif-base]\nentity_types:\n  - name: title\n    schema:\n      required: \
+             [name]\n      properties:\n        name: {type: string}\n",
+        )
+        .unwrap();
+
+        // Registry (new) pack: `title` now also requires `isbn`.
+        // `check_pin_safety` verifies the fetched file's sha256 against the
+        // index, the same integrity check `fetch` applies — the index
+        // entry's `sha256` below must be real, not a placeholder. No
+        // `index_sha256` is set in the lock, so the trust-on-first-use
+        // check (only active when a prior pin exists) is not exercised
+        // here.
+        let registry = dir.path().join("registry");
+        fs::create_dir_all(&registry).unwrap();
+        let new_yaml = "ontology:\n  id: edu-fixture\n  version: \"0.2.0\"\n  extends: \
+                         [mif-base]\nentity_types:\n  - name: title\n    schema:\n      \
+                         required: [name, isbn]\n      properties:\n        name: {type: \
+                         string}\n        isbn: {type: string}\n";
+        let new_yaml_sha256 = {
+            use std::fmt::Write as _;
+
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(new_yaml.as_bytes());
+            hasher
+                .finalize()
+                .iter()
+                .fold(String::new(), |mut hex, byte| {
+                    let _ = write!(hex, "{byte:02x}");
+                    hex
+                })
+        };
+        let index = format!(
+            r#"{{"ontologies":{{"edu-fixture":{{"version":"0.2.0","sha256":"{new_yaml_sha256}","file":"edu-fixture.ontology.yaml","extends":["mif-base"]}}}}}}"#
+        );
+        fs::write(registry.join("index.json"), &index).unwrap();
+        fs::write(registry.join("edu-fixture.ontology.yaml"), new_yaml).unwrap();
+
+        let source = registry.display().to_string();
+        fs::write(
+            dir.path().join("ontologies.lock.json"),
+            serde_json::to_string(&serde_json::json!({
+                "schema": "mif-ontology-lock/v1",
+                "source": source,
+                "ontologies": {"edu-fixture": {"version": "0.1.0", "sha256": "irrelevant"}}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        // A stamped finding, resolved against edu-fixture@0.1.0, missing isbn.
+        let reports_dir = dir.path().join("reports");
+        fs::create_dir_all(reports_dir.join("edu/findings")).unwrap();
+        fs::write(
+            reports_dir.join("edu/ontology-map.json"),
+            r#"[{"finding_id":"f-1","entity_type":"title","resolved_ontology":"edu-fixture@0.1.0","basis":"resolved","valid":true}]"#,
+        )
+        .unwrap();
+        fs::write(
+            reports_dir.join("edu/findings/f-1.json"),
+            r#"{"@id":"f-1","entity":{"name":"Algebra I"}}"#,
+        )
+        .unwrap();
+
+        let config_path = dir.path().join("harness.config.json");
+        let outcome = ontology_check_pin_safety_cmd(
+            &["edu-fixture".to_string()],
+            Some(dir.path()),
+            Some(config_path.as_path()),
+            Some(&source),
+            Some(reports_dir.as_path()),
+        )
+        .unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("WARNING"));
+        assert!(outcome.message.contains("f-1"));
+        assert!(outcome.message.contains("isbn"));
+    }
+
+    #[test]
+    fn ontology_check_pin_safety_cmd_reports_skipped_analysis_distinctly_from_safe() {
+        let dir = tempfile::tempdir().unwrap();
+        write_ontology_root(dir.path());
+
+        // A registry ahead of the pinned lock, but no vendored pack on disk
+        // to diff against: check_pin_safety cannot analyze this id, and the
+        // CLI must not conflate that with "nothing newly required".
+        let registry = dir.path().join("registry");
+        fs::create_dir_all(&registry).unwrap();
+        fs::write(
+            registry.join("index.json"),
+            r#"{"ontologies":{"edu-fixture":{"version":"0.2.0","sha256":"irrelevant","file":"edu-fixture.ontology.yaml","extends":["mif-base"]}}}"#,
+        )
+        .unwrap();
+        fs::write(
+            registry.join("edu-fixture.ontology.yaml"),
+            "ontology:\n  id: edu-fixture\n  version: \"0.2.0\"\nentity_types: []\n",
+        )
+        .unwrap();
+        let source = registry.display().to_string();
+        fs::write(
+            dir.path().join("ontologies.lock.json"),
+            serde_json::to_string(&serde_json::json!({
+                "schema": "mif-ontology-lock/v1",
+                "source": source,
+                "ontologies": {"edu-fixture": {"version": "0.1.0", "sha256": "irrelevant"}}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let config_path = dir.path().join("harness.config.json");
+        let outcome = ontology_check_pin_safety_cmd(
+            &["edu-fixture".to_string()],
+            Some(dir.path()),
+            Some(config_path.as_path()),
+            Some(&source),
+            None,
+        )
+        .unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("analysis skipped"));
+        assert!(!outcome.message.contains("nothing newly required"));
     }
 
     #[test]
