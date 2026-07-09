@@ -117,8 +117,8 @@ pub use review::{
 pub use suggest::{TypeSuggestion, suggest_type};
 pub use vendor::{
     CatalogSyncReport, DriftEntry, FetchReport, LockCheckReport, LockEntry, LockFile,
-    RegistrySyncReport, VendoredOntology, fetch, lock_check, resolve_source, sync_catalog,
-    sync_registry,
+    NewlyRequiredField, PinSafetyGap, PinSafetyReport, RegistrySyncReport, VendoredOntology,
+    check_pin_safety, fetch, lock_check, resolve_source, sync_catalog, sync_registry,
 };
 
 /// Rebuilds the search index for `topic_ids`, embedding every finding's
