@@ -7,15 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.6.0] - 2026-07-07
+## [0.6.0] - 2026-07-09
 
 ### Added
 
 - **`mif-rh-cli ontology fetch --refresh`**: an id already pinned in `ontologies.lock.json` at a version different from the registry's current one is now left untouched, with a warning naming the drift, unless `--refresh` is passed to advance it deliberately. Previously `fetch` always vendored the registry's current version unconditionally, silently overwriting an existing pin (research-harness-template#270, mif-rs#60).
+- **`mif-rh-cli ontology check-pin-safety [ids...]`**: for each pinned ontology id the registry has since moved past, diffs the vendored and registry schema's required-field lists per entity type and warns only when a stamped finding is actually missing a newly required field — narrower than the plain version-drift warning `fetch` already emits, closing research-harness-template#270's proposed fix #2 (research-harness-template#270, mif-rs#61, #67).
+- **`mif-cli validate --level 1|2|3`** (and `validate_mif_document`'s matching `level` MCP parameter): an L1/L2/L3 MIF level-floor overlay on top of core-schema validation — L2 additionally requires `namespace`/`modified`/`temporal`, L3 additionally requires `provenance` and a non-null `temporal.validFrom` (#40, #65).
+- **`mif-cli roundtrip`/`emit-jsonld`/`emit-markdown`** (and matching `mif-mcp` tools `roundtrip_mif_document`/`emit_jsonld_document`/`emit_markdown_document`): standalone, pure markdown<->JSON-LD conversion and round-trip-fidelity proof, needing no database or embedding model (#41, #66).
 
 ### Fixed
 
 - **`ontology fetch`**: the mutated `index_sha256`/`source` trust-root fields were not persisted to `ontologies.lock.json` when every requested id was left pinned-and-skipped (no per-id write occurred to do it), silently dropping a deliberate re-pin in that case.
+- **`mif-rh-cli`/`mif-cli` free-text args**: `synthesize-corpus --preserved-insights`, `wrap-source --title`/`--content`, `suggest-type`'s `TEXT` positional, and `search`'s `QUERY` positional now accept a value starting with `-` (e.g. an authored Markdown bullet), instead of clap misparsing it as an unrecognized flag (#69, #70, #71).
 
 ## [0.5.0] - 2026-07-07
 
