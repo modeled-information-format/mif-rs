@@ -755,9 +755,12 @@ pub fn jsonld_roundtrip_lossless(
     let reconstructed = md_to_jsonld(&frontmatter, &body)?;
     if let Some(missing) = first_field_lost_in_reconstruction(jsonld, &reconstructed) {
         return Err(FrontmatterError::RoundTripDrift {
-            expected: serde_json::to_string_pretty(jsonld).unwrap_or_default(),
+            expected: format!(
+                "original JSON-LD:\n{}",
+                serde_json::to_string_pretty(jsonld).unwrap_or_default()
+            ),
             recovered: format!(
-                "{} (missing or changed: {missing})",
+                "reconstructed JSON-LD (missing or changed: {missing}):\n{}",
                 serde_json::to_string_pretty(&reconstructed).unwrap_or_default()
             ),
         });
