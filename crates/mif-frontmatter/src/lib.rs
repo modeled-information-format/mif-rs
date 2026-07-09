@@ -143,6 +143,9 @@ pub enum FrontmatterError {
         /// The canonical serialization recovered after the round trip.
         recovered: String,
     },
+    /// A [`FrontmatterShape`] name was not recognized.
+    #[error("unknown frontmatter shape: {0:?} (must be \"v1-canonical\" or \"pre-projected\")")]
+    UnknownShape(String),
 }
 
 impl FrontmatterError {
@@ -218,6 +221,13 @@ impl FrontmatterError {
                 status: 422,
                 exit_code: 4,
             },
+            Self::UnknownShape(_) => ProblemMeta {
+                slug: "unknown-frontmatter-shape",
+                version: "v1",
+                title: "Unknown frontmatter shape",
+                status: 400,
+                exit_code: 2,
+            },
         }
     }
 }
@@ -269,6 +279,9 @@ impl ToProblem for FrontmatterError {
                  markdown -> JSON-LD -> markdown round trip; simplify it or report the drift \
                  upstream if it should be supported.",
             ),
+            Self::UnknownShape(_) => {
+                correctable_input("Use \"v1-canonical\" or \"pre-projected\".")
+            },
             Self::YamlSerialize { .. } | Self::JsonRoundTrip { .. } => unspecified_internal(),
         };
         self.meta()
@@ -431,6 +444,26 @@ pub enum FrontmatterShape {
     /// report documents) — passed through verbatim, with no
     /// bare-id-to-URN projection and no `id`/`type` shorthand keys.
     PreProjected,
+}
+
+impl TryFrom<&str> for FrontmatterShape {
+    type Error = FrontmatterError;
+
+    /// Parses a shape name: `"v1-canonical"` or `"pre-projected"`. The
+    /// single parser both `mif-cli` and `mif-mcp` call, so a caller-facing
+    /// shape argument is validated identically everywhere rather than each
+    /// binary hand-rolling its own string match.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FrontmatterError::UnknownShape`] for any other string.
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "v1-canonical" => Ok(Self::V1Canonical),
+            "pre-projected" => Ok(Self::PreProjected),
+            other => Err(FrontmatterError::UnknownShape(other.to_string())),
+        }
+    }
 }
 
 /// Detects which [`FrontmatterShape`] `frontmatter` uses, by whether it
@@ -668,6 +701,93 @@ pub fn roundtrip_lossless(md_text: &str) -> Result<(), FrontmatterError> {
     Ok(())
 }
 
+/// Proves a JSON-LD document's round trip through markdown is lossless.
+///
+/// Every TOP-LEVEL field present in `jsonld` survives with the same value
+/// (compared as a whole, so a changed nested structure under an unchanged
+/// key is still caught) after projecting to markdown (via [`jsonld_to_md`])
+/// and back (via [`md_to_jsonld`]). Returns the derived `(frontmatter,
+/// body)` pair on success, so a caller that needs the markdown output
+/// doesn't have to reproject.
+///
+/// Unlike [`roundtrip_lossless`] (which proves a markdown document's own
+/// projection is a stable fixed point), this proves fidelity to the
+/// JSON-LD INPUT specifically — checking only that the derived markdown is
+/// stable under a further cycle (as a naive caller might, by calling
+/// `roundtrip_lossless` on the derived markdown) never compares back to
+/// the original JSON-LD, so real data loss (e.g. a `timestamp` field with
+/// no `created`/`modified` to regenerate it from) can pass silently. This
+/// is a subset check, not full equality: a field `md_to_jsonld` always
+/// synthesizes (`timestamp` mirrors `created`/`modified`) may legitimately
+/// appear in the reconstruction even when absent from `jsonld` — that is
+/// not loss.
+///
+/// # Errors
+///
+/// Returns [`FrontmatterError::JsonNotAnObject`]/[`FrontmatterError::FieldNotAString`]/
+/// [`FrontmatterError::YamlConversion`] per [`jsonld_to_md`], the analogous
+/// [`md_to_jsonld`] errors on the reverse projection, or
+/// [`FrontmatterError::RoundTripDrift`] if a field present in `jsonld` is
+/// missing or holds a different value in the reconstruction.
+///
+/// # Examples
+///
+/// ```
+/// use mif_frontmatter::FrontmatterShape;
+///
+/// let jsonld = serde_json::json!({
+///     "@id": "urn:mif:x",
+///     "conceptType": "semantic",
+///     "content": "Body.",
+/// });
+/// let (frontmatter, body) = mif_frontmatter::jsonld_roundtrip_lossless(
+///     &jsonld,
+///     FrontmatterShape::V1Canonical,
+/// )
+/// .unwrap();
+/// assert_eq!(body, "Body.");
+/// ```
+pub fn jsonld_roundtrip_lossless(
+    jsonld: &serde_json::Value,
+    shape: FrontmatterShape,
+) -> Result<(Frontmatter, String), FrontmatterError> {
+    let (frontmatter, body) = jsonld_to_md(jsonld, shape)?;
+    let reconstructed = md_to_jsonld(&frontmatter, &body)?;
+    if let Some(missing) = first_field_lost_in_reconstruction(jsonld, &reconstructed) {
+        return Err(FrontmatterError::RoundTripDrift {
+            expected: format!(
+                "original JSON-LD:\n{}",
+                serde_json::to_string_pretty(jsonld).unwrap_or_default()
+            ),
+            recovered: format!(
+                "reconstructed JSON-LD (missing or changed: {missing}):\n{}",
+                serde_json::to_string_pretty(&reconstructed).unwrap_or_default()
+            ),
+        });
+    }
+    Ok((frontmatter, body))
+}
+
+/// The name of the first top-level field present in `original` that is
+/// either absent from `reconstructed` or holds a different value there, or
+/// `None` if every original field survived. A field the reconstruction
+/// gains that the original never had (e.g. `md_to_jsonld`'s always-derived
+/// `timestamp` mirror) is not reported — nothing was lost. Falls back to
+/// plain equality if either value is not a JSON object.
+fn first_field_lost_in_reconstruction(
+    original: &serde_json::Value,
+    reconstructed: &serde_json::Value,
+) -> Option<String> {
+    let (Some(original), Some(reconstructed)) = (original.as_object(), reconstructed.as_object())
+    else {
+        return (original != reconstructed).then(|| "<non-object value>".to_string());
+    };
+    original
+        .iter()
+        .find(|(key, value)| reconstructed.get(key.as_str()) != Some(*value))
+        .map(|(key, _)| key.clone())
+}
+
 /// Converts one YAML value to JSON, wrapping conversion failure with the
 /// offending field's name for diagnostics.
 fn yaml_value_to_json(field: &str, value: &Value) -> Result<serde_json::Value, FrontmatterError> {
@@ -691,8 +811,8 @@ mod tests {
     use mif_problem::ToProblem;
 
     use super::{
-        FrontmatterError, FrontmatterShape, jsonld_to_md, md_to_jsonld, parse_markdown,
-        roundtrip_lossless, serialize_markdown,
+        FrontmatterError, FrontmatterShape, jsonld_roundtrip_lossless, jsonld_to_md, md_to_jsonld,
+        parse_markdown, roundtrip_lossless, serialize_markdown,
     };
 
     const RATE_LIMIT_POLICY: &str = r"---
@@ -886,6 +1006,79 @@ legitimate batch consumers against gateway saturation.
         );
         assert_eq!(drift.exit_code, Some(4));
         assert_ne!(missing.problem_type, drift.problem_type);
+    }
+
+    #[test]
+    fn frontmatter_shape_try_from_accepts_the_two_known_names() {
+        assert_eq!(
+            FrontmatterShape::try_from("v1-canonical").unwrap(),
+            FrontmatterShape::V1Canonical
+        );
+        assert_eq!(
+            FrontmatterShape::try_from("pre-projected").unwrap(),
+            FrontmatterShape::PreProjected
+        );
+    }
+
+    #[test]
+    fn frontmatter_shape_try_from_rejects_unknown_names() {
+        let error = FrontmatterShape::try_from("PreProjected").unwrap_err();
+        assert!(matches!(error, FrontmatterError::UnknownShape(_)));
+        let problem = error.to_problem();
+        assert_eq!(
+            problem.problem_type,
+            "https://modeled-information-format.github.io/mif-rs/references/errors/unknown-frontmatter-shape/v1"
+        );
+        assert_eq!(problem.status, 400);
+        assert_eq!(problem.exit_code, Some(2));
+    }
+
+    #[test]
+    fn jsonld_roundtrip_lossless_accepts_a_conformant_document() {
+        let jsonld = serde_json::json!({
+            "@context": "https://mif-spec.dev/schema/context.jsonld",
+            "@type": "Concept",
+            "@id": "urn:mif:memory:test-001",
+            "conceptType": "semantic",
+            "content": "Test content.",
+            "created": "2026-01-01T00:00:00Z",
+        });
+        let (_, body) = jsonld_roundtrip_lossless(&jsonld, FrontmatterShape::V1Canonical).unwrap();
+        assert_eq!(body, "Test content.");
+    }
+
+    #[test]
+    fn jsonld_roundtrip_lossless_rejects_a_field_that_cannot_be_regenerated() {
+        // A `timestamp` value with no backing `created`/`modified` to
+        // regenerate it from is silently dropped by `jsonld_to_md` (always
+        // a derived-only mirror) — real data loss that must surface as
+        // drift, not a false "lossless" report.
+        let jsonld = serde_json::json!({
+            "@context": "https://mif-spec.dev/schema/context.jsonld",
+            "@type": "Concept",
+            "@id": "urn:mif:memory:timestamp-loss-test",
+            "conceptType": "semantic",
+            "content": "Test content.",
+            "timestamp": "2026-01-01T00:00:00Z",
+        });
+        let error = jsonld_roundtrip_lossless(&jsonld, FrontmatterShape::V1Canonical).unwrap_err();
+        assert!(matches!(error, FrontmatterError::RoundTripDrift { .. }));
+    }
+
+    #[test]
+    fn jsonld_roundtrip_lossless_does_not_flag_a_synthesized_field_as_lost() {
+        // Non-regression: a document with no explicit `timestamp` at all
+        // must not false-positive just because the reconstruction gains
+        // one (md_to_jsonld always synthesizes it from created/modified).
+        let jsonld = serde_json::json!({
+            "@context": "https://mif-spec.dev/schema/context.jsonld",
+            "@type": "Concept",
+            "@id": "urn:mif:memory:test-002",
+            "conceptType": "semantic",
+            "content": "Test content.",
+            "created": "2026-01-01T00:00:00Z",
+        });
+        assert!(jsonld_roundtrip_lossless(&jsonld, FrontmatterShape::V1Canonical).is_ok());
     }
 
     /// A fixture populating every field `mif.schema.json`'s root object

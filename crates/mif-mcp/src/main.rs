@@ -1,11 +1,13 @@
 //! MCP server for the MIF (Modeled Information Format) ecosystem.
 //!
-//! Exposes six operations as MCP tools: `validate_mif_document`,
+//! Exposes nine operations as MCP tools: `validate_mif_document`,
 //! `resolve_ontology_reference`, `ingest_mif_document`,
-//! `search_documents`, `find_similar_documents`, and `corpus_stats`. Each is
-//! a thin wrapper calling the identical `mif-schema`/`mif-ontology`/
-//! `mif-frontmatter`/`mif-embed`/`mif-store` functions `mif-cli` calls —
-//! kept deliberately in lockstep rather than diverging.
+//! `search_documents`, `find_similar_documents`, `corpus_stats`,
+//! `roundtrip_mif_document`, `emit_jsonld_document`, and
+//! `emit_markdown_document`. Each is a thin wrapper calling the identical
+//! `mif-schema`/`mif-ontology`/`mif-frontmatter`/`mif-embed`/`mif-store`
+//! functions `mif-cli` calls — kept deliberately in lockstep rather than
+//! diverging.
 //!
 //! An MCP client is inherently a machine consumer (there is no terminal to
 //! detect), so every failure renders as a compact RFC 9457
@@ -110,6 +112,53 @@ struct CorpusStatsParams {
     db_path: Option<PathBuf>,
 }
 
+/// Parameters for the `roundtrip_mif_document` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct RoundtripParams {
+    /// Path to the MIF document (markdown with frontmatter, or a JSON-LD
+    /// projection) to check.
+    file: PathBuf,
+    /// Frontmatter shape to use for standalone JSON-LD input whose
+    /// identity fields don't already unambiguously indicate one. Ignored
+    /// for markdown input, whose shape is auto-detected. `"v1-canonical"`
+    /// (default, the MIF v1.0 authoring convention) or `"pre-projected"`.
+    #[serde(default)]
+    shape: Option<String>,
+}
+
+/// Parameters for the `emit_jsonld_document` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct EmitJsonldParams {
+    /// Path to the MIF document (markdown with frontmatter, or a JSON-LD
+    /// projection) to project.
+    file: PathBuf,
+    /// Write the JSON-LD projection to this path instead of returning it
+    /// inline.
+    #[serde(default)]
+    out: Option<PathBuf>,
+    /// Frontmatter shape to use for standalone JSON-LD input whose
+    /// identity fields don't already unambiguously indicate one. Ignored
+    /// for markdown input, whose shape is auto-detected. `"v1-canonical"`
+    /// (default, the MIF v1.0 authoring convention) or `"pre-projected"`.
+    #[serde(default)]
+    shape: Option<String>,
+}
+
+/// Parameters for the `emit_markdown_document` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct EmitMarkdownParams {
+    /// Path to the JSON-LD MIF document to project.
+    file: PathBuf,
+    /// Write the markdown to this path instead of returning it inline.
+    #[serde(default)]
+    out: Option<PathBuf>,
+    /// Frontmatter shape to use when the JSON-LD's identity fields don't
+    /// already unambiguously indicate one: `"v1-canonical"` (default, the
+    /// MIF v1.0 authoring convention) or `"pre-projected"`.
+    #[serde(default)]
+    shape: Option<String>,
+}
+
 /// The default result limit for `search_documents`/`find_similar_documents`
 /// when the caller does not specify one.
 const DEFAULT_LIMIT: usize = 10;
@@ -181,6 +230,13 @@ enum McpError {
     /// ingested.
     #[error("no document with id '{0}' has been ingested into this vector store")]
     DocumentNotFound(String),
+    /// A JSON-LD projection could not be serialized to JSON text.
+    #[error("failed to serialize JSON-LD: {source}")]
+    JsonSerialize {
+        /// The underlying serialization error.
+        #[source]
+        source: serde_json::Error,
+    },
 }
 
 impl McpError {
@@ -206,6 +262,13 @@ impl McpError {
                 title: "No document with the given id has been ingested",
                 status: 404,
                 exit_code: 3,
+            },
+            Self::JsonSerialize { .. } => ProblemMeta {
+                slug: "mif-mcp-json-serialize-failure",
+                version: "v1",
+                title: "Failed to serialize JSON-LD to text",
+                status: 500,
+                exit_code: 1,
             },
             // Schema/Ontology/Frontmatter/Embed/Store carry their own
             // `ProblemMeta` internally; see `to_problem` below, which
@@ -254,7 +317,7 @@ impl ToProblem for McpError {
                     "quickfix",
                     mif_problem::Applicability::MaybeIncorrect,
                 )),
-            Self::Json { .. } => self
+            Self::Json { .. } | Self::JsonSerialize { .. } => self
                 .meta()
                 .into_details(env!("CARGO_PKG_NAME"), self.to_string()),
         }
@@ -280,7 +343,11 @@ fn validate_mif_document_inner(file: &Path, level: Option<u8>) -> Result<String,
         path: file.display().to_string(),
         source,
     })?;
-    let jsonld = project_to_jsonld(file, &contents)?;
+    let jsonld = project_to_jsonld(
+        file,
+        &contents,
+        mif_frontmatter::FrontmatterShape::V1Canonical,
+    )?;
     let level = mif_schema::Level::try_from(level.unwrap_or(1))?;
     mif_schema::validate_level(&jsonld, level)?;
     Ok(format!("{}: valid", file.display()))
@@ -301,7 +368,11 @@ fn resolve_ontology_reference_inner(id: &str, ontologies_dir: &Path) -> Result<S
 /// markdown-with-frontmatter (starts with `---`) or already JSON-LD. A
 /// leading UTF-8 BOM (common in files saved by some Windows editors) is
 /// stripped first so it doesn't defeat that dispatch.
-fn project_to_jsonld(path: &Path, contents: &str) -> Result<serde_json::Value, McpError> {
+fn project_to_jsonld(
+    path: &Path,
+    contents: &str,
+    shape: mif_frontmatter::FrontmatterShape,
+) -> Result<serde_json::Value, McpError> {
     let contents = contents.strip_prefix('\u{feff}').unwrap_or(contents);
     if contents.trim_start().starts_with("---") {
         mif_frontmatter::roundtrip_lossless(contents)?;
@@ -313,10 +384,13 @@ fn project_to_jsonld(path: &Path, contents: &str) -> Result<serde_json::Value, M
                 path: path.display().to_string(),
                 source,
             })?;
-        let (frontmatter, body) =
-            mif_frontmatter::jsonld_to_md(&jsonld, mif_frontmatter::FrontmatterShape::V1Canonical)?;
-        let derived_md = mif_frontmatter::serialize_markdown(&frontmatter, &body)?;
-        mif_frontmatter::roundtrip_lossless(&derived_md)?;
+        // mif_frontmatter::jsonld_roundtrip_lossless proves the JSON-LD ->
+        // markdown -> JSON-LD round trip is genuinely lossless (compares
+        // reconstructed values against the original, not merely that the
+        // derived markdown is stable under a further cycle — real data
+        // loss, like a `timestamp` field with no backing
+        // `created`/`modified` to regenerate it from, must surface here).
+        mif_frontmatter::jsonld_roundtrip_lossless(&jsonld, shape)?;
         Ok(jsonld)
     }
 }
@@ -348,7 +422,11 @@ fn ingest_mif_document_inner(
         source,
     })?;
 
-    let jsonld = project_to_jsonld(file, &contents)?;
+    let jsonld = project_to_jsonld(
+        file,
+        &contents,
+        mif_frontmatter::FrontmatterShape::V1Canonical,
+    )?;
     mif_schema::validate_document(&jsonld)?;
 
     let id = jsonld
@@ -468,6 +546,131 @@ fn corpus_stats_inner(db_path: Option<&Path>) -> Result<CorpusStatsResult, McpEr
     })
 }
 
+/// Parses an optional `shape` string into a
+/// [`mif_frontmatter::FrontmatterShape`], via
+/// [`mif_frontmatter::FrontmatterShape::try_from`]. Absent defaults to
+/// [`mif_frontmatter::FrontmatterShape::V1Canonical`]; any string other than
+/// `"v1-canonical"`/`"pre-projected"` is rejected rather than silently
+/// falling back — unlike `mif-cli`'s `--shape`, this parameter is not
+/// gated by `clap`, so an MCP caller's typo must surface as an error, not a
+/// silently wrong reconstruction.
+///
+/// # Errors
+///
+/// Returns [`McpError::Frontmatter`] wrapping
+/// [`mif_frontmatter::FrontmatterError::UnknownShape`] for an unrecognized
+/// string.
+fn parse_shape(shape: Option<&str>) -> Result<mif_frontmatter::FrontmatterShape, McpError> {
+    shape.map_or(Ok(mif_frontmatter::FrontmatterShape::V1Canonical), |s| {
+        Ok(mif_frontmatter::FrontmatterShape::try_from(s)?)
+    })
+}
+
+/// Proves a MIF document's markdown <-> JSON-LD round trip is lossless, by
+/// running [`project_to_jsonld`]'s existing round-trip proof and discarding
+/// the projected result. `shape` only affects standalone JSON-LD input;
+/// markdown input's shape is auto-detected and ignores it. Pure: no db, no
+/// embedder, deterministic output.
+///
+/// # Errors
+///
+/// Returns [`McpError`] if the file cannot be read, is not valid
+/// JSON-LD/frontmatter, `shape` is unrecognized, or the document does not
+/// round-trip losslessly.
+fn roundtrip_mif_document_inner(
+    file: &Path,
+    shape: mif_frontmatter::FrontmatterShape,
+) -> Result<String, McpError> {
+    let contents = std::fs::read_to_string(file).map_err(|source| McpError::Io {
+        path: file.display().to_string(),
+        source,
+    })?;
+    project_to_jsonld(file, &contents, shape)?;
+    Ok(format!("{}: roundtrip lossless", file.display()))
+}
+
+/// Projects a MIF document (markdown-with-frontmatter or already JSON-LD)
+/// to its canonical JSON-LD form via [`project_to_jsonld`] (proving the
+/// round trip is lossless in the process), then returns or writes it.
+/// `shape` only affects standalone JSON-LD input; markdown input's shape is
+/// auto-detected and ignores it. Pure: no db, no embedder.
+///
+/// # Errors
+///
+/// Returns [`McpError`] if the file cannot be read, is not valid
+/// JSON-LD/frontmatter, `shape` is unrecognized, the document does not
+/// round-trip losslessly, the projection cannot be serialized, or (when
+/// `out` is given) the output path cannot be written.
+fn emit_jsonld_document_inner(
+    file: &Path,
+    out: Option<&Path>,
+    shape: mif_frontmatter::FrontmatterShape,
+) -> Result<String, McpError> {
+    let contents = std::fs::read_to_string(file).map_err(|source| McpError::Io {
+        path: file.display().to_string(),
+        source,
+    })?;
+    let jsonld = project_to_jsonld(file, &contents, shape)?;
+    let pretty = serde_json::to_string_pretty(&jsonld)
+        .map_err(|source| McpError::JsonSerialize { source })?;
+    if let Some(out) = out {
+        std::fs::write(out, format!("{pretty}\n")).map_err(|source| McpError::Io {
+            path: out.display().to_string(),
+            source,
+        })?;
+        Ok(format!(
+            "{}: wrote JSON-LD to {}",
+            file.display(),
+            out.display()
+        ))
+    } else {
+        Ok(pretty)
+    }
+}
+
+/// Projects a JSON-LD MIF document to its canonical
+/// markdown-with-frontmatter form, proving the round trip is lossless in
+/// the process, then returns or writes it. Pure: no db, no embedder.
+///
+/// # Errors
+///
+/// Returns [`McpError`] if the file cannot be read, is not valid JSON, does
+/// not round-trip losslessly, or (when `out` is given) the output path
+/// cannot be written.
+fn emit_markdown_document_inner(
+    file: &Path,
+    out: Option<&Path>,
+    shape: mif_frontmatter::FrontmatterShape,
+) -> Result<String, McpError> {
+    let contents = std::fs::read_to_string(file).map_err(|source| McpError::Io {
+        path: file.display().to_string(),
+        source,
+    })?;
+    // Strip a leading UTF-8 BOM (common in files saved by some Windows
+    // editors), matching `project_to_jsonld`'s handling of the same case.
+    let contents = contents.strip_prefix('\u{feff}').unwrap_or(&contents);
+    let jsonld: serde_json::Value =
+        serde_json::from_str(contents).map_err(|source| McpError::Json {
+            path: file.display().to_string(),
+            source,
+        })?;
+    let (frontmatter, body) = mif_frontmatter::jsonld_roundtrip_lossless(&jsonld, shape)?;
+    let markdown = mif_frontmatter::serialize_markdown(&frontmatter, &body)?;
+    if let Some(out) = out {
+        std::fs::write(out, &markdown).map_err(|source| McpError::Io {
+            path: out.display().to_string(),
+            source,
+        })?;
+        Ok(format!(
+            "{}: wrote markdown to {}",
+            file.display(),
+            out.display()
+        ))
+    } else {
+        Ok(markdown)
+    }
+}
+
 #[derive(Clone)]
 struct Mif;
 
@@ -549,6 +752,44 @@ impl Mif {
             Err(error) => error.to_problem().to_json(),
         }
     }
+
+    #[tool(
+        description = "Prove a MIF document's markdown <-> JSON-LD round trip is lossless. Pure: \
+                        no db, no embedder."
+    )]
+    fn roundtrip_mif_document(
+        &self,
+        Parameters(RoundtripParams { file, shape }): Parameters<RoundtripParams>,
+    ) -> String {
+        parse_shape(shape.as_deref())
+            .and_then(|shape| roundtrip_mif_document_inner(&file, shape))
+            .unwrap_or_else(|error| error.to_problem().to_json())
+    }
+
+    #[tool(
+        description = "Project a MIF document to its canonical JSON-LD form, proving the round \
+                        trip is lossless in the process. Pure: no db, no embedder."
+    )]
+    fn emit_jsonld_document(
+        &self,
+        Parameters(EmitJsonldParams { file, out, shape }): Parameters<EmitJsonldParams>,
+    ) -> String {
+        parse_shape(shape.as_deref())
+            .and_then(|shape| emit_jsonld_document_inner(&file, out.as_deref(), shape))
+            .unwrap_or_else(|error| error.to_problem().to_json())
+    }
+
+    #[tool(description = "Project a JSON-LD MIF document to its canonical \
+                        markdown-with-frontmatter form, proving the round trip is lossless in \
+                        the process. Pure: no db, no embedder.")]
+    fn emit_markdown_document(
+        &self,
+        Parameters(EmitMarkdownParams { file, out, shape }): Parameters<EmitMarkdownParams>,
+    ) -> String {
+        parse_shape(shape.as_deref())
+            .and_then(|shape| emit_markdown_document_inner(&file, out.as_deref(), shape))
+            .unwrap_or_else(|error| error.to_problem().to_json())
+    }
 }
 
 #[tool_handler(
@@ -572,8 +813,9 @@ mod tests {
     use mif_problem::ToProblem;
 
     use super::{
-        CorpusStatsParams, FindSimilarParams, IngestParams, McpError, Mif, Parameters,
-        ResolveParams, SearchParams, ValidateParams, ingest_mif_document_inner, to_search_result,
+        CorpusStatsParams, EmitJsonldParams, EmitMarkdownParams, FindSimilarParams, IngestParams,
+        McpError, Mif, Parameters, ResolveParams, RoundtripParams, SearchParams, ValidateParams,
+        ingest_mif_document_inner, to_search_result,
     };
 
     fn write_temp_file(contents: &str) -> tempfile::NamedTempFile {
@@ -823,6 +1065,225 @@ created: 2026-07-02T00:00:00Z
 
 Test content via MCP.
 ";
+
+    // See the identical fixture and its rationale in mif-cli's test module.
+    const DRIFTING_MARKDOWN_FIXTURE: &str =
+        "---\nid: x\ntype: semantic\n123: orphaned-value\n---\n\nBody.\n";
+
+    #[test]
+    fn roundtrip_tool_accepts_a_conformant_document() {
+        let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
+        let result = Mif.roundtrip_mif_document(Parameters(RoundtripParams {
+            file: file.path().to_path_buf(),
+            shape: None,
+        }));
+        assert!(result.ends_with("roundtrip lossless"));
+    }
+
+    #[test]
+    fn roundtrip_tool_reports_a_drifting_document_as_problem_json() {
+        let file = write_temp_file(DRIFTING_MARKDOWN_FIXTURE);
+        let result = Mif.roundtrip_mif_document(Parameters(RoundtripParams {
+            file: file.path().to_path_buf(),
+            shape: None,
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value["type"],
+            "https://modeled-information-format.github.io/mif-rs/references/errors/roundtrip-drift/v1"
+        );
+    }
+
+    #[test]
+    fn roundtrip_tool_reports_json_ld_field_loss_as_problem_json() {
+        // See the identical regression in mif-cli's test module: a
+        // `timestamp` field with no backing `created`/`modified` to
+        // regenerate it from must surface as drift, not a false "lossless"
+        // report.
+        let file = write_temp_file(
+            r#"{
+                "@context": "https://mif-spec.dev/schema/context.jsonld",
+                "@type": "Concept",
+                "@id": "urn:mif:memory:mcp-timestamp-loss-test",
+                "conceptType": "semantic",
+                "content": "Test content.",
+                "timestamp": "2026-01-01T00:00:00Z"
+            }"#,
+        );
+        let result = Mif.roundtrip_mif_document(Parameters(RoundtripParams {
+            file: file.path().to_path_buf(),
+            shape: None,
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value["type"],
+            "https://modeled-information-format.github.io/mif-rs/references/errors/roundtrip-drift/v1"
+        );
+    }
+
+    #[test]
+    fn roundtrip_tool_accepts_json_ld_whose_timestamp_is_consistently_derived() {
+        // Non-regression counterpart: must not false-positive on a
+        // schema-valid document.
+        let file = write_temp_file(
+            r#"{
+                "@context": "https://mif-spec.dev/schema/context.jsonld",
+                "@type": "Concept",
+                "@id": "urn:mif:memory:mcp-timestamp-consistent-test",
+                "conceptType": "semantic",
+                "content": "Test content.",
+                "created": "2026-01-01T00:00:00Z",
+                "timestamp": "2026-01-01T00:00:00Z"
+            }"#,
+        );
+        let result = Mif.roundtrip_mif_document(Parameters(RoundtripParams {
+            file: file.path().to_path_buf(),
+            shape: None,
+        }));
+        assert!(result.ends_with("roundtrip lossless"));
+    }
+
+    #[test]
+    fn roundtrip_tool_reports_an_unrecognized_shape_as_problem_json() {
+        // Unlike mif-cli's clap-gated `--shape`, this MCP parameter is not
+        // pre-validated — an unrecognized string must surface as an error,
+        // not silently fall back to a default (the asymmetry a prior
+        // version of this tool had).
+        let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
+        let result = Mif.roundtrip_mif_document(Parameters(RoundtripParams {
+            file: file.path().to_path_buf(),
+            shape: Some("PreProjected".to_string()),
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value["type"],
+            "https://modeled-information-format.github.io/mif-rs/references/errors/unknown-frontmatter-shape/v1"
+        );
+    }
+
+    #[test]
+    fn emit_jsonld_tool_returns_the_projection_inline_by_default() {
+        let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
+        let result = Mif.emit_jsonld_document(Parameters(EmitJsonldParams {
+            file: file.path().to_path_buf(),
+            out: None,
+            shape: None,
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(value["@id"], "urn:mif:memory:mcp-test-001");
+    }
+
+    #[test]
+    fn emit_jsonld_tool_writes_to_the_out_path_when_given() {
+        let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
+        let out_dir = tempfile::tempdir().unwrap();
+        let out_path = out_dir.path().join("out.json");
+        let result = Mif.emit_jsonld_document(Parameters(EmitJsonldParams {
+            file: file.path().to_path_buf(),
+            out: Some(out_path.clone()),
+            shape: None,
+        }));
+        assert!(result.contains("wrote JSON-LD to"));
+        let written = fs::read_to_string(&out_path).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&written).unwrap();
+        assert_eq!(value["@id"], "urn:mif:memory:mcp-test-001");
+    }
+
+    #[test]
+    fn emit_markdown_tool_returns_the_projection_inline_by_default() {
+        let file = write_temp_file(
+            r#"{
+                "@context": "https://mif-spec.dev/schema/context.jsonld",
+                "@type": "Concept",
+                "@id": "urn:mif:memory:mcp-emit-md-test",
+                "conceptType": "semantic",
+                "content": "Test content.",
+                "created": "2026-07-02T00:00:00Z"
+            }"#,
+        );
+        let result = Mif.emit_markdown_document(Parameters(EmitMarkdownParams {
+            file: file.path().to_path_buf(),
+            out: None,
+            shape: None,
+        }));
+        assert!(result.starts_with("---\n"));
+    }
+
+    #[test]
+    fn emit_markdown_tool_accepts_json_ld_with_a_leading_byte_order_mark() {
+        // See the identical regression in mif-cli's test module.
+        let mut contents = "\u{feff}".to_string();
+        contents.push_str(
+            r#"{
+                "@context": "https://mif-spec.dev/schema/context.jsonld",
+                "@type": "Concept",
+                "@id": "urn:mif:memory:mcp-bom-test",
+                "conceptType": "semantic",
+                "content": "Test content.",
+                "created": "2026-07-02T00:00:00Z"
+            }"#,
+        );
+        let file = write_temp_file(&contents);
+        let result = Mif.emit_markdown_document(Parameters(EmitMarkdownParams {
+            file: file.path().to_path_buf(),
+            out: None,
+            shape: None,
+        }));
+        assert!(result.starts_with("---\n"));
+    }
+
+    #[test]
+    fn emit_markdown_tool_reports_invalid_json_as_problem_json() {
+        let file = write_temp_file("not json");
+        let result = Mif.emit_markdown_document(Parameters(EmitMarkdownParams {
+            file: file.path().to_path_buf(),
+            out: None,
+            shape: None,
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value["type"],
+            "https://modeled-information-format.github.io/mif-rs/references/errors/mif-mcp-invalid-json/v1"
+        );
+    }
+
+    #[test]
+    fn emit_markdown_tool_reports_json_ld_field_loss_as_problem_json() {
+        // See the identical regression in mif-cli's test module.
+        let file = write_temp_file(
+            r#"{
+                "@context": "https://mif-spec.dev/schema/context.jsonld",
+                "@type": "Concept",
+                "@id": "urn:mif:memory:mcp-emit-md-timestamp-loss-test",
+                "conceptType": "semantic",
+                "content": "Test content.",
+                "timestamp": "2026-01-01T00:00:00Z"
+            }"#,
+        );
+        let result = Mif.emit_markdown_document(Parameters(EmitMarkdownParams {
+            file: file.path().to_path_buf(),
+            out: None,
+            shape: None,
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            value["type"],
+            "https://modeled-information-format.github.io/mif-rs/references/errors/roundtrip-drift/v1"
+        );
+    }
+
+    #[test]
+    fn json_serialize_error_maps_to_a_versioned_problem_type() {
+        let source = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
+        let error = McpError::JsonSerialize { source };
+        let problem = error.to_problem();
+        assert_eq!(
+            problem.problem_type,
+            "https://modeled-information-format.github.io/mif-rs/references/errors/mif-mcp-json-serialize-failure/v1"
+        );
+        assert_eq!(problem.status, 500);
+        assert_eq!(problem.exit_code, Some(1));
+    }
 
     #[test]
     fn ingest_tool_accepts_a_conformant_document_and_stores_it() {
