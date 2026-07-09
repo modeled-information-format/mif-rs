@@ -233,7 +233,7 @@ fn search_accepts_a_query_starting_with_a_hyphen() {
         .output()
         .unwrap();
 
-    let stderr = String::from_utf8(output.stderr).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !stderr.contains("unexpected argument") && !stderr.contains("Usage: mif-cli search"),
         "clap must not misparse the leading-hyphen query as a flag: {stderr}"

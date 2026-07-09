@@ -70,7 +70,10 @@ enum Command {
     /// Free-text semantic search over previously ingested documents.
     Search {
         /// The query text to embed and rank stored documents against.
-        /// Accepts a value starting with `-` (free-authored prose).
+        /// Accepts a value starting with `-` (free-authored prose); the
+        /// accepted trade-off is that an unrecognized flag-like token
+        /// (e.g. a typo'd `--flag`) is silently accepted as this
+        /// positional instead of producing an "unknown argument" error.
         #[arg(allow_hyphen_values = true)]
         query: String,
         /// Path to the `SQLite` vector store database. Defaults to

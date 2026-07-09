@@ -132,8 +132,10 @@ enum Command {
     SuggestType {
         /// The text to classify. Omit when using `--finding`. Accepts a
         /// value starting with `-` (free-authored prose, e.g. a Markdown
-        /// bullet); the accepted trade-off is that an omitted value lets
-        /// the next token be consumed as this one instead of erroring.
+        /// bullet); the accepted trade-off is that an unrecognized
+        /// flag-like token (e.g. a typo'd `-x`) is silently accepted as
+        /// this positional instead of producing an "unknown argument"
+        /// error.
         #[arg(
             required_unless_present = "finding",
             conflicts_with = "finding",
