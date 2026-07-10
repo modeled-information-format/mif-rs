@@ -21,9 +21,6 @@ const PLACEHOLDER_BASIS: &str =
     "No disconfirming-evidence entry supplied — finding was not adversarially tested this run.";
 /// The default basis for an explicit fixture verdict that supplies none.
 const DEFAULT_BASIS: &str = "Adversarial queries executed; no disconfirming evidence found.";
-/// The fixed timestamp marker used when a fixture supplies no
-/// `attempted_at` (scripts cannot call the clock in some sandboxes).
-const DEFAULT_TIMESTAMP: &str = "1970-01-01T00:00:00Z";
 
 /// The result of one [`falsify`] call.
 ///
@@ -91,16 +88,11 @@ fn with_verification(finding: Value, verification: Value) -> Value {
     root
 }
 
-/// Runs the falsification gate over `finding_path`, consulting
-/// `fixture_path` (an offline, fixture-supplied body of disconfirming
-/// evidence keyed by finding `@id`) for the verdict to assign.
+/// Runs the falsification gate over `finding_path`, defaulting a fixture
+/// entry's missing `attempted_at` to the actual current wall-clock time.
 ///
-/// A finding that already carries `extensions.harness.verification.attempted_at`
-/// from a prior round is returned unchanged (the one-round rule — grading it
-/// again would never terminate). Otherwise an explicit fixture entry's
-/// verdict is recorded as-is; a finding with no fixture entry is recorded as
-/// a placeholder `inconclusive` (never a false `survived`) that omits
-/// `attempted_at`, so a later real gate run can still overwrite it.
+/// See [`falsify_with_now`] for the full behavior; this is a thin wrapper
+/// over it for callers that do not need deterministic time injection.
 ///
 /// # Errors
 ///
@@ -109,6 +101,36 @@ fn with_verification(finding: Value, verification: Value) -> Value {
 pub fn falsify(
     finding_path: &Path,
     fixture_path: Option<&Path>,
+) -> Result<FalsifyResult, MifRhError> {
+    falsify_with_now(finding_path, fixture_path, chrono::Utc::now())
+}
+
+/// Runs the falsification gate over `finding_path`, consulting
+/// `fixture_path` (an offline, fixture-supplied body of disconfirming
+/// evidence keyed by finding `@id`) for the verdict to assign.
+///
+/// A finding that already carries `extensions.harness.verification.attempted_at`
+/// from a prior round is returned unchanged (the one-round rule — grading it
+/// again would never terminate). Otherwise an explicit fixture entry's
+/// verdict is recorded as-is, defaulting `attempted_at` to `now` when the
+/// fixture omits it (rather than a fixed placeholder — a fixture author
+/// forgetting the field should record the real grading time, not a value
+/// that reads as maximally stale to freshness projections); a finding with
+/// no fixture entry is recorded as a placeholder `inconclusive` (never a
+/// false `survived`) that omits `attempted_at` entirely, so a later real
+/// gate run can still overwrite it. `now` is a caller-supplied parameter
+/// (mirroring [`crate::resolve_membership`]'s `now`) rather than an internal
+/// clock call, so tests stay deterministic; [`falsify`] is the real-clock
+/// convenience wrapper most callers want.
+///
+/// # Errors
+///
+/// Returns [`MifRhError::Io`] if `finding_path` cannot be read, and
+/// [`MifRhError::Json`] if it is not valid JSON.
+pub fn falsify_with_now(
+    finding_path: &Path,
+    fixture_path: Option<&Path>,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> Result<FalsifyResult, MifRhError> {
     let finding = read_json(finding_path)?;
     let id = finding
@@ -152,8 +174,10 @@ pub fn falsify(
     let attempted_at = entry
         .get("attempted_at")
         .and_then(Value::as_str)
-        .unwrap_or(DEFAULT_TIMESTAMP)
-        .to_string();
+        .map_or_else(
+            || now.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            str::to_string,
+        );
     let disconfirming = entry
         .get("disconfirming")
         .and_then(Value::as_array)
@@ -180,8 +204,14 @@ pub fn falsify(
 
 #[cfg(test)]
 mod tests {
-    use super::falsify;
+    use super::falsify_with_now;
     use std::fs;
+
+    fn now() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339("2026-06-01T00:00:00Z")
+            .unwrap()
+            .to_utc()
+    }
 
     fn write(dir: &std::path::Path, name: &str, contents: &str) -> std::path::PathBuf {
         let path = dir.join(name);
@@ -194,7 +224,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let finding = write(dir.path(), "f.json", r#"{"@id": "urn:mif:f1"}"#);
 
-        let result = falsify(&finding, None).unwrap();
+        let result = falsify_with_now(&finding, None, now()).unwrap();
         assert_eq!(
             result.finding["extensions"]["harness"]["verification"]["verdict"],
             "inconclusive"
@@ -220,7 +250,7 @@ mod tests {
             r#"{"urn:mif:f1": {"verdict": "falsified", "basis": "contradicted", "attempted_at": "2026-01-01T00:00:00Z", "disconfirming": ["https://example.com"]}}"#,
         );
 
-        let result = falsify(&finding, Some(&fixture)).unwrap();
+        let result = falsify_with_now(&finding, Some(&fixture), now()).unwrap();
         let verification = &result.finding["extensions"]["harness"]["verification"];
         assert_eq!(verification["verdict"], "falsified");
         assert_eq!(verification["verdict_basis"], "contradicted");
@@ -229,6 +259,28 @@ mod tests {
             verification["disconfirming_evidence"][0],
             "https://example.com"
         );
+    }
+
+    #[test]
+    fn an_explicit_fixture_verdict_missing_attempted_at_defaults_to_now_not_epoch_zero() {
+        // Regression test for #359: a fixture that supplies a verdict but
+        // omits attempted_at used to be silently stamped with a fixed
+        // 1970-01-01T00:00:00Z placeholder -- semantically wrong provenance
+        // that also read as maximally stale to freshness projections. It
+        // must default to the injected `now` instead.
+        let dir = tempfile::tempdir().unwrap();
+        let finding = write(dir.path(), "f.json", r#"{"@id": "urn:mif:f1"}"#);
+        let fixture = write(
+            dir.path(),
+            "evidence.json",
+            r#"{"urn:mif:f1": {"verdict": "survived", "basis": "no contradicting evidence found"}}"#,
+        );
+
+        let result = falsify_with_now(&finding, Some(&fixture), now()).unwrap();
+        let verification = &result.finding["extensions"]["harness"]["verification"];
+        assert_eq!(verification["verdict"], "survived");
+        assert_eq!(verification["attempted_at"], "2026-06-01T00:00:00Z");
+        assert_ne!(verification["attempted_at"], "1970-01-01T00:00:00Z");
     }
 
     #[test]
@@ -244,7 +296,7 @@ mod tests {
 
         let before: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&finding).unwrap()).unwrap();
-        let result = falsify(&finding, None).unwrap();
+        let result = falsify_with_now(&finding, None, now()).unwrap();
         assert_eq!(result.finding, before);
         assert_eq!(
             result.log_line,
@@ -261,7 +313,7 @@ mod tests {
             r#"{"@id": "urn:mif:f1", "title": "keep me", "extensions": {"other": "keep too"}}"#,
         );
 
-        let result = falsify(&finding, None).unwrap();
+        let result = falsify_with_now(&finding, None, now()).unwrap();
         assert_eq!(result.finding["title"], "keep me");
         assert_eq!(result.finding["extensions"]["other"], "keep too");
         assert_eq!(
@@ -272,7 +324,8 @@ mod tests {
 
     #[test]
     fn errors_on_a_missing_finding_file() {
-        let error = falsify(std::path::Path::new("/no/such/file.json"), None).unwrap_err();
+        let error =
+            falsify_with_now(std::path::Path::new("/no/such/file.json"), None, now()).unwrap_err();
         assert!(matches!(error, super::MifRhError::Io { .. }));
     }
 }
