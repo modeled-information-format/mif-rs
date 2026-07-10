@@ -793,32 +793,39 @@ mod tests {
         );
     }
 
-    /// Every `slug: "..."` / `version: "..."` pair from the same
-    /// `ProblemMeta` literal, in appearance order -- pairs a slug with the
-    /// `version` field on the next line or two of the same struct literal
-    /// (not necessarily adjacent, since field order in a literal is not
-    /// guaranteed, but every workspace `ProblemMeta` literal in practice
-    /// declares `slug` then `version` consecutively).
+    /// The quoted value of `field: "..."` within a single `ProblemMeta { ... }`
+    /// literal's body text.
+    fn quoted_field(literal: &str, field: &str) -> Option<String> {
+        let needle = format!("{field}: \"");
+        let start = literal.find(&needle)? + needle.len();
+        let rest = &literal[start..];
+        let end = rest.find('"')?;
+        Some(rest[..end].to_string())
+    }
+
+    /// Every `slug`/`version` pair from each `ProblemMeta { ... }` literal in
+    /// a file, in appearance order. Field order within the literal doesn't
+    /// matter -- each literal's body is isolated (up to its first `}`, and
+    /// `ProblemMeta`'s fields are all flat scalars, so there is no nested
+    /// `{`/`}` to confuse that boundary) and `slug`/`version` are located
+    /// independently within it, rather than assuming `slug` always precedes
+    /// `version` on the next line -- a struct literal's field order is not
+    /// guaranteed, and a line-by-line lookahead would silently skip (not
+    /// flag) any literal that declared them in the other order, defeating
+    /// this test's whole purpose of catching missing doc pages.
     fn slug_version_pairs_in_file(path: &std::path::Path) -> Result<Vec<(String, String)>, String> {
         let contents = std::fs::read_to_string(path)
             .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-        let mut pairs = Vec::new();
-        let mut pending_slug: Option<String> = None;
-        for line in contents.lines() {
-            let trimmed = line.trim_start();
-            if let Some(rest) = trimmed.strip_prefix("slug: \"")
-                && let Some(end) = rest.find('"')
-            {
-                pending_slug = Some(rest[..end].to_string());
-                continue;
-            }
-            if let Some(rest) = trimmed.strip_prefix("version: \"")
-                && let Some(end) = rest.find('"')
-                && let Some(slug) = pending_slug.take()
-            {
-                pairs.push((slug, rest[..end].to_string()));
-            }
-        }
+        let pairs = contents
+            .split("ProblemMeta {")
+            .skip(1)
+            .filter_map(|block| {
+                let literal = &block[..block.find('}').unwrap_or(block.len())];
+                let slug = quoted_field(literal, "slug")?;
+                let version = quoted_field(literal, "version")?;
+                Some((slug, version))
+            })
+            .collect();
         Ok(pairs)
     }
 
