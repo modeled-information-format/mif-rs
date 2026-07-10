@@ -846,16 +846,22 @@ mod tests {
     /// Scoped to `DOCUMENTED_CRATES` -- the crates this workspace's
     /// `errors/index.md` actually has a section for today (`mif-schema`,
     /// `mif-ontology`, `mif-frontmatter`, `mif-embed`, `mif-store`,
-    /// `mif-cli`, `mif-mcp`), matching this repo's own `CLAUDE.md`
-    /// "Error Handling" list of `ToProblem` implementors the public docs
-    /// cover. `mif-rh` also implements `ToProblem` (with ~50 of its own
-    /// `ProblemMeta` slugs) but has no `errors/index.md` section and no
-    /// doc pages at all -- discovered while fixing issue #68, filed
-    /// separately as its own tracked gap rather than silently included
-    /// (or silently excluded) here.
+    /// `mif-cli`, `mif-mcp`, `mif-rh`), matching this repo's own
+    /// `CLAUDE.md` "Error Handling" list of `ToProblem` implementors the
+    /// public docs cover. `ALLOWED_SHARED` also exempts `mif-rh`'s three
+    /// delegating placeholder slugs (`delegated-ontology`,
+    /// `delegated-frontmatter`, `delegated-embed` -- one per inner error
+    /// type it wraps, distinct from `mif-cli`/`mif-mcp`'s single shared
+    /// literal `"delegated"`) for the same reason: they never reach
+    /// `type_uri()` at runtime and have no page of their own.
     #[test]
     fn every_problem_meta_slug_has_a_doc_page() {
-        const ALLOWED_SHARED: &[&str] = &["delegated"];
+        const ALLOWED_SHARED: &[&str] = &[
+            "delegated",
+            "delegated-ontology",
+            "delegated-frontmatter",
+            "delegated-embed",
+        ];
         const DOCUMENTED_CRATES: &[&str] = &[
             "mif-schema",
             "mif-ontology",
@@ -864,6 +870,7 @@ mod tests {
             "mif-store",
             "mif-cli",
             "mif-mcp",
+            "mif-rh",
         ];
 
         let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
