@@ -792,4 +792,110 @@ mod tests {
             "duplicate ProblemMeta slug(s) collide into the same type_uri: {collisions:#?}"
         );
     }
+
+    /// Every `slug: "..."` / `version: "..."` pair from the same
+    /// `ProblemMeta` literal, in appearance order -- pairs a slug with the
+    /// `version` field on the next line or two of the same struct literal
+    /// (not necessarily adjacent, since field order in a literal is not
+    /// guaranteed, but every workspace `ProblemMeta` literal in practice
+    /// declares `slug` then `version` consecutively).
+    fn slug_version_pairs_in_file(path: &std::path::Path) -> Result<Vec<(String, String)>, String> {
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        let mut pairs = Vec::new();
+        let mut pending_slug: Option<String> = None;
+        for line in contents.lines() {
+            let trimmed = line.trim_start();
+            if let Some(rest) = trimmed.strip_prefix("slug: \"")
+                && let Some(end) = rest.find('"')
+            {
+                pending_slug = Some(rest[..end].to_string());
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix("version: \"")
+                && let Some(end) = rest.find('"')
+                && let Some(slug) = pending_slug.take()
+            {
+                pairs.push((slug, rest[..end].to_string()));
+            }
+        }
+        Ok(pairs)
+    }
+
+    /// `type_uri()`'s dereferenceable claim (this crate's own doc comment
+    /// on `type_uri()`: "That URI is dereferenceable: it resolves to the
+    /// reference page documenting that exact problem type") is only true if
+    /// every emitted `{slug}/{version}` pair actually has a matching page at
+    /// `docs/references/errors/{slug}/{version}.md`. This is exactly the
+    /// class of drift issue #68 found: two binaries' `ProblemMeta` literals
+    /// were split into per-binary prefixed slugs without the docs being
+    /// updated to match, so the published reference page was never the one
+    /// a real client's `type` field actually pointed at. `ALLOWED_SHARED`'s
+    /// `"delegated"` entries are placeholder slugs on match arms whose real
+    /// problem comes from an inner error's own `to_problem()` (see
+    /// `every_problem_meta_slug_is_workspace_unique`'s doc comment) -- they
+    /// never reach `type_uri()` at runtime and have no page of their own.
+    ///
+    /// Scoped to `DOCUMENTED_CRATES` -- the crates this workspace's
+    /// `errors/index.md` actually has a section for today (`mif-schema`,
+    /// `mif-ontology`, `mif-frontmatter`, `mif-embed`, `mif-store`,
+    /// `mif-cli`, `mif-mcp`), matching this repo's own `CLAUDE.md`
+    /// "Error Handling" list of `ToProblem` implementors the public docs
+    /// cover. `mif-rh` also implements `ToProblem` (with ~50 of its own
+    /// `ProblemMeta` slugs) but has no `errors/index.md` section and no
+    /// doc pages at all -- discovered while fixing issue #68, filed
+    /// separately as its own tracked gap rather than silently included
+    /// (or silently excluded) here.
+    #[test]
+    fn every_problem_meta_slug_has_a_doc_page() {
+        const ALLOWED_SHARED: &[&str] = &["delegated"];
+        const DOCUMENTED_CRATES: &[&str] = &[
+            "mif-schema",
+            "mif-ontology",
+            "mif-frontmatter",
+            "mif-embed",
+            "mif-store",
+            "mif-cli",
+            "mif-mcp",
+        ];
+
+        let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("mif-problem lives at <workspace_root>/crates/mif-problem")
+            .to_path_buf();
+        let crates_dir = workspace_root.join("crates");
+        let errors_dir = workspace_root.join("docs/references/errors");
+
+        let mut files = Vec::new();
+        for crate_name in DOCUMENTED_CRATES {
+            collect_rs_files(&crates_dir.join(crate_name).join("src"), &mut files)
+                .expect("crate src tree walk failed");
+        }
+
+        let missing: Vec<String> = files
+            .iter()
+            .flat_map(|file| {
+                slug_version_pairs_in_file(file)
+                    .expect("failed to read a collected .rs file")
+                    .into_iter()
+                    .map(move |(slug, version)| (file, slug, version))
+            })
+            .filter(|(_, slug, _)| !ALLOWED_SHARED.contains(&slug.as_str()))
+            .filter_map(|(file, slug, version)| {
+                let page = errors_dir.join(&slug).join(format!("{version}.md"));
+                let entry = format!(
+                    "{slug}/{version} (from {}) -- expected {}",
+                    file.display(),
+                    page.display()
+                );
+                if page.is_file() { None } else { Some(entry) }
+            })
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "ProblemMeta slug(s) with no matching docs/references/errors page: {missing:#?}"
+        );
+    }
 }
