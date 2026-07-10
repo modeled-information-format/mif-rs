@@ -1536,7 +1536,7 @@ fn harness_falsify_cmd(
     finding_path: &Path,
     fixture_path: Option<&Path>,
 ) -> Result<Outcome, CliError> {
-    let result = mif_rh::falsify(finding_path, fixture_path)?;
+    let result = mif_rh::falsify(finding_path, fixture_path, chrono::Utc::now())?;
     // The log line is a direct stderr side effect, not part of the Outcome:
     // callers redirect stdout (the finding JSON) and stderr (this line) to
     // separate destinations and assert on each independently.
