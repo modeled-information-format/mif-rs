@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-07-10
+
+### Fixed
+
+- **`mif-rh`**: `falsify()`'s fixture entries that supply an explicit verdict but omit `attempted_at` now default to the injected wall-clock `now` instead of a fixed `1970-01-01T00:00:00Z` placeholder — the old default read as maximally stale to freshness projections and was nonsensical audit-trail provenance on its own terms. `falsify()`'s original 2-argument public signature is preserved (delegating to `chrono::Utc::now()`); a new `falsify_with_now()` takes the injected clock explicitly for deterministic callers and tests (research-harness-template#359, #73).
+
 ## [0.6.0] - 2026-07-09
 
 ### Added
