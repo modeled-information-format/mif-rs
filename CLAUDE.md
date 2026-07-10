@@ -109,7 +109,7 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 1. Add the variant to the relevant crate's error enum (`mif_schema::MifSchemaError`, `mif_ontology::OntologyError`), derived with `thiserror::Error`.
 2. Include a `#[error("...")]` format string with meaningful context.
 3. Prefer structured variants (named fields, e.g. `{ path: String, source: ... }`) over tuple variants when there are multiple pieces of context.
-4. If the crate's error enum implements `ToProblem` (`mif-schema`, `mif-ontology`, `mif-frontmatter`, `mif-embed`, `mif-store`, `mif-cli`'s `CliError`, and `mif-mcp`'s `McpError` all do), you must also add a corresponding match arm in `to_problem()` (and typically `meta()`) for the new variant — the match is exhaustive, so omitting this fails to compile.
+4. If the crate's error enum implements `ToProblem` (`mif-schema`, `mif-ontology`, `mif-frontmatter`, `mif-embed`, `mif-store`, `mif-rh`, `mif-cli`'s `CliError`, and `mif-mcp`'s `McpError` all do), you must also add a corresponding match arm in `to_problem()` (and typically `meta()`) for the new variant — the match is exhaustive, so omitting this fails to compile.
 5. Add a test exercising the new failure path.
 
 ---
@@ -139,8 +139,8 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 
 ### Error Handling
 
-- Each library crate owns its own error enum, derived with `thiserror::Error` (`MifSchemaError`, `OntologyError`, `FrontmatterError`, `EmbedError`, `StoreError`). No shared top-level error type across the workspace — each crate's errors are scoped to what it actually does.
-- **Propagation**: use `?`. Never `unwrap()`, `expect()`, or `panic!()` in library code (`crates/mif-core`, `mif-schema`, `mif-ontology`, `mif-problem`, `mif-frontmatter`, `mif-embed`, `mif-store`) — all are `deny`d workspace-wide via `[workspace.lints.clippy]`.
+- Each library crate owns its own error enum, derived with `thiserror::Error` (`MifSchemaError`, `OntologyError`, `FrontmatterError`, `EmbedError`, `StoreError`, `MifRhError`). No shared top-level error type across the workspace — each crate's errors are scoped to what it actually does.
+- **Propagation**: use `?`. Never `unwrap()`, `expect()`, or `panic!()` in library code (`crates/mif-core`, `mif-schema`, `mif-ontology`, `mif-problem`, `mif-frontmatter`, `mif-embed`, `mif-store`, `mif-rh`) — all are `deny`d workspace-wide via `[workspace.lints.clippy]`.
 - **RFC 9457 Problem Details**: every library error enum implements `mif_problem::ToProblem` (`to_problem(&self) -> ProblemDetails`), mapping each variant to a stable, versioned problem-type URI via a per-variant `ProblemMeta` (see `mif-problem`'s doc comments for the pattern). `mif-cli`'s and `mif-mcp`'s own error enums (`CliError`, `McpError`) delegate to the wrapped library error's `to_problem()` for variants that wrap one, and define their own `ProblemMeta` only for binary-local variants (`Io`, `Json`).
 - **`mif-cli`**: `main()` returns `ExitCode`, selects `mif_problem::OutputFormat` via an explicit `--format pretty|json` flag (falling back to stderr TTY detection), and renders errors with `error.render(format)` — pretty text or a compact `application/problem+json` envelope. Exempts itself from `print_stdout`/`print_stderr` via `#![allow(...)]` at the crate root (a CLI naturally needs to print — see "Lint Configuration" below).
 - **`mif-mcp`**: `main()` returns `anyhow::Result<()>`, but its `#[tool]` methods return `String` values through the MCP protocol rather than printing. An MCP client is inherently a machine consumer, so every tool failure always renders as `error.to_problem().to_json()` (no pretty/JSON format choice) — it needs no `print_stdout`/`print_stderr` allow, since it never calls `println!`/`eprintln!`.
