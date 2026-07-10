@@ -65,35 +65,35 @@ ureq = "3.3.0"
 
 [workspace.dependencies.mif-core]
 path = "crates/mif-core"
-version = "0.6.0"
+version = "0.6.1"
 
 [workspace.dependencies.mif-schema]
 path = "crates/mif-schema"
-version = "0.6.0"
+version = "0.6.1"
 
 [workspace.dependencies.mif-ontology]
 path = "crates/mif-ontology"
-version = "0.6.0"
+version = "0.6.1"
 
 [workspace.dependencies.mif-problem]
 path = "crates/mif-problem"
-version = "0.6.0"
+version = "0.6.1"
 
 [workspace.dependencies.mif-frontmatter]
 path = "crates/mif-frontmatter"
-version = "0.6.0"
+version = "0.6.1"
 
 [workspace.dependencies.mif-embed]
 path = "crates/mif-embed"
-version = "0.6.0"
+version = "0.6.1"
 
 [workspace.dependencies.mif-store]
 path = "crates/mif-store"
-version = "0.6.0"
+version = "0.6.1"
 
 [workspace.dependencies.mif-rh]
 path = "crates/mif-rh"
-version = "0.6.0"
+version = "0.6.1"
 
 [profile.dev]
 # Faster compile times during development
