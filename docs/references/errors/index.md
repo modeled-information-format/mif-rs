@@ -25,12 +25,13 @@ that exact problem type, one page per `{slug}/{version}` pair below.
 
 ## Ontology resolution (`mif-ontology`)
 
-- [io/v1](/mif-rs/references/errors/io/v1/)
+- [mif-ontology-io/v1](/mif-rs/references/errors/mif-ontology-io/v1/)
 - [invalid-yaml/v1](/mif-rs/references/errors/invalid-yaml/v1/)
 - [invalid-ontology-definition/v1](/mif-rs/references/errors/invalid-ontology-definition/v1/)
 - [ontology-metadata-mismatch/v1](/mif-rs/references/errors/ontology-metadata-mismatch/v1/)
 - [ontology-not-found/v1](/mif-rs/references/errors/ontology-not-found/v1/)
 - [ontology-extends-cycle/v1](/mif-rs/references/errors/ontology-extends-cycle/v1/)
+- [calibration-invalid/v1](/mif-rs/references/errors/calibration-invalid/v1/)
 
 ## Frontmatter projection (`mif-frontmatter`)
 
@@ -69,17 +70,21 @@ that exact problem type, one page per `{slug}/{version}` pair below.
 
 ## CLI and MCP server (`mif-cli`, `mif-mcp`)
 
-`invalid-json`, `document-not-found`, and the per-binary
-`mif-cli-json-serialize-failure`/`mif-mcp-json-serialize-failure` pair are
-the only problem types unique to `mif-cli`/`mif-mcp` — they also
-independently define their own `io` problem type (shared with
-`mif-ontology`; see [io/v1](/mif-rs/references/errors/io/v1/) above) rather
-than delegating an I/O failure through the library layer. Every other
-failure they report delegates verbatim to the wrapped library crate's own
-problem type.
+`invalid-json`, `document-not-found`, and `io` are each problem types
+unique to `mif-cli`/`mif-mcp`, and each is defined **per binary** with its
+own `mif-cli-*`/`mif-mcp-*` prefixed slug — `mif-cli` and `mif-mcp` never
+share a slug with each other or with `mif-ontology` (which defines its own
+separate `mif-ontology-io` problem type for the identical conceptual
+failure; see [mif-ontology-io/v1](/mif-rs/references/errors/mif-ontology-io/v1/)
+above). Every other failure they report delegates verbatim to the wrapped
+library crate's own problem type.
 
-- [invalid-json/v1](/mif-rs/references/errors/invalid-json/v1/)
-- [document-not-found/v1](/mif-rs/references/errors/document-not-found/v1/)
+- [mif-cli-invalid-json/v1](/mif-rs/references/errors/mif-cli-invalid-json/v1/)
+- [mif-mcp-invalid-json/v1](/mif-rs/references/errors/mif-mcp-invalid-json/v1/)
+- [mif-cli-document-not-found/v1](/mif-rs/references/errors/mif-cli-document-not-found/v1/)
+- [mif-mcp-document-not-found/v1](/mif-rs/references/errors/mif-mcp-document-not-found/v1/)
+- [mif-cli-io/v1](/mif-rs/references/errors/mif-cli-io/v1/)
+- [mif-mcp-io/v1](/mif-rs/references/errors/mif-mcp-io/v1/)
 - [mif-cli-json-serialize-failure/v1](/mif-rs/references/errors/mif-cli-json-serialize-failure/v1/)
 - [mif-mcp-json-serialize-failure/v1](/mif-rs/references/errors/mif-mcp-json-serialize-failure/v1/)
 
