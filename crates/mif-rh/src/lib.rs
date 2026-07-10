@@ -80,7 +80,7 @@ pub use harness_assert_graph::{CheckResult, GraphAssertion, assert_graph_mif_fil
 pub use harness_citation_integrity::{CitationIntegrityReport, check_citation_integrity};
 pub use harness_concordance::build_concordance;
 pub use harness_corpus::{CorpusSynthesis, synthesize_corpus};
-pub use harness_falsify::{FalsifyResult, falsify};
+pub use harness_falsify::{FalsifyResult, falsify, falsify_with_now};
 pub use harness_graph::build_graph;
 pub use harness_import::{ImportReport, import_corpus};
 pub use harness_index::build_index;

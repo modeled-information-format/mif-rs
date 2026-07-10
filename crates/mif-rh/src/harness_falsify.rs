@@ -88,6 +88,23 @@ fn with_verification(finding: Value, verification: Value) -> Value {
     root
 }
 
+/// Runs the falsification gate over `finding_path`, defaulting a fixture
+/// entry's missing `attempted_at` to the actual current wall-clock time.
+///
+/// See [`falsify_with_now`] for the full behavior; this is a thin wrapper
+/// over it for callers that do not need deterministic time injection.
+///
+/// # Errors
+///
+/// Returns [`MifRhError::Io`] if `finding_path` cannot be read, and
+/// [`MifRhError::Json`] if it is not valid JSON.
+pub fn falsify(
+    finding_path: &Path,
+    fixture_path: Option<&Path>,
+) -> Result<FalsifyResult, MifRhError> {
+    falsify_with_now(finding_path, fixture_path, chrono::Utc::now())
+}
+
 /// Runs the falsification gate over `finding_path`, consulting
 /// `fixture_path` (an offline, fixture-supplied body of disconfirming
 /// evidence keyed by finding `@id`) for the verdict to assign.
@@ -103,14 +120,14 @@ fn with_verification(finding: Value, verification: Value) -> Value {
 /// false `survived`) that omits `attempted_at` entirely, so a later real
 /// gate run can still overwrite it. `now` is a caller-supplied parameter
 /// (mirroring [`crate::resolve_membership`]'s `now`) rather than an internal
-/// clock call, so tests stay deterministic and real callers pass the actual
-/// wall-clock time.
+/// clock call, so tests stay deterministic; [`falsify`] is the real-clock
+/// convenience wrapper most callers want.
 ///
 /// # Errors
 ///
 /// Returns [`MifRhError::Io`] if `finding_path` cannot be read, and
 /// [`MifRhError::Json`] if it is not valid JSON.
-pub fn falsify(
+pub fn falsify_with_now(
     finding_path: &Path,
     fixture_path: Option<&Path>,
     now: chrono::DateTime<chrono::Utc>,
@@ -187,7 +204,7 @@ pub fn falsify(
 
 #[cfg(test)]
 mod tests {
-    use super::falsify;
+    use super::falsify_with_now;
     use std::fs;
 
     fn now() -> chrono::DateTime<chrono::Utc> {
@@ -207,7 +224,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let finding = write(dir.path(), "f.json", r#"{"@id": "urn:mif:f1"}"#);
 
-        let result = falsify(&finding, None, now()).unwrap();
+        let result = falsify_with_now(&finding, None, now()).unwrap();
         assert_eq!(
             result.finding["extensions"]["harness"]["verification"]["verdict"],
             "inconclusive"
@@ -233,7 +250,7 @@ mod tests {
             r#"{"urn:mif:f1": {"verdict": "falsified", "basis": "contradicted", "attempted_at": "2026-01-01T00:00:00Z", "disconfirming": ["https://example.com"]}}"#,
         );
 
-        let result = falsify(&finding, Some(&fixture), now()).unwrap();
+        let result = falsify_with_now(&finding, Some(&fixture), now()).unwrap();
         let verification = &result.finding["extensions"]["harness"]["verification"];
         assert_eq!(verification["verdict"], "falsified");
         assert_eq!(verification["verdict_basis"], "contradicted");
@@ -259,7 +276,7 @@ mod tests {
             r#"{"urn:mif:f1": {"verdict": "survived", "basis": "no contradicting evidence found"}}"#,
         );
 
-        let result = falsify(&finding, Some(&fixture), now()).unwrap();
+        let result = falsify_with_now(&finding, Some(&fixture), now()).unwrap();
         let verification = &result.finding["extensions"]["harness"]["verification"];
         assert_eq!(verification["verdict"], "survived");
         assert_eq!(verification["attempted_at"], "2026-06-01T00:00:00Z");
@@ -279,7 +296,7 @@ mod tests {
 
         let before: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&finding).unwrap()).unwrap();
-        let result = falsify(&finding, None, now()).unwrap();
+        let result = falsify_with_now(&finding, None, now()).unwrap();
         assert_eq!(result.finding, before);
         assert_eq!(
             result.log_line,
@@ -296,7 +313,7 @@ mod tests {
             r#"{"@id": "urn:mif:f1", "title": "keep me", "extensions": {"other": "keep too"}}"#,
         );
 
-        let result = falsify(&finding, None, now()).unwrap();
+        let result = falsify_with_now(&finding, None, now()).unwrap();
         assert_eq!(result.finding["title"], "keep me");
         assert_eq!(result.finding["extensions"]["other"], "keep too");
         assert_eq!(
@@ -307,7 +324,8 @@ mod tests {
 
     #[test]
     fn errors_on_a_missing_finding_file() {
-        let error = falsify(std::path::Path::new("/no/such/file.json"), None, now()).unwrap_err();
+        let error =
+            falsify_with_now(std::path::Path::new("/no/such/file.json"), None, now()).unwrap_err();
         assert!(matches!(error, super::MifRhError::Io { .. }));
     }
 }
