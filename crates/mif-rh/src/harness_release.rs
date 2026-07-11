@@ -961,8 +961,14 @@ pub enum ChangelogLinkChange {
 /// The outcome of a [`reconcile_changelog_links`] call.
 #[derive(Debug, Clone, Default)]
 pub struct ChangelogLinkReport {
-    /// Every change made (or, in check mode, that would be made), in the
-    /// order the affected heading appears in the file.
+    /// Every change made (or, in check mode, that would be made). Heading
+    /// bracket changes ([`ChangelogLinkChange::Bracketed`]/
+    /// [`ChangelogLinkChange::Unbracketed`]) are collected first, in file
+    /// order, followed by footer-link changes
+    /// ([`ChangelogLinkChange::LinkSet`]/
+    /// [`ChangelogLinkChange::UnreleasedLinkSet`]) — the two are found in
+    /// separate passes, so overall ordering is two-phase, not strictly by
+    /// file position.
     pub changes: Vec<ChangelogLinkChange>,
 }
 
@@ -1023,9 +1029,10 @@ fn parse_footer_line(line: &str) -> Option<(&str, &str)> {
 ///
 /// Scanning for the first such line instead (as a naive top-down search
 /// would) misfires if a body bullet happens to contain an inline
-/// `[label]: url`-shaped reference before the real footer — Keep a
-/// Changelog's actual footer is always the final such block, so anchoring
-/// on the last run is what makes this robust against that false positive.
+/// `[label]: url`-shaped reference before the real footer. Keep a
+/// Changelog's actual footer is always the final such block in the file, so
+/// anchoring on the last run is what makes this robust against that false
+/// positive.
 fn last_footer_run(lines: &[&str]) -> (usize, usize) {
     let mut best = (lines.len(), lines.len());
     let mut i = 0;
@@ -1057,18 +1064,42 @@ fn changelog_repo_url(changelog: &str) -> Option<String> {
     })
 }
 
+/// Like [`run_git`], but treats a non-zero exit status as a real failure
+/// (not a repo, corrupted refs, etc.) instead of silently returning
+/// whatever partial stdout was produced.
+fn run_git_checked(root: &Path, args: &[&str]) -> Result<String, MifRhError> {
+    let output = git_command(root)
+        .args(args)
+        .output()
+        .map_err(|source| MifRhError::Io {
+            path: "git".to_string(),
+            source,
+        })?;
+    if !output.status.success() {
+        return Err(MifRhError::GitCommandFailed {
+            command: args.join(" "),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 /// Real (parsed, ascending-sorted) `v*` tags read from `git tag --list`.
-fn read_real_tags(root: &Path) -> Vec<(u64, u64, u64)> {
-    let mut tags: Vec<(u64, u64, u64)> = run_git(root, &["tag", "--list", "v*"])
-        .map(|out| {
-            out.lines()
-                .filter_map(|tag| tag.strip_prefix('v'))
-                .filter_map(parse_semver)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+///
+/// # Errors
+///
+/// Returns [`MifRhError::GitCommandFailed`] if `git` itself fails (not a
+/// repository, corrupted refs) — distinct from a valid repo that simply has
+/// no tags yet.
+fn read_real_tags(root: &Path) -> Result<Vec<(u64, u64, u64)>, MifRhError> {
+    let out = run_git_checked(root, &["tag", "--list", "v*"])?;
+    let mut tags: Vec<(u64, u64, u64)> = out
+        .lines()
+        .filter_map(|tag| tag.strip_prefix('v'))
+        .filter_map(parse_semver)
+        .collect();
     tags.sort_unstable();
-    tags
+    Ok(tags)
 }
 
 /// Rewrites every dated heading's brackets to match real tag state, and
@@ -1168,8 +1199,10 @@ fn build_footer(
 ///
 /// # Errors
 ///
-/// Returns [`MifRhError::Io`] if the file can't be read (or, when
-/// `check` is `false`, written).
+/// Returns [`MifRhError::Io`] if the file can't be read (or, when `check`
+/// is `false`, written), or [`MifRhError::GitCommandFailed`] if `git`
+/// itself fails (not a repository, corrupted refs) — distinct from a valid
+/// repo that simply has no tags yet.
 pub fn reconcile_changelog_links(
     root: &Path,
     check: bool,
@@ -1180,7 +1213,7 @@ pub fn reconcile_changelog_links(
     let Some(repo_url) = changelog_repo_url(&changelog) else {
         return Ok(ChangelogLinkReport::default());
     };
-    let tags = read_real_tags(root);
+    let tags = read_real_tags(root)?;
     let Some(&max_tag) = tags.last() else {
         return Ok(ChangelogLinkReport::default());
     };

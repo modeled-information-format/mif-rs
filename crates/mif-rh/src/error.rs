@@ -542,6 +542,16 @@ pub enum MifRhError {
         /// The file that failed verification.
         path: String,
     },
+    /// A `git` invocation exited non-zero — a real failure (not a repo, a
+    /// corrupted ref, etc.), distinct from a command that legitimately
+    /// produced no output.
+    #[error("git {command} failed: {stderr}")]
+    GitCommandFailed {
+        /// The git subcommand invoked (e.g. `"tag --list v*"`).
+        command: String,
+        /// Captured stderr.
+        stderr: String,
+    },
 }
 
 impl MifRhError {
@@ -942,6 +952,13 @@ impl MifRhError {
                 status: 500,
                 exit_code: 2,
             },
+            Self::GitCommandFailed { .. } => ProblemMeta {
+                slug: "git-command-failed",
+                version: "v1",
+                title: "A git invocation exited non-zero",
+                status: 500,
+                exit_code: 2,
+            },
         }
     }
 }
@@ -1280,6 +1297,18 @@ fn fix_and_action(error: &MifRhError) -> (SuggestedFix, CodeAction) {
                 "Inspect the file that failed verification",
                 "quickfix",
                 Applicability::Unspecified,
+            ),
+        ),
+        MifRhError::GitCommandFailed { .. } => (
+            SuggestedFix::new(
+                "Run the command's directory root through `git status` to confirm it's a real, \
+                 uncorrupted git repository, then retry.",
+                Applicability::MaybeIncorrect,
+            ),
+            CodeAction::new(
+                "Verify the git repository is valid",
+                "quickfix",
+                Applicability::MaybeIncorrect,
             ),
         ),
         MifRhError::ConfigMalformed { .. } => (
@@ -1694,6 +1723,10 @@ mod tests {
             },
             MifRhError::VerificationFailed {
                 path: "harness.config.json".to_string(),
+            },
+            MifRhError::GitCommandFailed {
+                command: "tag --list v*".to_string(),
+                stderr: "fatal: not a git repository".to_string(),
             },
             MifRhError::Frontmatter(mif_frontmatter::FrontmatterError::MissingFrontmatter),
             MifRhError::SchemaCompilation {
