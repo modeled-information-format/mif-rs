@@ -4,7 +4,7 @@
 //! `scripts/check-version-bump.sh` (ADR-0010's change-driven versioning) to
 //! the compiled engine.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -933,6 +933,296 @@ fn check_release_pointer(root: &Path, failures: &mut Vec<VersionGateFailure>) {
     }
 }
 
+/// A heading/footer-link edit [`reconcile_changelog_links`] made — or, in
+/// check mode, would make.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangelogLinkChange {
+    /// Added or corrected the footer compare-link for a tagged version.
+    LinkSet {
+        /// The tagged version the link is for.
+        version: String,
+    },
+    /// Re-bracketed a heading now that a real tag exists for it.
+    Bracketed {
+        /// The now-tagged version.
+        version: String,
+    },
+    /// Stripped brackets (and any footer link) from a version that was
+    /// bumped but folded into a later tagged release without ever getting
+    /// its own tag.
+    Unbracketed {
+        /// The orphaned version.
+        version: String,
+    },
+    /// Updated `[Unreleased]`'s compare-from tag.
+    UnreleasedLinkSet,
+}
+
+/// The outcome of a [`reconcile_changelog_links`] call.
+#[derive(Debug, Clone, Default)]
+pub struct ChangelogLinkReport {
+    /// Every change made (or, in check mode, that would be made), in the
+    /// order the affected heading appears in the file.
+    pub changes: Vec<ChangelogLinkChange>,
+}
+
+impl ChangelogLinkReport {
+    /// Whether the CHANGELOG's headings/footer already matched real tag
+    /// state, i.e. there was nothing to reconcile.
+    #[must_use]
+    pub const fn is_clean(&self) -> bool {
+        self.changes.is_empty()
+    }
+}
+
+/// A parsed `## [X.Y.Z] - DATE` or `## X.Y.Z - DATE` heading line.
+struct Heading {
+    version: String,
+    bracketed: bool,
+    /// Everything after `- ` (normally just the date), kept verbatim.
+    rest: String,
+}
+
+fn parse_heading(line: &str) -> Option<Heading> {
+    let rest = line.strip_prefix("## ")?;
+    if rest == "[Unreleased]" {
+        return None;
+    }
+    let (version, after) = rest
+        .strip_prefix('[')
+        .and_then(|inner| inner.split_once("] - "))
+        .or_else(|| rest.split_once(" - "))?;
+    is_semver(version).then(|| Heading {
+        version: version.to_string(),
+        bracketed: rest.starts_with('['),
+        rest: after.to_string(),
+    })
+}
+
+fn render_heading(heading: &Heading, bracketed: bool) -> String {
+    if bracketed {
+        format!("## [{}] - {}", heading.version, heading.rest)
+    } else {
+        format!("## {} - {}", heading.version, heading.rest)
+    }
+}
+
+/// Whether `line` is a reference-style footer link (`[label]: url`).
+fn is_footer_link_line(line: &str) -> bool {
+    line.starts_with('[') && line.contains("]: ")
+}
+
+/// Parses a footer link line into its `(label, url)` pair.
+fn parse_footer_line(line: &str) -> Option<(&str, &str)> {
+    let rest = line.strip_prefix('[')?;
+    rest.split_once("]: ")
+}
+
+/// Finds the real reference-link footer: the *last* maximal contiguous run
+/// of [`is_footer_link_line`] lines in the file.
+///
+/// Scanning for the first such line instead (as a naive top-down search
+/// would) misfires if a body bullet happens to contain an inline
+/// `[label]: url`-shaped reference before the real footer — Keep a
+/// Changelog's actual footer is always the final such block, so anchoring
+/// on the last run is what makes this robust against that false positive.
+fn last_footer_run(lines: &[&str]) -> (usize, usize) {
+    let mut best = (lines.len(), lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        if is_footer_link_line(lines[i]) {
+            let start = i;
+            while i < lines.len() && is_footer_link_line(lines[i]) {
+                i += 1;
+            }
+            best = (start, i);
+        } else {
+            i += 1;
+        }
+    }
+    best
+}
+
+/// Extracts the `https://github.com/<owner>/<repo>` prefix from the
+/// `[Unreleased]` footer link, so generated links target this harness
+/// instance's actual remote rather than a hardcoded org/repo.
+fn changelog_repo_url(changelog: &str) -> Option<String> {
+    changelog.lines().find_map(|line| {
+        let (label, url) = parse_footer_line(line)?;
+        if label != "Unreleased" {
+            return None;
+        }
+        url.split_once("/compare/")
+            .map(|(base, _)| base.to_string())
+    })
+}
+
+/// Real (parsed, ascending-sorted) `v*` tags read from `git tag --list`.
+fn read_real_tags(root: &Path) -> Vec<(u64, u64, u64)> {
+    let mut tags: Vec<(u64, u64, u64)> = run_git(root, &["tag", "--list", "v*"])
+        .map(|out| {
+            out.lines()
+                .filter_map(|tag| tag.strip_prefix('v'))
+                .filter_map(parse_semver)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    tags.sort_unstable();
+    tags
+}
+
+/// Rewrites every dated heading's brackets to match real tag state, and
+/// returns the rewritten body plus `(version, has_tag)` for each section in
+/// file order (feeds [`build_footer`]).
+fn rewrite_headings(
+    lines: &[&str],
+    tags: &[(u64, u64, u64)],
+    max_tag: (u64, u64, u64),
+    changes: &mut Vec<ChangelogLinkChange>,
+) -> (String, Vec<(String, bool)>) {
+    let mut body = String::new();
+    let mut reconciled = Vec::new();
+    for line in lines {
+        let Some(heading) = parse_heading(line) else {
+            body.push_str(line);
+            body.push('\n');
+            continue;
+        };
+        let version_tuple = parse_semver(&heading.version).unwrap_or((0, 0, 0));
+        let has_tag = tags.contains(&version_tuple);
+        let is_pending = !has_tag && version_tuple > max_tag;
+        let should_bracket = has_tag || is_pending;
+        if should_bracket != heading.bracketed {
+            changes.push(if should_bracket {
+                ChangelogLinkChange::Bracketed {
+                    version: heading.version.clone(),
+                }
+            } else {
+                ChangelogLinkChange::Unbracketed {
+                    version: heading.version.clone(),
+                }
+            });
+        }
+        body.push_str(&render_heading(&heading, should_bracket));
+        body.push('\n');
+        reconciled.push((heading.version.clone(), has_tag));
+    }
+    (body, reconciled)
+}
+
+/// Regenerates the `[Unreleased]`/`[X.Y.Z]` footer link block from scratch,
+/// comparing each entry against `old_footer` to record what changed.
+fn build_footer(
+    reconciled: &[(String, bool)],
+    tags: &[(u64, u64, u64)],
+    max_tag: (u64, u64, u64),
+    repo_url: &str,
+    old_footer: &HashMap<String, String>,
+    changes: &mut Vec<ChangelogLinkChange>,
+) -> String {
+    let mut footer = String::new();
+    let unreleased_link = format!(
+        "{repo_url}/compare/v{}.{}.{}...HEAD",
+        max_tag.0, max_tag.1, max_tag.2
+    );
+    if old_footer.get("Unreleased") != Some(&unreleased_link) {
+        changes.push(ChangelogLinkChange::UnreleasedLinkSet);
+    }
+    let _ = writeln!(footer, "[Unreleased]: {unreleased_link}");
+
+    for (version, has_tag) in reconciled {
+        if !has_tag {
+            continue;
+        }
+        let v = parse_semver(version).unwrap_or((0, 0, 0));
+        let prev = tags
+            .binary_search(&v)
+            .ok()
+            .and_then(|idx| idx.checked_sub(1))
+            .map(|idx| tags[idx]);
+        let link = match prev {
+            Some((pm, pn, pp)) => format!("{repo_url}/compare/v{pm}.{pn}.{pp}...v{version}"),
+            None => format!("{repo_url}/releases/tag/v{version}"),
+        };
+        if old_footer.get(version) != Some(&link) {
+            changes.push(ChangelogLinkChange::LinkSet {
+                version: version.clone(),
+            });
+        }
+        let _ = writeln!(footer, "[{version}]: {link}");
+    }
+    footer
+}
+
+/// Reconciles `CHANGELOG.md`'s heading brackets and footer compare-links
+/// against real git tags.
+///
+/// The convention established by #392/#393: a dated section is bracketed
+/// with a footer compare-link once a real tag exists for it, or while it is
+/// still awaiting its first release (nothing newer has been tagged yet); a
+/// version that was bumped but superseded by a later tagged release without
+/// ever getting its own tag loses both, since there is nothing real left to
+/// compare it against. In `check` mode, computes and returns the changes
+/// without writing the file — used to detect drift without mutating
+/// anything.
+///
+/// # Errors
+///
+/// Returns [`MifRhError::Io`] if the file can't be read (or, when
+/// `check` is `false`, written).
+pub fn reconcile_changelog_links(
+    root: &Path,
+    check: bool,
+) -> Result<ChangelogLinkReport, MifRhError> {
+    let changelog_path = root.join(CHANGELOG_FILE);
+    let changelog = read_text(&changelog_path)?;
+
+    let Some(repo_url) = changelog_repo_url(&changelog) else {
+        return Ok(ChangelogLinkReport::default());
+    };
+    let tags = read_real_tags(root);
+    let Some(&max_tag) = tags.last() else {
+        return Ok(ChangelogLinkReport::default());
+    };
+
+    let lines: Vec<&str> = changelog.lines().collect();
+    let (footer_start, footer_end) = last_footer_run(&lines);
+
+    let mut old_footer = HashMap::new();
+    for line in &lines[footer_start..footer_end] {
+        if let Some((label, url)) = parse_footer_line(line) {
+            old_footer.insert(label.to_string(), url.to_string());
+        }
+    }
+
+    let mut changes = Vec::new();
+    let (body, reconciled) = rewrite_headings(&lines[..footer_start], &tags, max_tag, &mut changes);
+    let footer = build_footer(
+        &reconciled,
+        &tags,
+        max_tag,
+        &repo_url,
+        &old_footer,
+        &mut changes,
+    );
+
+    if changes.is_empty() {
+        return Ok(ChangelogLinkReport::default());
+    }
+
+    if !check {
+        let mut out = body;
+        out.push_str(&footer);
+        for line in &lines[footer_end..] {
+            out.push_str(line);
+            out.push('\n');
+        }
+        write_text(&changelog_path, &out)?;
+    }
+
+    Ok(ChangelogLinkReport { changes })
+}
+
 #[cfg(test)]
 mod tests {
     use super::goal_version_id;
@@ -1268,5 +1558,174 @@ mod tests {
                 .iter()
                 .any(|f| matches!(f, VersionGateFailure::PointerNotAhead { .. }))
         );
+    }
+
+    use super::{ChangelogLinkChange, reconcile_changelog_links};
+
+    const REPO_URL: &str = "https://github.com/example/harness";
+
+    fn write_changelog(root: &std::path::Path, body: &str) {
+        std::fs::write(root.join("CHANGELOG.md"), body).unwrap();
+    }
+
+    #[test]
+    fn reconcile_changelog_links_noop_when_pending_version_has_no_tag_yet() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        write_changelog(
+            dir.path(),
+            &format!(
+                "# Changelog\n\n## [Unreleased]\n\n## [0.5.0] - 2026-02-01\n\nPending.\n\n\
+                 [Unreleased]: {REPO_URL}/compare/v0.4.0...HEAD\n\
+                 [0.4.0]: {REPO_URL}/releases/tag/v0.4.0\n"
+            ),
+        );
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "base"]);
+        git(dir.path(), &["tag", "v0.4.0"]);
+
+        let report = reconcile_changelog_links(dir.path(), false).unwrap();
+        assert!(report.is_clean(), "expected no changes, got {report:?}");
+        let after = std::fs::read_to_string(dir.path().join("CHANGELOG.md")).unwrap();
+        assert!(after.contains("## [0.5.0] - 2026-02-01"));
+        assert!(!after.contains("[0.5.0]:"));
+    }
+
+    #[test]
+    fn reconcile_changelog_links_adds_link_once_pending_version_is_tagged() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        write_changelog(
+            dir.path(),
+            &format!(
+                "# Changelog\n\n## [Unreleased]\n\n## [0.5.0] - 2026-02-01\n\nShipped.\n\n\
+                 [Unreleased]: {REPO_URL}/compare/v0.4.0...HEAD\n\
+                 [0.4.0]: {REPO_URL}/releases/tag/v0.4.0\n"
+            ),
+        );
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "base"]);
+        git(dir.path(), &["tag", "v0.4.0"]);
+        git(dir.path(), &["tag", "v0.5.0"]);
+
+        let report = reconcile_changelog_links(dir.path(), false).unwrap();
+        assert!(report.changes.contains(&ChangelogLinkChange::LinkSet {
+            version: "0.5.0".to_string()
+        }));
+        assert!(
+            report
+                .changes
+                .contains(&ChangelogLinkChange::UnreleasedLinkSet)
+        );
+
+        let after = std::fs::read_to_string(dir.path().join("CHANGELOG.md")).unwrap();
+        assert!(after.contains(&format!("[0.5.0]: {REPO_URL}/compare/v0.4.0...v0.5.0")));
+        assert!(after.contains(&format!("[Unreleased]: {REPO_URL}/compare/v0.5.0...HEAD")));
+
+        // Idempotent: running again finds nothing left to reconcile.
+        let second = reconcile_changelog_links(dir.path(), false).unwrap();
+        assert!(second.is_clean(), "expected idempotence, got {second:?}");
+    }
+
+    #[test]
+    fn reconcile_changelog_links_check_mode_does_not_write() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let original = format!(
+            "# Changelog\n\n## [Unreleased]\n\n## [0.5.0] - 2026-02-01\n\nShipped.\n\n\
+             [Unreleased]: {REPO_URL}/compare/v0.4.0...HEAD\n\
+             [0.4.0]: {REPO_URL}/releases/tag/v0.4.0\n"
+        );
+        write_changelog(dir.path(), &original);
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "base"]);
+        git(dir.path(), &["tag", "v0.4.0"]);
+        git(dir.path(), &["tag", "v0.5.0"]);
+
+        let report = reconcile_changelog_links(dir.path(), true).unwrap();
+        assert!(!report.is_clean());
+        let after = std::fs::read_to_string(dir.path().join("CHANGELOG.md")).unwrap();
+        assert_eq!(after, original, "check mode must not write the file");
+    }
+
+    #[test]
+    fn reconcile_changelog_links_unbrackets_a_version_folded_into_a_later_release() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        write_changelog(
+            dir.path(),
+            &format!(
+                "# Changelog\n\n## [Unreleased]\n\n\
+                 ## [0.6.0] - 2026-03-01\n\nReal release.\n\n\
+                 ## [0.5.1] - 2026-02-15\n\nBumped then folded into 0.6.0 without its own tag.\n\n\
+                 ## [0.5.0] - 2026-02-01\n\nReal release.\n\n\
+                 [Unreleased]: {REPO_URL}/compare/v0.6.0...HEAD\n\
+                 [0.6.0]: {REPO_URL}/compare/v0.5.0...v0.6.0\n\
+                 [0.5.1]: {REPO_URL}/compare/v0.5.0...v0.5.1\n\
+                 [0.5.0]: {REPO_URL}/releases/tag/v0.5.0\n"
+            ),
+        );
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "base"]);
+        git(dir.path(), &["tag", "v0.5.0"]);
+        git(dir.path(), &["tag", "v0.6.0"]);
+
+        let report = reconcile_changelog_links(dir.path(), false).unwrap();
+        assert!(report.changes.contains(&ChangelogLinkChange::Unbracketed {
+            version: "0.5.1".to_string()
+        }));
+
+        let after = std::fs::read_to_string(dir.path().join("CHANGELOG.md")).unwrap();
+        assert!(after.contains("## 0.5.1 - 2026-02-15"));
+        assert!(!after.contains("[0.5.1]:"));
+        assert!(after.contains("## [0.6.0] - 2026-03-01"));
+        assert!(after.contains(&format!("[0.6.0]: {REPO_URL}/compare/v0.5.0...v0.6.0")));
+    }
+
+    #[test]
+    fn reconcile_changelog_links_noop_without_any_real_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        write_changelog(
+            dir.path(),
+            &format!(
+                "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-01-01\n\nFirst.\n\n\
+                 [Unreleased]: {REPO_URL}/compare/v0.1.0...HEAD\n"
+            ),
+        );
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "base"]);
+
+        let report = reconcile_changelog_links(dir.path(), false).unwrap();
+        assert!(report.is_clean());
+    }
+
+    #[test]
+    fn reconcile_changelog_links_ignores_an_inline_reference_link_in_a_body_bullet() {
+        // A body bullet shaped like a footer link (e.g. an issue reference)
+        // must not be mistaken for the real footer, which always sits last.
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        write_changelog(
+            dir.path(),
+            &format!(
+                "# Changelog\n\n## [Unreleased]\n\n## [0.5.0] - 2026-02-01\n\n\
+                 - Fixes a bug. [#123]: not-a-real-footer-link\n\n\
+                 [Unreleased]: {REPO_URL}/compare/v0.4.0...HEAD\n\
+                 [0.4.0]: {REPO_URL}/releases/tag/v0.4.0\n"
+            ),
+        );
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-q", "-m", "base"]);
+        git(dir.path(), &["tag", "v0.4.0"]);
+        git(dir.path(), &["tag", "v0.5.0"]);
+
+        let report = reconcile_changelog_links(dir.path(), false).unwrap();
+        assert!(report.changes.contains(&ChangelogLinkChange::LinkSet {
+            version: "0.5.0".to_string()
+        }));
+        let after = std::fs::read_to_string(dir.path().join("CHANGELOG.md")).unwrap();
+        assert!(after.contains("- Fixes a bug. [#123]: not-a-real-footer-link"));
+        assert!(after.contains(&format!("[0.5.0]: {REPO_URL}/compare/v0.4.0...v0.5.0")));
     }
 }

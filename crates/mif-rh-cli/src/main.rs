@@ -433,6 +433,20 @@ enum HarnessCommand {
         #[arg(long)]
         root: Option<PathBuf>,
     },
+    /// Reconcile CHANGELOG.md's heading brackets and footer compare-links
+    /// against real git tags (#392/#393/#397): a dated section is bracketed
+    /// with a link once a real tag exists for it (or it's still awaiting
+    /// its first release); a version folded into a later release without
+    /// ever getting its own tag loses both.
+    ReconcileChangelogLinks {
+        /// Dry run: report what would change, write nothing. Exits nonzero
+        /// if reconciliation is needed.
+        #[arg(long)]
+        check: bool,
+        /// Repo root. Defaults to the current directory.
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
     /// Project a MIF-L3 report's frontmatter + body into JSON and validate
     /// it against a schema (with `$ref` dependencies). Does not run
     /// citation-integrity — that stays a separate check until it is
@@ -1314,6 +1328,9 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
         HarnessCommand::CheckVersionBump { base, root } => {
             harness_check_version_bump_cmd(base.as_deref(), root.as_deref())
         },
+        HarnessCommand::ReconcileChangelogLinks { check, root } => {
+            harness_reconcile_changelog_links_cmd(*check, root.as_deref())
+        },
         HarnessCommand::ProjectReport {
             report,
             schema,
@@ -1748,6 +1765,51 @@ fn harness_check_version_bump_cmd(
     Ok(Outcome {
         message: lines.join("\n"),
         exit_code: u8::from(!report.failures.is_empty()),
+    })
+}
+
+fn describe_changelog_link_change(change: &mif_rh::ChangelogLinkChange) -> String {
+    match change {
+        mif_rh::ChangelogLinkChange::LinkSet { version } => {
+            format!("set footer compare-link for {version}")
+        },
+        mif_rh::ChangelogLinkChange::Bracketed { version } => {
+            format!("re-bracketed {version} (now has a real tag)")
+        },
+        mif_rh::ChangelogLinkChange::Unbracketed { version } => {
+            format!("un-bracketed {version} (folded into a later release, never tagged)")
+        },
+        mif_rh::ChangelogLinkChange::UnreleasedLinkSet => {
+            "updated [Unreleased]'s compare-from tag".to_string()
+        },
+    }
+}
+
+fn harness_reconcile_changelog_links_cmd(
+    check: bool,
+    root: Option<&Path>,
+) -> Result<Outcome, CliError> {
+    let root = effective_path(root, ".");
+    let report = mif_rh::reconcile_changelog_links(&root, check)?;
+
+    if report.is_clean() {
+        return Ok(Outcome {
+            message: "reconcile-changelog-links: already up to date with real tags".to_string(),
+            exit_code: 0,
+        });
+    }
+
+    let verb = if check { "would change" } else { "changed" };
+    let mut lines = vec![format!("reconcile-changelog-links: {verb}:")];
+    lines.extend(
+        report
+            .changes
+            .iter()
+            .map(|change| format!("  - {}", describe_changelog_link_change(change))),
+    );
+    Ok(Outcome {
+        message: lines.join("\n"),
+        exit_code: u8::from(check),
     })
 }
 

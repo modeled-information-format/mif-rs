@@ -92,8 +92,9 @@ pub use harness_relationship_targets::{
     Orphan, RelationshipTargetsReport, check_relationship_targets,
 };
 pub use harness_release::{
-    BumpOptions, BumpReport, VersionGateFailure, VersionGateReport, bump_version,
-    check_version_bump, goal_version_id,
+    BumpOptions, BumpReport, ChangelogLinkChange, ChangelogLinkReport, VersionGateFailure,
+    VersionGateReport, bump_version, check_version_bump, goal_version_id,
+    reconcile_changelog_links,
 };
 pub use harness_render::{RenderInputs, render_artifact};
 pub use harness_shippable_typing::{ShippableTypingReport, check_shippable_typing};
