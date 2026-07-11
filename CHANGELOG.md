@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-11
+
+### Added
+
+- **`mif-rh`**: `reconcile_changelog_links(root, check)` reconciles a harness `CHANGELOG.md`'s dated-section heading brackets and footer compare-links against real `v*` git tags — a section is bracketed with a compare-link once a real tag exists for it (or it's still awaiting its first release), and loses both once superseded by a later tagged release without ever getting its own tag. Repo URL for generated links is parsed from the existing `[Unreleased]` footer entry rather than hardcoded, so it works against any harness instance's actual remote (research-harness-template#397).
+- **`mif-rh-cli`**: new `harness reconcile-changelog-links [--check] [--root <path>]` subcommand exposing the above.
+
 ## [0.6.1] - 2026-07-10
 
 ### Fixed
