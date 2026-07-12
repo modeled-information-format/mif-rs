@@ -92,6 +92,15 @@ fn sources_list_block(artifact: &Value) -> Vec<String> {
     lines
 }
 
+/// Prefixes every line of `text` with `> ` so a multiline lede stays inside
+/// one Markdown blockquote instead of only its first line.
+fn blockquote_lines(text: &str) -> Vec<String> {
+    text.trim()
+        .lines()
+        .map(|line| format!("> {line}"))
+        .collect()
+}
+
 fn render_report(inputs: &RenderInputs<'_>) -> Result<String, MifRhError> {
     let artifact = inputs.artifact;
     let namespace = namespace_of(artifact);
@@ -153,6 +162,9 @@ fn render_report(inputs: &RenderInputs<'_>) -> Result<String, MifRhError> {
     if let Some(verification) = inputs.verification {
         concept["extensions"]["harness"]["verification"] = verification.clone();
     }
+    if let Some(subtitle) = artifact.get("subtitle").and_then(Value::as_str) {
+        concept["description"] = json!(subtitle);
+    }
 
     // serde_json::Value's Serialize impl is format-agnostic, so serializing
     // it through serde_norway's Serializer produces the same YAML a
@@ -169,6 +181,7 @@ fn render_blog(inputs: &RenderInputs<'_>) -> String {
         .get("title")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let subtitle = artifact.get("subtitle").and_then(Value::as_str);
 
     let mut lines = vec![
         "---".to_string(),
@@ -184,6 +197,10 @@ fn render_blog(inputs: &RenderInputs<'_>) -> String {
         String::new(),
         format!("# {title}"),
     ];
+    if let Some(subtitle) = subtitle {
+        lines.push(String::new());
+        lines.extend(blockquote_lines(subtitle));
+    }
     for section in &sections_of(artifact) {
         lines.extend(secblock(section, false, true));
     }
@@ -206,6 +223,7 @@ fn render_book(inputs: &RenderInputs<'_>) -> String {
         .get("audience")
         .and_then(Value::as_str)
         .unwrap_or("general");
+    let subtitle = artifact.get("subtitle").and_then(Value::as_str);
 
     let mut lines = vec![
         "---".to_string(),
@@ -220,9 +238,13 @@ fn render_book(inputs: &RenderInputs<'_>) -> String {
         "---".to_string(),
         String::new(),
         format!("# Chapter: {title}"),
-        String::new(),
-        format!("> Genre: {genre} · audience: {audience}"),
     ];
+    if let Some(subtitle) = subtitle {
+        lines.push(String::new());
+        lines.extend(blockquote_lines(subtitle));
+    }
+    lines.push(String::new());
+    lines.push(format!("> Genre: {genre} · audience: {audience}"));
     for section in &sections_of(artifact) {
         lines.extend(secblock(section, false, false));
     }
@@ -291,6 +313,8 @@ mod tests {
         assert!(rendered.contains("## Sources"));
         // The report body carries no H1 — the title lives in frontmatter.
         assert!(!rendered.contains("\n# Widget Synthesis"));
+        // No `subtitle` in the fixture — `description` is omitted, not null.
+        assert!(!rendered.contains("description:"));
     }
 
     #[test]
@@ -300,6 +324,8 @@ mod tests {
         assert!(rendered.contains("# Widget Synthesis"));
         assert!(!rendered.contains("_Dimension:"));
         assert!(rendered.contains("Evidence:"));
+        // No `subtitle` in the fixture — no lede blockquote under the H1.
+        assert!(!rendered.contains("# Widget Synthesis\n\n>"));
     }
 
     #[test]
@@ -311,6 +337,57 @@ mod tests {
         assert!(rendered.contains("## Endnotes"));
         assert!(rendered.contains("[1] Source A"));
         assert!(!rendered.contains("Evidence:"));
+        // No `subtitle` in the fixture — the genre/audience line is the
+        // first blockquote right after the H1, no separate lede above it.
+        assert!(rendered.contains("# Chapter: Widget Synthesis\n\n> Genre:"));
+    }
+
+    #[test]
+    fn report_channel_projects_subtitle_into_description_frontmatter_when_present() {
+        let mut art = artifact();
+        art["subtitle"] = json!("The BLUF sentence a reader needs most.");
+        let rendered = render_artifact(&inputs(&art), "report").unwrap();
+        assert!(rendered.contains("description: The BLUF sentence a reader needs most."));
+    }
+
+    #[test]
+    fn blog_channel_carries_a_lede_blockquote_when_subtitle_present() {
+        let mut art = artifact();
+        art["subtitle"] = json!("The BLUF sentence a reader needs most.");
+        let rendered = render_artifact(&inputs(&art), "blog").unwrap();
+        assert!(
+            rendered.contains("# Widget Synthesis\n\n> The BLUF sentence a reader needs most.")
+        );
+    }
+
+    #[test]
+    fn book_channel_carries_a_lede_blockquote_when_subtitle_present() {
+        let mut art = artifact();
+        art["subtitle"] = json!("The BLUF sentence a reader needs most.");
+        let rendered = render_artifact(&inputs(&art), "book").unwrap();
+        assert!(rendered.contains(
+            "# Chapter: Widget Synthesis\n\n> The BLUF sentence a reader needs most.\n\n> Genre:"
+        ));
+    }
+
+    #[test]
+    fn blog_channel_prefixes_every_line_of_a_multiline_subtitle() {
+        let mut art = artifact();
+        art["subtitle"] = json!("First line.\nSecond line.");
+        let rendered = render_artifact(&inputs(&art), "blog").unwrap();
+        assert!(rendered.contains("# Widget Synthesis\n\n> First line.\n> Second line."));
+    }
+
+    #[test]
+    fn book_channel_prefixes_every_line_of_a_multiline_subtitle() {
+        let mut art = artifact();
+        art["subtitle"] = json!("First line.\nSecond line.");
+        let rendered = render_artifact(&inputs(&art), "book").unwrap();
+        assert!(
+            rendered.contains(
+                "# Chapter: Widget Synthesis\n\n> First line.\n> Second line.\n\n> Genre:"
+            )
+        );
     }
 
     #[test]
