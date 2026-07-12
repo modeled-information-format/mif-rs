@@ -92,6 +92,15 @@ fn sources_list_block(artifact: &Value) -> Vec<String> {
     lines
 }
 
+/// Prefixes every line of `text` with `> ` so a multiline lede stays inside
+/// one Markdown blockquote instead of only its first line.
+fn blockquote_lines(text: &str) -> Vec<String> {
+    text.trim()
+        .lines()
+        .map(|line| format!("> {line}"))
+        .collect()
+}
+
 fn render_report(inputs: &RenderInputs<'_>) -> Result<String, MifRhError> {
     let artifact = inputs.artifact;
     let namespace = namespace_of(artifact);
@@ -190,7 +199,7 @@ fn render_blog(inputs: &RenderInputs<'_>) -> String {
     ];
     if let Some(subtitle) = subtitle {
         lines.push(String::new());
-        lines.push(format!("> {subtitle}"));
+        lines.extend(blockquote_lines(subtitle));
     }
     for section in &sections_of(artifact) {
         lines.extend(secblock(section, false, true));
@@ -232,7 +241,7 @@ fn render_book(inputs: &RenderInputs<'_>) -> String {
     ];
     if let Some(subtitle) = subtitle {
         lines.push(String::new());
-        lines.push(format!("> {subtitle}"));
+        lines.extend(blockquote_lines(subtitle));
     }
     lines.push(String::new());
     lines.push(format!("> Genre: {genre} · audience: {audience}"));
@@ -359,6 +368,26 @@ mod tests {
         assert!(rendered.contains(
             "# Chapter: Widget Synthesis\n\n> The BLUF sentence a reader needs most.\n\n> Genre:"
         ));
+    }
+
+    #[test]
+    fn blog_channel_prefixes_every_line_of_a_multiline_subtitle() {
+        let mut art = artifact();
+        art["subtitle"] = json!("First line.\nSecond line.");
+        let rendered = render_artifact(&inputs(&art), "blog").unwrap();
+        assert!(rendered.contains("# Widget Synthesis\n\n> First line.\n> Second line."));
+    }
+
+    #[test]
+    fn book_channel_prefixes_every_line_of_a_multiline_subtitle() {
+        let mut art = artifact();
+        art["subtitle"] = json!("First line.\nSecond line.");
+        let rendered = render_artifact(&inputs(&art), "book").unwrap();
+        assert!(
+            rendered.contains(
+                "# Chapter: Widget Synthesis\n\n> First line.\n> Second line.\n\n> Genre:"
+            )
+        );
     }
 
     #[test]
