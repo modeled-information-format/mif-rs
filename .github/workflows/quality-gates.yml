@@ -41,7 +41,7 @@ jobs:
       packages: read
     # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-sast-codeql.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
+      modeled-information-format/.github/.github/workflows/reusable-sast-codeql.yml@05b13774259a17140419556a45a48ba6a3e36e0c
     with:
       languages: rust
       build-mode: none
