@@ -690,19 +690,25 @@ fn corpus_stats_inner(
     let multi = mif_store::multi_root_stats(&roots)?;
     // `roots` is `[primary, ...extra_db_paths]` by construction, so
     // `multi.per_root`'s first entry is always the primary root's own
-    // stats; `skip(1)` for `extra_roots` never panics even in the
-    // unreachable case of an empty `per_root`, unlike indexing or
-    // `Iterator::next().expect(..)` would. The primary root is stat'd a
-    // second time here (once inside `multi_root_stats`, once standalone)
-    // to get its stats without relying on that ordering for anything
-    // load-bearing — a cheap trade-off (one extra `SELECT COUNT(*)`) for
-    // not needing an `unwrap`/`expect` this crate's lints deny.
-    let primary_db_path = resolve_db_path(db_path);
-    let primary_stats = mif_store::VectorStore::open(&primary_db_path)?.stats()?;
-    let extra_roots = multi
-        .per_root
-        .into_iter()
-        .skip(1)
+    // stats — reuse it directly instead of re-querying the database a
+    // second time, which would both waste a query and open a race where
+    // the primary root's contents could change between the two calls.
+    // `unwrap_or_else` (not `unwrap`/`expect`, which this crate's lints
+    // deny) supplies an empty-store fallback for the genuinely unreachable
+    // case where `per_root` is empty despite `roots` never being — cheaper
+    // and just as panic-free as re-querying, without the race or the
+    // redundant `SELECT COUNT(*)`.
+    let mut per_root = multi.per_root.into_iter();
+    let (primary_db_path, primary_stats) = per_root.next().unwrap_or_else(|| {
+        (
+            resolve_db_path(db_path),
+            mif_store::CorpusStats {
+                count: 0,
+                dim: None,
+            },
+        )
+    });
+    let extra_roots = per_root
         .map(|(db, stats)| RootStats {
             db: db.display().to_string(),
             count: stats.count,
@@ -1660,7 +1666,11 @@ No type field.
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(value["matches"][0]["id"], "urn:mif:mcp:cats");
-        assert!(value["matches"][0]["root"].is_null());
+        // `.is_null()` on indexed access can't distinguish a missing key
+        // from a key present with a JSON `null` value -- `skip_serializing_if`
+        // is supposed to omit `root` entirely for single-root queries, so
+        // assert the key is actually absent.
+        assert!(value["matches"][0].get("root").is_none());
     }
 
     #[test]
@@ -1901,12 +1911,20 @@ No type field.
         }));
         let value: serde_json::Value = serde_json::from_str(&empty).unwrap();
         assert_eq!(value["count"], 0);
+        // `dim` is always present (its type is `Option<usize>` with no
+        // `skip_serializing_if`), so `null` here is the real serialized
+        // value, not a missing key -- indexed `.is_null()` is correct.
         assert!(value["dim"].is_null());
-        assert!(value["total_count"].is_null());
+        // `total_count`/`extra_roots` use `skip_serializing_if` and are
+        // meant to be OMITTED for a single-root query, not merely `null` --
+        // `.is_null()` on indexed access can't tell a missing key from a
+        // key present with a JSON `null` value, so assert the keys are
+        // actually absent instead.
+        assert!(value.get("total_count").is_none());
         // `extra_roots` is skip-serialized when empty (see
         // `CorpusStatsResult::extra_roots`'s doc comment), so a single-root
         // query's JSON has no `extra_roots` key at all rather than `[]`.
-        assert!(value["extra_roots"].is_null());
+        assert!(value.get("extra_roots").is_none());
 
         ingest_fixture(&db_path, "mcp:one", "Some content.");
         let result = Mif.corpus_stats(Parameters(CorpusStatsParams {
