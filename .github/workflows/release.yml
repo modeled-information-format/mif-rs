@@ -408,7 +408,7 @@ jobs:
       contents: read
     # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@1b416b97ff3ded8a49ae6873cc350eb1efb389bf
+      modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@05b13774259a17140419556a45a48ba6a3e36e0c
     with:
       subject-name: ${{ needs.source.outputs.subject-name }}
       subject-digest: ${{ needs.source.outputs.subject-digest }}
@@ -427,7 +427,7 @@ jobs:
       contents: read
     # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@1b416b97ff3ded8a49ae6873cc350eb1efb389bf
+      modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@05b13774259a17140419556a45a48ba6a3e36e0c
     with:
       subject-name: ${{ needs.source.outputs.subject-name }}
       subject-digest: ${{ needs.source.outputs.subject-digest }}
@@ -446,7 +446,7 @@ jobs:
       contents: read
     # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@1b416b97ff3ded8a49ae6873cc350eb1efb389bf
+      modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@05b13774259a17140419556a45a48ba6a3e36e0c
     with:
       subject-name: ${{ needs.source.outputs.subject-name }}
       subject-digest: ${{ needs.source.outputs.subject-digest }}
