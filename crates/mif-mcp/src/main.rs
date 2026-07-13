@@ -619,14 +619,17 @@ fn find_similar_documents_inner(
     extra_db_paths: &[PathBuf],
     limit: usize,
 ) -> Result<SearchResult, McpError> {
-    // Request one extra match so excluding the anchor document itself still
+    // Request extra matches so excluding the anchor document itself still
     // leaves up to `limit` genuinely-similar results. `saturating_add` avoids
     // an overflow panic (debug builds) / silent wraparound (release builds)
     // if a caller passes `limit = usize::MAX` (MCP `limit` deserializes
     // straight from an untrusted tool call with no bounds check).
-    let over_fetch = limit.saturating_add(1);
-
+    //
+    // Single-root: the anchor id is unique within one `VectorStore`, so it
+    // occupies exactly one slot in the fetched window — `limit + 1` is
+    // always enough.
     if extra_db_paths.is_empty() {
+        let over_fetch = limit.saturating_add(1);
         let db_path = resolve_db_path(db_path);
         let store = mif_store::VectorStore::open(&db_path)?;
         let anchor = store
@@ -641,7 +644,15 @@ fn find_similar_documents_inner(
         return Ok(to_search_result(matches));
     }
 
+    // Multi-root: the anchor id can independently exist in every queried
+    // root (see `RootedMatch`'s doc comment), so it can occupy up to
+    // `roots.len()` slots in the merged window, not just one. Sizing the
+    // over-fetch as `limit + 1` here would let those extra anchor copies
+    // crowd out genuinely-better matches before the exclusion filter below
+    // ever runs, silently returning fewer than `limit` results even when
+    // enough real matches exist.
     let roots = resolve_db_paths(db_path, extra_db_paths);
+    let over_fetch = limit.saturating_add(roots.len());
     let (_root, anchor) = mif_store::multi_root_get(&roots, id)?
         .ok_or_else(|| McpError::DocumentNotFound(id.to_string()))?;
     let matches: Vec<_> = mif_store::multi_root_top_k_similar(&roots, &anchor.vector, over_fetch)?
@@ -1734,6 +1745,54 @@ No type field.
             .collect();
         assert!(!ids.contains(&"urn:mif:mcp:a"));
         assert!(ids.contains(&"urn:mif:mcp:b"));
+    }
+
+    #[test]
+    fn find_similar_documents_still_returns_a_real_match_when_the_anchor_id_collides_across_every_root()
+     {
+        // Regression test, mirroring mif-cli's equivalent: over_fetch used
+        // to be sized as `limit + 1` regardless of root count, on the
+        // assumption that the anchor id occupies exactly one slot. Once the
+        // same id is ingested into every queried root, the anchor occupies
+        // one slot PER root it lives in, so a tight `limit` could get
+        // crowded out entirely by duplicate anchor copies before the
+        // exclusion filter ever ran, silently returning zero results even
+        // though a real match exists. No embedder needed -- upsert crafted
+        // vectors directly.
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        let db_dir_b = tempfile::tempdir().unwrap();
+        let db_path_b = db_dir_b.path().join("vectors.db");
+
+        mif_store::VectorStore::open(&db_path_a)
+            .unwrap()
+            .upsert("anchor", &[1.0, 0.0], "h", "t")
+            .unwrap();
+        mif_store::VectorStore::open(&db_path_b)
+            .unwrap()
+            .upsert("anchor", &[1.0, 0.0], "h", "t")
+            .unwrap();
+        mif_store::VectorStore::open(&db_path_b)
+            .unwrap()
+            .upsert("match", &[0.9, 0.1], "h", "t")
+            .unwrap();
+
+        let result = Mif.find_similar_documents(Parameters(FindSimilarParams {
+            id: "anchor".to_string(),
+            db_path: Some(db_path_a),
+            extra_db_paths: vec![db_path_b],
+            limit: Some(1),
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let found_match = value["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["id"].as_str().unwrap() == "match");
+        assert!(
+            found_match,
+            "expected the real match to survive anchor-collision exclusion, got: {value}"
+        );
     }
 
     #[test]

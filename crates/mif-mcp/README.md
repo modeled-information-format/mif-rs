@@ -14,7 +14,7 @@ Exposes nine tools over stdio, mirroring `mif-cli`:
 - `emit_jsonld_document` — project a MIF document to its canonical JSON-LD form, proving the round trip is lossless in the process. Pure: no db, no embedder.
 - `emit_markdown_document` — project a JSON-LD MIF document to its canonical markdown-with-frontmatter form, proving the round trip is lossless in the process. Pure: no db, no embedder.
 
-`search_documents`, `find_similar_documents`, and `corpus_stats` all also accept an `extra_db_paths` array alongside `db_path` to query multiple vector store roots (e.g. a project-local store layered with a shared central one), merge-ranked by cosine similarity into one result list. Omitting it (or passing an empty array) queries only `db_path` (or its default), unchanged from single-root usage — the JSON output shape is also unchanged in that case.
+`search_documents`, `find_similar_documents`, and `corpus_stats` all also accept an `extra_db_paths` array alongside `db_path` to query multiple vector store roots (e.g. a project-local store layered with a shared central one): `search_documents` and `find_similar_documents` merge-rank matches from every root by cosine similarity into one result list; `corpus_stats` instead returns a summed `total_count` across every root plus a per-root `extra_roots` breakdown (there is no query vector in a stats call, so nothing is ranked). Omitting `extra_db_paths` (or passing an empty array) queries only `db_path` (or its default), unchanged from single-root usage — the JSON output shape is also unchanged in that case.
 
 ## Error output format
 

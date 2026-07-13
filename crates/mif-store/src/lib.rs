@@ -89,6 +89,24 @@ pub enum StoreError {
         /// blob.
         actual_len: usize,
     },
+    /// A multi-root operation ([`multi_root_top_k_similar`],
+    /// [`multi_root_get`], [`multi_root_stats`]) failed while querying one
+    /// specific, already-opened root. Wraps the underlying [`StoreError`]
+    /// with the root path that produced it, so a [`Self::Query`] failure
+    /// (which carries no path of its own) is still diagnosable in a
+    /// multi-root context, matching the diagnosability [`Self::Open`]/
+    /// [`Self::MissingParentDir`] already have on their own — those two
+    /// variants are returned unwrapped from a multi-root call, since they
+    /// already name the failing root's path directly.
+    #[error("multi-root operation failed at root {root}: {source}")]
+    RootFailure {
+        /// The root that produced the failure, in the order the caller's
+        /// `roots` slice was given.
+        root: String,
+        /// The underlying failure.
+        #[source]
+        source: Box<Self>,
+    },
 }
 
 impl StoreError {
@@ -136,6 +154,13 @@ impl StoreError {
                 status: 500,
                 exit_code: 1,
             },
+            Self::RootFailure { .. } => ProblemMeta {
+                slug: "multi-root-operation-failure",
+                version: "v1",
+                title: "A multi-root operation failed at one root",
+                status: 500,
+                exit_code: 1,
+            },
         }
     }
 }
@@ -176,6 +201,19 @@ impl ToProblem for StoreError {
                 ),
                 CodeAction::new(
                     "Inspect or recreate the database file",
+                    "quickfix",
+                    Applicability::Unspecified,
+                ),
+            ),
+            Self::RootFailure { .. } => (
+                SuggestedFix::new(
+                    "Inspect the wrapped error to see what happened at the named root; fix that \
+                     root specifically (e.g. its permissions, integrity, or missing parent \
+                     directory) rather than assuming every queried root failed.",
+                    Applicability::Unspecified,
+                ),
+                CodeAction::new(
+                    "Inspect the failing root",
                     "quickfix",
                     Applicability::Unspecified,
                 ),
@@ -535,8 +573,11 @@ impl VectorStore {
 ///
 /// # Errors
 ///
-/// Returns the first [`StoreError`] encountered opening or querying any
-/// root, in the order `roots` was given.
+/// Returns the first failure encountered opening or querying any root, in
+/// the order `roots` was given: an open failure ([`StoreError::Open`]/
+/// [`StoreError::MissingParentDir`]) is returned as-is; a query failure is
+/// wrapped in [`StoreError::RootFailure`] naming the root, since the
+/// wrapped variant (e.g. [`StoreError::Query`]) carries no path of its own.
 ///
 /// # Examples
 ///
@@ -567,8 +608,7 @@ pub fn multi_root_top_k_similar(
     for root in roots {
         let store = VectorStore::open(root)?;
         matches.extend(
-            store
-                .top_k_similar(query, limit)?
+            wrap_root_error(root, store.top_k_similar(query, limit))?
                 .into_iter()
                 .map(|m| RootedMatch {
                     id: m.id,
@@ -593,8 +633,11 @@ pub fn multi_root_top_k_similar(
 ///
 /// # Errors
 ///
-/// Returns the first [`StoreError`] encountered opening or querying any
-/// root, in the order `roots` was given.
+/// Returns the first failure encountered opening or querying any root, in
+/// the order `roots` was given: an open failure ([`StoreError::Open`]/
+/// [`StoreError::MissingParentDir`]) is returned as-is; a query failure is
+/// wrapped in [`StoreError::RootFailure`] naming the root, since the
+/// wrapped variant (e.g. [`StoreError::Query`]) carries no path of its own.
 ///
 /// # Examples
 ///
@@ -622,7 +665,7 @@ pub fn multi_root_get(
 ) -> Result<Option<(PathBuf, StoredVector)>, StoreError> {
     for root in roots {
         let store = VectorStore::open(root)?;
-        if let Some(stored) = store.get(id)? {
+        if let Some(stored) = wrap_root_error(root, store.get(id))? {
             return Ok(Some((root.clone(), stored)));
         }
     }
@@ -635,8 +678,11 @@ pub fn multi_root_get(
 ///
 /// # Errors
 ///
-/// Returns the first [`StoreError`] encountered opening or querying any
-/// root, in the order `roots` was given.
+/// Returns the first failure encountered opening or querying any root, in
+/// the order `roots` was given: an open failure ([`StoreError::Open`]/
+/// [`StoreError::MissingParentDir`]) is returned as-is; a query failure is
+/// wrapped in [`StoreError::RootFailure`] naming the root, since the
+/// wrapped variant (e.g. [`StoreError::Query`]) carries no path of its own.
 ///
 /// # Examples
 ///
@@ -663,13 +709,26 @@ pub fn multi_root_stats(roots: &[PathBuf]) -> Result<MultiRootStats, StoreError>
     let mut total_count: u64 = 0;
     for root in roots {
         let store = VectorStore::open(root)?;
-        let stats = store.stats()?;
+        let stats = wrap_root_error(root, store.stats())?;
         total_count = total_count.saturating_add(stats.count);
         per_root.push((root.clone(), stats));
     }
     Ok(MultiRootStats {
         per_root,
         total_count,
+    })
+}
+
+/// Wraps a [`VectorStore`] query's error (e.g. [`StoreError::Query`], which
+/// carries no path of its own) in [`StoreError::RootFailure`] naming `root`,
+/// so a multi-root query failure is as diagnosable as a single-root one.
+/// `VectorStore::open`'s own errors ([`StoreError::Open`]/
+/// [`StoreError::MissingParentDir`]) already carry their path and are left
+/// unwrapped — this only covers the class of error that doesn't.
+fn wrap_root_error<T>(root: &Path, result: Result<T, StoreError>) -> Result<T, StoreError> {
+    result.map_err(|source| StoreError::RootFailure {
+        root: root.display().to_string(),
+        source: Box::new(source),
     })
 }
 
@@ -1137,6 +1196,44 @@ mod tests {
 
         let error = multi_root_top_k_similar(&[root_a, bad_root], &[1.0, 0.0], 10).unwrap_err();
         assert!(matches!(error, StoreError::MissingParentDir { .. }));
+    }
+
+    #[test]
+    fn wrap_root_error_attaches_the_root_to_a_query_class_failure_that_has_no_path_of_its_own() {
+        // Unlike StoreError::Open/MissingParentDir, StoreError::Query carries
+        // no path field at all -- this is exactly the gap multi_root_* fixes
+        // by wrapping a query failure in RootFailure before returning it, so
+        // a caller querying several roots can still tell which one broke.
+        let bogus_source = {
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            conn.execute("SELECT * FROM no_such_table_at_all", [])
+                .unwrap_err()
+        };
+        let root = std::path::Path::new("/some/second/root/vectors.db");
+
+        let wrapped = wrap_root_error(
+            root,
+            Err::<(), _>(StoreError::Query {
+                source: bogus_source,
+            }),
+        )
+        .unwrap_err();
+
+        let StoreError::RootFailure {
+            root: got_root,
+            source,
+        } = wrapped
+        else {
+            unreachable!("wrap_root_error always wraps in StoreError::RootFailure");
+        };
+        assert_eq!(got_root, root.display().to_string());
+        assert!(matches!(*source, StoreError::Query { .. }));
+    }
+
+    #[test]
+    fn wrap_root_error_passes_success_through_unchanged() {
+        let root = std::path::Path::new("/irrelevant.db");
+        assert_eq!(wrap_root_error(root, Ok::<_, StoreError>(42)).unwrap(), 42);
     }
 
     #[test]
