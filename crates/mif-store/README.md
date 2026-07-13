@@ -36,6 +36,15 @@ silently skipping them.
 `StoreError` implements `mif_problem::ToProblem` for RFC 9457
 `application/problem+json` reporting.
 
+A single `VectorStore` is always rooted at one database file. Querying
+across several roots at once (e.g. a project-local store layered with a
+shared central one) is not a method on `VectorStore` itself — it is the
+free functions `multi_root_top_k_similar`, `multi_root_get`, and
+`multi_root_stats`, which each open every given root independently and
+merge the results, failing closed on the first root that cannot be opened
+or queried. `RootedMatch` and `MultiRootStats` are their result types,
+carrying which root each result came from.
+
 ## License
 
 MIT
