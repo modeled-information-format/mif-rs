@@ -1737,6 +1737,81 @@ No type field.
     }
 
     #[test]
+    fn find_similar_tool_with_extra_db_paths_finds_the_anchor_in_a_non_primary_root() {
+        // The anchor lives only in extra_db_paths, not the primary db_path
+        // root; multi_root_get must still locate it there.
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        mif_store::VectorStore::open(&db_path_a).unwrap();
+        let db_dir_b = tempfile::tempdir().unwrap();
+        let db_path_b = db_dir_b.path().join("vectors.db");
+        ingest_fixture(&db_path_b, "mcp:a", "Cats are small domesticated felines.");
+        ingest_fixture(&db_path_b, "mcp:b", "Dogs are loyal domesticated canines.");
+
+        let result = Mif.find_similar_documents(Parameters(FindSimilarParams {
+            id: "urn:mif:mcp:a".to_string(),
+            db_path: Some(db_path_a),
+            extra_db_paths: vec![db_path_b],
+            limit: None,
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let ids: Vec<&str> = value["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect();
+        assert!(!ids.contains(&"urn:mif:mcp:a"));
+        assert!(ids.contains(&"urn:mif:mcp:b"));
+    }
+
+    #[test]
+    fn find_similar_tool_with_extra_db_paths_excludes_a_colliding_anchor_id_from_every_root() {
+        // The same id is ingested into both roots. Excluding the anchor
+        // must remove both copies from the merged results, not just the
+        // one it happened to be looked up in -- see RootedMatch's doc
+        // comment for why this is the load-bearing reason `root` exists.
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        let db_dir_b = tempfile::tempdir().unwrap();
+        let db_path_b = db_dir_b.path().join("vectors.db");
+        ingest_fixture(
+            &db_path_a,
+            "mcp:shared",
+            "Cats are small domesticated felines.",
+        );
+        ingest_fixture(
+            &db_path_b,
+            "mcp:shared",
+            "Cats are small domesticated felines.",
+        );
+        ingest_fixture(
+            &db_path_b,
+            "mcp:other",
+            "Dogs are loyal domesticated canines.",
+        );
+
+        let result = Mif.find_similar_documents(Parameters(FindSimilarParams {
+            id: "urn:mif:mcp:shared".to_string(),
+            db_path: Some(db_path_a),
+            extra_db_paths: vec![db_path_b],
+            limit: None,
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let ids: Vec<&str> = value["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect();
+        assert!(
+            !ids.contains(&"urn:mif:mcp:shared"),
+            "the anchor id must be excluded from every root's copy, not just one: {ids:?}"
+        );
+        assert!(ids.contains(&"urn:mif:mcp:other"));
+    }
+
+    #[test]
     fn find_similar_tool_reports_document_not_found_as_problem_json() {
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("vectors.db");
@@ -1808,5 +1883,29 @@ No type field.
         assert_eq!(extra_roots[0]["db"], db_path_b.display().to_string());
         assert_eq!(extra_roots[0]["count"], 2);
         assert_eq!(extra_roots[0]["dim"], 384);
+    }
+
+    #[test]
+    fn corpus_stats_tool_with_extra_db_paths_treats_a_not_yet_created_root_as_zero() {
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        ingest_fixture(&db_path_a, "mcp:one", "Some content.");
+        let not_yet_created_dir = tempfile::tempdir().unwrap();
+        let not_yet_created_path = not_yet_created_dir.path().join("vectors.db");
+
+        let result = Mif.corpus_stats(Parameters(CorpusStatsParams {
+            db_path: Some(db_path_a),
+            extra_db_paths: vec![not_yet_created_path.clone()],
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(value["total_count"], 1);
+        let extra_roots = value["extra_roots"].as_array().unwrap();
+        assert_eq!(extra_roots.len(), 1);
+        assert_eq!(
+            extra_roots[0]["db"],
+            not_yet_created_path.display().to_string()
+        );
+        assert_eq!(extra_roots[0]["count"], 0);
+        assert!(extra_roots[0]["dim"].is_null());
     }
 }
