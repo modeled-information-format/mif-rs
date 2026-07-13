@@ -56,7 +56,7 @@ regex = "1.12.4"
 # sha256 verification for on-demand ontology vendoring (mif-rh's `vendor`
 # module, the engine cutover of rht's fetch-ontology.sh). Pure-Rust, no
 # unsafe, MIT/Apache-2.0.
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 # HTTP(S) fetch of the canonical ontology registry index/files, for the same
 # vendoring path. rustls-backed (no openssl); already pulled transitively by
 # hf-hub's own "ureq" feature, so this is not a new transitive dependency,
