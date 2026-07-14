@@ -86,6 +86,16 @@ struct SearchParams {
     /// Path to the `SQLite` vector store database. Defaults to
     /// `.mif/vectors.db`.
     db_path: Option<PathBuf>,
+    /// Additional `SQLite` vector store database(s) to search alongside
+    /// `db_path` (or its default), merge-ranked by cosine similarity into
+    /// one result list. Empty or omitted means single-root search,
+    /// unchanged from before this parameter existed. A root listed more
+    /// than once (the same path given as both `db_path` and in
+    /// `extra_db_paths`, or repeated within `extra_db_paths`) is not
+    /// deduplicated, so its rows are counted and ranked once per
+    /// occurrence.
+    #[serde(default)]
+    extra_db_paths: Vec<PathBuf>,
     /// Maximum number of ranked results to return. Defaults to 10.
     limit: Option<usize>,
 }
@@ -99,6 +109,13 @@ struct FindSimilarParams {
     /// Path to the `SQLite` vector store database. Defaults to
     /// `.mif/vectors.db`.
     db_path: Option<PathBuf>,
+    /// Additional `SQLite` vector store database(s) to search alongside
+    /// `db_path` (or its default). See `search_documents`'
+    /// `extra_db_paths` for the exact semantics. `id` is looked up across
+    /// every root (`db_path` first, then `extra_db_paths` in order) and
+    /// excluded from the merged results wherever it appears.
+    #[serde(default)]
+    extra_db_paths: Vec<PathBuf>,
     /// Maximum number of ranked results to return, excluding `id` itself.
     /// Defaults to 10.
     limit: Option<usize>,
@@ -110,6 +127,11 @@ struct CorpusStatsParams {
     /// Path to the `SQLite` vector store database. Defaults to
     /// `.mif/vectors.db`.
     db_path: Option<PathBuf>,
+    /// Additional `SQLite` vector store database(s) to summarize alongside
+    /// `db_path` (or its default). See `search_documents`' `extra_db_paths`
+    /// for the exact semantics.
+    #[serde(default)]
+    extra_db_paths: Vec<PathBuf>,
 }
 
 /// Parameters for the `roundtrip_mif_document` tool.
@@ -170,6 +192,12 @@ struct MatchEntry {
     id: String,
     /// Cosine similarity to the query, in `-1.0..=1.0`.
     score: f32,
+    /// The store root this match came from, when more than one root was
+    /// queried (`extra_db_paths` was non-empty). Omitted entirely for
+    /// single-root queries, so the JSON shape single-root callers already
+    /// depend on is unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    root: Option<String>,
 }
 
 /// The result of a `search_documents`/`find_similar_documents` query.
@@ -179,15 +207,43 @@ struct SearchResult {
     matches: Vec<MatchEntry>,
 }
 
+/// One additional store root's own statistics, nested under
+/// [`CorpusStatsResult::extra_roots`].
+#[derive(Debug, serde::Serialize)]
+struct RootStats {
+    /// The vector store database path.
+    db: String,
+    /// Total number of embeddings stored at this root.
+    count: u64,
+    /// The dimensionality of a stored embedding at this root, if non-empty.
+    dim: Option<usize>,
+}
+
 /// The result of a `corpus_stats` query.
+///
+/// `count`/`dim`/`db` always describe the primary root (`db_path`, or its
+/// default) alone, exactly as they did before `extra_db_paths` existed.
+/// `total_count` and `extra_roots` are populated only when `extra_db_paths`
+/// was non-empty and omitted entirely otherwise, so a single-root query's
+/// JSON output is byte-for-byte unchanged from before this parameter
+/// existed.
 #[derive(Debug, serde::Serialize)]
 struct CorpusStatsResult {
-    /// Total number of embeddings stored.
+    /// Total number of embeddings stored at the primary root.
     count: u64,
-    /// The dimensionality of a stored embedding, if the store is non-empty.
+    /// The dimensionality of a stored embedding at the primary root, if
+    /// non-empty.
     dim: Option<usize>,
-    /// The vector store database path used.
+    /// The primary vector store database path used.
     db: String,
+    /// The summed count across the primary root and every `extra_db_paths`
+    /// root. Only present when `extra_db_paths` was non-empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_count: Option<u64>,
+    /// Each `extra_db_paths` root's own statistics, in the order given.
+    /// Empty (and omitted from the JSON output) for a single-root query.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    extra_roots: Vec<RootStats>,
 }
 
 /// Errors reported by the `mif-mcp` binary itself.
@@ -471,7 +527,20 @@ fn resolve_db_path(db_path: Option<&Path>) -> PathBuf {
     db_path.map_or_else(|| PathBuf::from(DEFAULT_DB_PATH), Path::to_path_buf)
 }
 
-/// Converts `mif-store`'s similarity matches into this tool's result shape.
+/// Resolves an optional primary `db_path` plus zero or more
+/// `extra_db_paths` values to the full ordered list of vector store roots
+/// to query: `db_path` (defaulting to `.mif/vectors.db` exactly as
+/// [`resolve_db_path`] does), followed by every `extra_db_paths` entry in
+/// the order given.
+fn resolve_db_paths(db_path: Option<&Path>, extra: &[PathBuf]) -> Vec<PathBuf> {
+    let mut roots = vec![resolve_db_path(db_path)];
+    roots.extend(extra.iter().cloned());
+    roots
+}
+
+/// Converts `mif-store`'s single-root similarity matches into this tool's
+/// result shape. `root` is always omitted from the output (see
+/// [`MatchEntry::root`]).
 ///
 /// A non-finite score (NaN/±inf, only reachable from a corrupt or
 /// zero-magnitude stored vector) is clamped to `0.0` — `serde_json` cannot
@@ -484,6 +553,23 @@ fn to_search_result(matches: Vec<mif_store::SimilarityMatch>) -> SearchResult {
             .map(|m| MatchEntry {
                 id: m.id,
                 score: if m.score.is_finite() { m.score } else { 0.0 },
+                root: None,
+            })
+            .collect(),
+    }
+}
+
+/// Converts `mif-store`'s multi-root similarity matches into this tool's
+/// result shape, including which root each match came from. Applies the
+/// same non-finite-score clamp as [`to_search_result`].
+fn to_rooted_search_result(matches: Vec<mif_store::RootedMatch>) -> SearchResult {
+    SearchResult {
+        matches: matches
+            .into_iter()
+            .map(|m| MatchEntry {
+                id: m.id,
+                score: if m.score.is_finite() { m.score } else { 0.0 },
+                root: Some(m.root.display().to_string()),
             })
             .collect(),
     }
@@ -491,58 +577,151 @@ fn to_search_result(matches: Vec<mif_store::SimilarityMatch>) -> SearchResult {
 
 /// Embeds `query` and ranks previously ingested documents by cosine
 /// similarity to it.
+///
+/// When `extra_db_paths` is empty, this queries only the resolved `db_path`
+/// root, identically to before this parameter existed. Otherwise it queries
+/// `db_path` (or its default) together with every `extra_db_paths` root,
+/// merge-ranked by cosine similarity via
+/// [`mif_store::multi_root_top_k_similar`].
 fn search_documents_inner(
     query: &str,
     db_path: Option<&Path>,
+    extra_db_paths: &[PathBuf],
     limit: usize,
 ) -> Result<SearchResult, McpError> {
     let embedder = mif_embed::Embedder::load()?;
     let vector = embedder.embed(query)?;
 
-    let db_path = resolve_db_path(db_path);
-    let store = mif_store::VectorStore::open(&db_path)?;
-    let matches = store.top_k_similar(&vector, limit)?;
+    if extra_db_paths.is_empty() {
+        let db_path = resolve_db_path(db_path);
+        let store = mif_store::VectorStore::open(&db_path)?;
+        let matches = store.top_k_similar(&vector, limit)?;
+        return Ok(to_search_result(matches));
+    }
 
-    Ok(to_search_result(matches))
+    let roots = resolve_db_paths(db_path, extra_db_paths);
+    let matches = mif_store::multi_root_top_k_similar(&roots, &vector, limit)?;
+    Ok(to_rooted_search_result(matches))
 }
 
 /// Finds documents similar to an already-ingested one, identified by `id`.
+///
+/// Follows the same single-root-unless-`extra_db_paths`-given behavior as
+/// [`search_documents_inner`]. With more than one root, `id` is looked up
+/// across every root (`db_path` first, then `extra_db_paths` in order) and
+/// excluded from the merged results wherever it appears across every root,
+/// not just the one it was found in — see [`mif_store::RootedMatch`]'s doc
+/// comment for why that distinction matters once roots can carry colliding
+/// ids.
 fn find_similar_documents_inner(
     id: &str,
     db_path: Option<&Path>,
+    extra_db_paths: &[PathBuf],
     limit: usize,
 ) -> Result<SearchResult, McpError> {
-    let db_path = resolve_db_path(db_path);
-    let store = mif_store::VectorStore::open(&db_path)?;
-    let anchor = store
-        .get(id)?
-        .ok_or_else(|| McpError::DocumentNotFound(id.to_string()))?;
-
-    // Request one extra match so excluding the anchor document itself still
+    // Request extra matches so excluding the anchor document itself still
     // leaves up to `limit` genuinely-similar results. `saturating_add` avoids
     // an overflow panic (debug builds) / silent wraparound (release builds)
     // if a caller passes `limit = usize::MAX` (MCP `limit` deserializes
     // straight from an untrusted tool call with no bounds check).
-    let matches: Vec<_> = store
-        .top_k_similar(&anchor.vector, limit.saturating_add(1))?
+    //
+    // Single-root: the anchor id is unique within one `VectorStore`, so it
+    // occupies exactly one slot in the fetched window — `limit + 1` is
+    // always enough.
+    if extra_db_paths.is_empty() {
+        let over_fetch = limit.saturating_add(1);
+        let db_path = resolve_db_path(db_path);
+        let store = mif_store::VectorStore::open(&db_path)?;
+        let anchor = store
+            .get(id)?
+            .ok_or_else(|| McpError::DocumentNotFound(id.to_string()))?;
+        let matches: Vec<_> = store
+            .top_k_similar(&anchor.vector, over_fetch)?
+            .into_iter()
+            .filter(|m| m.id != id)
+            .take(limit)
+            .collect();
+        return Ok(to_search_result(matches));
+    }
+
+    // Multi-root: the anchor id can independently exist in every queried
+    // root (see `RootedMatch`'s doc comment), so it can occupy up to
+    // `roots.len()` slots in the merged window, not just one. Sizing the
+    // over-fetch as `limit + 1` here would let those extra anchor copies
+    // crowd out genuinely-better matches before the exclusion filter below
+    // ever runs, silently returning fewer than `limit` results even when
+    // enough real matches exist.
+    let roots = resolve_db_paths(db_path, extra_db_paths);
+    let over_fetch = limit.saturating_add(roots.len());
+    let (_root, anchor) = mif_store::multi_root_get(&roots, id)?
+        .ok_or_else(|| McpError::DocumentNotFound(id.to_string()))?;
+    let matches: Vec<_> = mif_store::multi_root_top_k_similar(&roots, &anchor.vector, over_fetch)?
         .into_iter()
         .filter(|m| m.id != id)
         .take(limit)
         .collect();
-
-    Ok(to_search_result(matches))
+    Ok(to_rooted_search_result(matches))
 }
 
 /// Summarizes the vector store's contents.
-fn corpus_stats_inner(db_path: Option<&Path>) -> Result<CorpusStatsResult, McpError> {
-    let db_path = resolve_db_path(db_path);
-    let store = mif_store::VectorStore::open(&db_path)?;
-    let stats = store.stats()?;
+///
+/// Follows the same single-root-unless-`extra_db_paths`-given behavior as
+/// [`search_documents_inner`]. With more than one root, `total_count` and
+/// `extra_roots` are populated alongside the primary root's own
+/// `count`/`dim`/`db` — see [`CorpusStatsResult`]'s doc comment.
+fn corpus_stats_inner(
+    db_path: Option<&Path>,
+    extra_db_paths: &[PathBuf],
+) -> Result<CorpusStatsResult, McpError> {
+    if extra_db_paths.is_empty() {
+        let db_path = resolve_db_path(db_path);
+        let store = mif_store::VectorStore::open(&db_path)?;
+        let stats = store.stats()?;
+        return Ok(CorpusStatsResult {
+            count: stats.count,
+            dim: stats.dim,
+            db: db_path.display().to_string(),
+            total_count: None,
+            extra_roots: Vec::new(),
+        });
+    }
+
+    let roots = resolve_db_paths(db_path, extra_db_paths);
+    let multi = mif_store::multi_root_stats(&roots)?;
+    // `roots` is `[primary, ...extra_db_paths]` by construction, so
+    // `multi.per_root`'s first entry is always the primary root's own
+    // stats — reuse it directly instead of re-querying the database a
+    // second time, which would both waste a query and open a race where
+    // the primary root's contents could change between the two calls.
+    // `unwrap_or_else` (not `unwrap`/`expect`, which this crate's lints
+    // deny) supplies an empty-store fallback for the genuinely unreachable
+    // case where `per_root` is empty despite `roots` never being — cheaper
+    // and just as panic-free as re-querying, without the race or the
+    // redundant `SELECT COUNT(*)`.
+    let mut per_root = multi.per_root.into_iter();
+    let (primary_db_path, primary_stats) = per_root.next().unwrap_or_else(|| {
+        (
+            resolve_db_path(db_path),
+            mif_store::CorpusStats {
+                count: 0,
+                dim: None,
+            },
+        )
+    });
+    let extra_roots = per_root
+        .map(|(db, stats)| RootStats {
+            db: db.display().to_string(),
+            count: stats.count,
+            dim: stats.dim,
+        })
+        .collect();
 
     Ok(CorpusStatsResult {
-        count: stats.count,
-        dim: stats.dim,
-        db: db_path.display().to_string(),
+        count: primary_stats.count,
+        dim: primary_stats.dim,
+        db: primary_db_path.display().to_string(),
+        total_count: Some(multi.total_count),
+        extra_roots,
     })
 }
 
@@ -721,10 +900,16 @@ impl Mif {
         Parameters(SearchParams {
             query,
             db_path,
+            extra_db_paths,
             limit,
         }): Parameters<SearchParams>,
     ) -> String {
-        match search_documents_inner(&query, db_path.as_deref(), limit.unwrap_or(DEFAULT_LIMIT)) {
+        match search_documents_inner(
+            &query,
+            db_path.as_deref(),
+            &extra_db_paths,
+            limit.unwrap_or(DEFAULT_LIMIT),
+        ) {
             Ok(result) => serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()),
             Err(error) => error.to_problem().to_json(),
         }
@@ -733,10 +918,19 @@ impl Mif {
     #[tool(description = "Find previously ingested documents similar to an already-ingested one")]
     fn find_similar_documents(
         &self,
-        Parameters(FindSimilarParams { id, db_path, limit }): Parameters<FindSimilarParams>,
+        Parameters(FindSimilarParams {
+            id,
+            db_path,
+            extra_db_paths,
+            limit,
+        }): Parameters<FindSimilarParams>,
     ) -> String {
-        match find_similar_documents_inner(&id, db_path.as_deref(), limit.unwrap_or(DEFAULT_LIMIT))
-        {
+        match find_similar_documents_inner(
+            &id,
+            db_path.as_deref(),
+            &extra_db_paths,
+            limit.unwrap_or(DEFAULT_LIMIT),
+        ) {
             Ok(result) => serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()),
             Err(error) => error.to_problem().to_json(),
         }
@@ -745,9 +939,12 @@ impl Mif {
     #[tool(description = "Summary statistics over the vector store")]
     fn corpus_stats(
         &self,
-        Parameters(CorpusStatsParams { db_path }): Parameters<CorpusStatsParams>,
+        Parameters(CorpusStatsParams {
+            db_path,
+            extra_db_paths,
+        }): Parameters<CorpusStatsParams>,
     ) -> String {
-        match corpus_stats_inner(db_path.as_deref()) {
+        match corpus_stats_inner(db_path.as_deref(), &extra_db_paths) {
             Ok(result) => serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()),
             Err(error) => error.to_problem().to_json(),
         }
@@ -1403,6 +1600,7 @@ No type field.
         let result = Mif.search_documents(Parameters(SearchParams {
             query: "anything".to_string(),
             db_path: Some(db_dir.path().to_path_buf()),
+            extra_db_paths: Vec::new(),
             limit: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -1414,6 +1612,7 @@ No type field.
         let db_dir = tempfile::tempdir().unwrap();
         let result = Mif.corpus_stats(Parameters(CorpusStatsParams {
             db_path: Some(db_dir.path().to_path_buf()),
+            extra_db_paths: Vec::new(),
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(value.get("status").is_some());
@@ -1462,10 +1661,50 @@ No type field.
         let result = Mif.search_documents(Parameters(SearchParams {
             query: "A furry pet cat".to_string(),
             db_path: Some(db_path),
+            extra_db_paths: Vec::new(),
             limit: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(value["matches"][0]["id"], "urn:mif:mcp:cats");
+        // `.is_null()` on indexed access can't distinguish a missing key
+        // from a key present with a JSON `null` value -- `skip_serializing_if`
+        // is supposed to omit `root` entirely for single-root queries, so
+        // assert the key is actually absent.
+        assert!(value["matches"][0].get("root").is_none());
+    }
+
+    #[test]
+    fn search_tool_with_extra_db_paths_merges_and_ranks_across_roots() {
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        let db_dir_b = tempfile::tempdir().unwrap();
+        let db_path_b = db_dir_b.path().join("vectors.db");
+        ingest_fixture(
+            &db_path_a,
+            "mcp:cats",
+            "Cats are small domesticated felines.",
+        );
+        ingest_fixture(
+            &db_path_b,
+            "mcp:finance",
+            "Quarterly revenue exceeded analyst expectations.",
+        );
+
+        let result = Mif.search_documents(Parameters(SearchParams {
+            query: "A furry pet cat".to_string(),
+            db_path: Some(db_path_a.clone()),
+            extra_db_paths: vec![db_path_b],
+            limit: None,
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let matches = value["matches"].as_array().unwrap();
+        assert_eq!(matches[0]["id"], "urn:mif:mcp:cats");
+        assert_eq!(matches[0]["root"], db_path_a.display().to_string());
+        assert!(
+            matches
+                .iter()
+                .any(|m| m["id"].as_str().unwrap() == "urn:mif:mcp:finance")
+        );
     }
 
     #[test]
@@ -1478,6 +1717,7 @@ No type field.
         let result = Mif.find_similar_documents(Parameters(FindSimilarParams {
             id: "urn:mif:mcp:a".to_string(),
             db_path: Some(db_path),
+            extra_db_paths: Vec::new(),
             limit: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -1492,6 +1732,155 @@ No type field.
     }
 
     #[test]
+    fn find_similar_tool_with_extra_db_paths_excludes_the_anchor_from_every_root() {
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        let db_dir_b = tempfile::tempdir().unwrap();
+        let db_path_b = db_dir_b.path().join("vectors.db");
+        ingest_fixture(&db_path_a, "mcp:a", "Cats are small domesticated felines.");
+        ingest_fixture(&db_path_b, "mcp:b", "Dogs are loyal domesticated canines.");
+
+        let result = Mif.find_similar_documents(Parameters(FindSimilarParams {
+            id: "urn:mif:mcp:a".to_string(),
+            db_path: Some(db_path_a),
+            extra_db_paths: vec![db_path_b],
+            limit: None,
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let ids: Vec<&str> = value["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect();
+        assert!(!ids.contains(&"urn:mif:mcp:a"));
+        assert!(ids.contains(&"urn:mif:mcp:b"));
+    }
+
+    #[test]
+    fn find_similar_documents_still_returns_a_real_match_when_the_anchor_id_collides_across_every_root()
+     {
+        // Regression test, mirroring mif-cli's equivalent: over_fetch used
+        // to be sized as `limit + 1` regardless of root count, on the
+        // assumption that the anchor id occupies exactly one slot. Once the
+        // same id is ingested into every queried root, the anchor occupies
+        // one slot PER root it lives in, so a tight `limit` could get
+        // crowded out entirely by duplicate anchor copies before the
+        // exclusion filter ever ran, silently returning zero results even
+        // though a real match exists. No embedder needed -- upsert crafted
+        // vectors directly.
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        let db_dir_b = tempfile::tempdir().unwrap();
+        let db_path_b = db_dir_b.path().join("vectors.db");
+
+        mif_store::VectorStore::open(&db_path_a)
+            .unwrap()
+            .upsert("anchor", &[1.0, 0.0], "h", "t")
+            .unwrap();
+        mif_store::VectorStore::open(&db_path_b)
+            .unwrap()
+            .upsert("anchor", &[1.0, 0.0], "h", "t")
+            .unwrap();
+        mif_store::VectorStore::open(&db_path_b)
+            .unwrap()
+            .upsert("match", &[0.9, 0.1], "h", "t")
+            .unwrap();
+
+        let result = Mif.find_similar_documents(Parameters(FindSimilarParams {
+            id: "anchor".to_string(),
+            db_path: Some(db_path_a),
+            extra_db_paths: vec![db_path_b],
+            limit: Some(1),
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let found_match = value["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["id"].as_str().unwrap() == "match");
+        assert!(
+            found_match,
+            "expected the real match to survive anchor-collision exclusion, got: {value}"
+        );
+    }
+
+    #[test]
+    fn find_similar_tool_with_extra_db_paths_finds_the_anchor_in_a_non_primary_root() {
+        // The anchor lives only in extra_db_paths, not the primary db_path
+        // root; multi_root_get must still locate it there.
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        mif_store::VectorStore::open(&db_path_a).unwrap();
+        let db_dir_b = tempfile::tempdir().unwrap();
+        let db_path_b = db_dir_b.path().join("vectors.db");
+        ingest_fixture(&db_path_b, "mcp:a", "Cats are small domesticated felines.");
+        ingest_fixture(&db_path_b, "mcp:b", "Dogs are loyal domesticated canines.");
+
+        let result = Mif.find_similar_documents(Parameters(FindSimilarParams {
+            id: "urn:mif:mcp:a".to_string(),
+            db_path: Some(db_path_a),
+            extra_db_paths: vec![db_path_b],
+            limit: None,
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let ids: Vec<&str> = value["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect();
+        assert!(!ids.contains(&"urn:mif:mcp:a"));
+        assert!(ids.contains(&"urn:mif:mcp:b"));
+    }
+
+    #[test]
+    fn find_similar_tool_with_extra_db_paths_excludes_a_colliding_anchor_id_from_every_root() {
+        // The same id is ingested into both roots. Excluding the anchor
+        // must remove both copies from the merged results, not just the
+        // one it happened to be looked up in -- see RootedMatch's doc
+        // comment for why this is the load-bearing reason `root` exists.
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        let db_dir_b = tempfile::tempdir().unwrap();
+        let db_path_b = db_dir_b.path().join("vectors.db");
+        ingest_fixture(
+            &db_path_a,
+            "mcp:shared",
+            "Cats are small domesticated felines.",
+        );
+        ingest_fixture(
+            &db_path_b,
+            "mcp:shared",
+            "Cats are small domesticated felines.",
+        );
+        ingest_fixture(
+            &db_path_b,
+            "mcp:other",
+            "Dogs are loyal domesticated canines.",
+        );
+
+        let result = Mif.find_similar_documents(Parameters(FindSimilarParams {
+            id: "urn:mif:mcp:shared".to_string(),
+            db_path: Some(db_path_a),
+            extra_db_paths: vec![db_path_b],
+            limit: None,
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let ids: Vec<&str> = value["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect();
+        assert!(
+            !ids.contains(&"urn:mif:mcp:shared"),
+            "the anchor id must be excluded from every root's copy, not just one: {ids:?}"
+        );
+        assert!(ids.contains(&"urn:mif:mcp:other"));
+    }
+
+    #[test]
     fn find_similar_tool_reports_document_not_found_as_problem_json() {
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("vectors.db");
@@ -1500,6 +1889,7 @@ No type field.
         let result = Mif.find_similar_documents(Parameters(FindSimilarParams {
             id: "urn:mif:mcp:missing".to_string(),
             db_path: Some(db_path),
+            extra_db_paths: Vec::new(),
             limit: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
@@ -1517,17 +1907,82 @@ No type field.
 
         let empty = Mif.corpus_stats(Parameters(CorpusStatsParams {
             db_path: Some(db_path.clone()),
+            extra_db_paths: Vec::new(),
         }));
         let value: serde_json::Value = serde_json::from_str(&empty).unwrap();
         assert_eq!(value["count"], 0);
+        // `dim` is always present (its type is `Option<usize>` with no
+        // `skip_serializing_if`), so `null` here is the real serialized
+        // value, not a missing key -- indexed `.is_null()` is correct.
         assert!(value["dim"].is_null());
+        // `total_count`/`extra_roots` use `skip_serializing_if` and are
+        // meant to be OMITTED for a single-root query, not merely `null` --
+        // `.is_null()` on indexed access can't tell a missing key from a
+        // key present with a JSON `null` value, so assert the keys are
+        // actually absent instead.
+        assert!(value.get("total_count").is_none());
+        // `extra_roots` is skip-serialized when empty (see
+        // `CorpusStatsResult::extra_roots`'s doc comment), so a single-root
+        // query's JSON has no `extra_roots` key at all rather than `[]`.
+        assert!(value.get("extra_roots").is_none());
 
         ingest_fixture(&db_path, "mcp:one", "Some content.");
         let result = Mif.corpus_stats(Parameters(CorpusStatsParams {
             db_path: Some(db_path),
+            extra_db_paths: Vec::new(),
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(value["count"], 1);
         assert_eq!(value["dim"], 384);
+    }
+
+    #[test]
+    fn corpus_stats_tool_with_extra_db_paths_reports_a_total_and_a_per_root_breakdown() {
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        let db_dir_b = tempfile::tempdir().unwrap();
+        let db_path_b = db_dir_b.path().join("vectors.db");
+        ingest_fixture(&db_path_a, "mcp:one", "Some content.");
+        ingest_fixture(&db_path_b, "mcp:two", "Other content.");
+        ingest_fixture(&db_path_b, "mcp:three", "More content.");
+
+        let result = Mif.corpus_stats(Parameters(CorpusStatsParams {
+            db_path: Some(db_path_a.clone()),
+            extra_db_paths: vec![db_path_b.clone()],
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(value["count"], 1);
+        assert_eq!(value["dim"], 384);
+        assert_eq!(value["db"], db_path_a.display().to_string());
+        assert_eq!(value["total_count"], 3);
+        let extra_roots = value["extra_roots"].as_array().unwrap();
+        assert_eq!(extra_roots.len(), 1);
+        assert_eq!(extra_roots[0]["db"], db_path_b.display().to_string());
+        assert_eq!(extra_roots[0]["count"], 2);
+        assert_eq!(extra_roots[0]["dim"], 384);
+    }
+
+    #[test]
+    fn corpus_stats_tool_with_extra_db_paths_treats_a_not_yet_created_root_as_zero() {
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        ingest_fixture(&db_path_a, "mcp:one", "Some content.");
+        let not_yet_created_dir = tempfile::tempdir().unwrap();
+        let not_yet_created_path = not_yet_created_dir.path().join("vectors.db");
+
+        let result = Mif.corpus_stats(Parameters(CorpusStatsParams {
+            db_path: Some(db_path_a),
+            extra_db_paths: vec![not_yet_created_path.clone()],
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(value["total_count"], 1);
+        let extra_roots = value["extra_roots"].as_array().unwrap();
+        assert_eq!(extra_roots.len(), 1);
+        assert_eq!(
+            extra_roots[0]["db"],
+            not_yet_created_path.display().to_string()
+        );
+        assert_eq!(extra_roots[0]["count"], 0);
+        assert!(extra_roots[0]["dim"].is_null());
     }
 }

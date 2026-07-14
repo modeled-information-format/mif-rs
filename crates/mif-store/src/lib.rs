@@ -8,6 +8,14 @@
 //! embeddings or timestamps; both are supplied by the caller, keeping the
 //! store itself deterministic and easy to test.
 //!
+//! A single [`VectorStore`] is always rooted at one database file. Querying
+//! *across* several roots at once (e.g. a project-local store layered with
+//! a shared central one) is not a method on [`VectorStore`] itself — it is
+//! the free functions [`multi_root_top_k_similar`], [`multi_root_get`], and
+//! [`multi_root_stats`], which each open every given root independently and
+//! merge the results. See their doc comments for the merge and failure
+//! semantics.
+//!
 //! # Vector Blob Layout
 //!
 //! The `vector` column holds `dim * 4` bytes: each `f32` component encoded
@@ -15,7 +23,7 @@
 //! padding. This is a private, on-disk format read and written only by this
 //! crate — it is not a public interchange format.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use mif_problem::{
     Applicability, CodeAction, ProblemDetails, ProblemMeta, SuggestedFix, ToProblem,
@@ -81,6 +89,24 @@ pub enum StoreError {
         /// blob.
         actual_len: usize,
     },
+    /// A multi-root operation ([`multi_root_top_k_similar`],
+    /// [`multi_root_get`], [`multi_root_stats`]) failed while querying one
+    /// specific, already-opened root. Wraps the underlying [`StoreError`]
+    /// with the root path that produced it, so a [`Self::Query`] failure
+    /// (which carries no path of its own) is still diagnosable in a
+    /// multi-root context, matching the diagnosability [`Self::Open`]/
+    /// [`Self::MissingParentDir`] already have on their own — those two
+    /// variants are returned unwrapped from a multi-root call, since they
+    /// already name the failing root's path directly.
+    #[error("multi-root operation failed at root {root}: {source}")]
+    RootFailure {
+        /// The root that produced the failure, in the order the caller's
+        /// `roots` slice was given.
+        root: String,
+        /// The underlying failure.
+        #[source]
+        source: Box<Self>,
+    },
 }
 
 impl StoreError {
@@ -128,6 +154,13 @@ impl StoreError {
                 status: 500,
                 exit_code: 1,
             },
+            Self::RootFailure { .. } => ProblemMeta {
+                slug: "multi-root-operation-failure",
+                version: "v1",
+                title: "A multi-root operation failed at one root",
+                status: 500,
+                exit_code: 1,
+            },
         }
     }
 }
@@ -168,6 +201,19 @@ impl ToProblem for StoreError {
                 ),
                 CodeAction::new(
                     "Inspect or recreate the database file",
+                    "quickfix",
+                    Applicability::Unspecified,
+                ),
+            ),
+            Self::RootFailure { .. } => (
+                SuggestedFix::new(
+                    "Inspect the wrapped error to see what happened at the named root; fix that \
+                     root specifically (e.g. its permissions, integrity, or missing parent \
+                     directory) rather than assuming every queried root failed.",
+                    Applicability::Unspecified,
+                ),
+                CodeAction::new(
+                    "Inspect the failing root",
                     "quickfix",
                     Applicability::Unspecified,
                 ),
@@ -213,6 +259,30 @@ pub struct SimilarityMatch {
     pub score: f32,
 }
 
+/// One ranked result from [`multi_root_top_k_similar`], additionally
+/// carrying which store root produced it.
+///
+/// Unlike [`SimilarityMatch`], the root is load-bearing here: two distinct
+/// [`VectorStore`] roots can independently contain a row with the same `id`
+/// (e.g. a document ingested into both a project-local store and a central
+/// one), so a caller that only has an `id` cannot tell which physical row
+/// a match refers to without it. This also matters for correctness, not
+/// just display: excluding a `find-similar` anchor by `id` must be applied
+/// to the full multi-root merged result set (every root's copy of that
+/// `id`, if more than one root has it), not just the single root the
+/// anchor happened to be looked up in — losing the root would make it easy
+/// to filter only the home root's copy and leak a duplicate through from
+/// another root.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RootedMatch {
+    /// The matching row's id.
+    pub id: String,
+    /// Cosine similarity to the query vector, in `-1.0..=1.0`.
+    pub score: f32,
+    /// The store root ([`VectorStore::open`] path) this match came from.
+    pub root: PathBuf,
+}
+
 /// Summary statistics over a [`VectorStore`]'s contents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CorpusStats {
@@ -223,6 +293,26 @@ pub struct CorpusStats {
     /// embedding-model change); this reports one representative value, not
     /// a guarantee that every row shares it.
     pub dim: Option<usize>,
+}
+
+/// Summary statistics over multiple [`VectorStore`] roots, from
+/// [`multi_root_stats`].
+///
+/// Deliberately does not collapse `dim` across roots into one value the way
+/// [`CorpusStats::dim`] does within a single store: two roots are far more
+/// likely than two rows in one store to have been populated by different
+/// embedding models (e.g. a project-local store and a central store
+/// maintained by an entirely separate tool), so picking one representative
+/// `dim` across roots would silently hide that. `per_root` preserves each
+/// root's own [`CorpusStats`] (including its own representative `dim`)
+/// verbatim; only the row count is meaningfully summed workspace-wide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiRootStats {
+    /// Each queried root's path, paired with its own [`CorpusStats`], in
+    /// the same order the roots were given.
+    pub per_root: Vec<(PathBuf, CorpusStats)>,
+    /// The sum of every root's [`CorpusStats::count`].
+    pub total_count: u64,
 }
 
 /// A `SQLite`-backed store of document embedding vectors.
@@ -452,6 +542,194 @@ impl VectorStore {
         matches.truncate(limit);
         Ok(matches)
     }
+}
+
+/// Ranks every stored embedding across multiple [`VectorStore`] roots
+/// against `query` by cosine similarity, returning the top `limit` matches
+/// in descending score order.
+///
+/// Each root is opened via [`VectorStore::open`] and queried independently
+/// with [`VectorStore::top_k_similar`] (itself asked for the same `limit`,
+/// which is always enough: any row in the true top `limit` across every
+/// root must also be in its own root's top `limit`, so truncating per root
+/// before merging never drops a genuine match), then every root's matches
+/// are merged, re-sorted by score, and truncated to `limit` again.
+///
+/// **Failure policy: fails closed.** The first root that fails to open or
+/// query aborts the whole call with that root's [`StoreError`] — the same
+/// behavior a single-root caller already gets from [`VectorStore::open`] or
+/// [`VectorStore::top_k_similar`] directly, just applied per root instead of
+/// once. Roots are not silently skipped on error, including
+/// [`StoreError::MissingParentDir`]: a caller that wants a not-yet-used
+/// root (no artifacts ingested there yet) to be silently treated as empty
+/// gets that automatically and for free, with **no special-casing needed
+/// here** — [`VectorStore::open`] already creates an empty, schema-ready
+/// database file the first time it opens a path whose *parent* directory
+/// exists but whose database file does not yet exist (see its own doc
+/// comment). `MissingParentDir` only fires when the parent directory itself
+/// is missing, which signals a genuine misconfiguration (e.g. a central
+/// root's expected directory was never created at all) that a caller is
+/// better served seeing than having silently ignored.
+///
+/// # Errors
+///
+/// Returns the first failure encountered opening or querying any root, in
+/// the order `roots` was given: an open failure ([`StoreError::Open`]/
+/// [`StoreError::MissingParentDir`]) is returned as-is; a query failure is
+/// wrapped in [`StoreError::RootFailure`] naming the root, since the
+/// wrapped variant (e.g. [`StoreError::Query`]) carries no path of its own.
+///
+/// # Examples
+///
+/// ```rust
+/// use mif_store::{VectorStore, multi_root_top_k_similar};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let dir_a = tempfile::tempdir()?;
+/// let dir_b = tempfile::tempdir()?;
+/// let root_a = dir_a.path().join("vectors.db");
+/// let root_b = dir_b.path().join("vectors.db");
+///
+/// VectorStore::open(&root_a)?.upsert("a-doc", &[1.0, 0.0], "h", "t")?;
+/// VectorStore::open(&root_b)?.upsert("b-doc", &[0.0, 1.0], "h", "t")?;
+///
+/// let matches = multi_root_top_k_similar(&[root_a.clone(), root_b.clone()], &[1.0, 0.0], 10)?;
+/// assert_eq!(matches[0].id, "a-doc");
+/// assert_eq!(matches[0].root, root_a);
+/// # Ok(())
+/// # }
+/// ```
+pub fn multi_root_top_k_similar(
+    roots: &[PathBuf],
+    query: &[f32],
+    limit: usize,
+) -> Result<Vec<RootedMatch>, StoreError> {
+    let mut matches = Vec::new();
+    for root in roots {
+        let store = VectorStore::open(root)?;
+        matches.extend(
+            wrap_root_error(root, store.top_k_similar(query, limit))?
+                .into_iter()
+                .map(|m| RootedMatch {
+                    id: m.id,
+                    score: m.score,
+                    root: root.clone(),
+                }),
+        );
+    }
+    matches.sort_by(|a, b| b.score.total_cmp(&a.score));
+    matches.truncate(limit);
+    Ok(matches)
+}
+
+/// Looks up the embedding stored for `id` across multiple [`VectorStore`]
+/// roots, returning the first root (in `roots` order) that has it, paired
+/// with which root it came from.
+///
+/// Follows the same fail-closed policy as [`multi_root_top_k_similar`]: a
+/// root that fails to open or query aborts the call, and a not-yet-used
+/// root (missing database file but present parent directory) is opened as
+/// empty rather than erroring, with no special-casing needed here either.
+///
+/// # Errors
+///
+/// Returns the first failure encountered opening or querying any root, in
+/// the order `roots` was given: an open failure ([`StoreError::Open`]/
+/// [`StoreError::MissingParentDir`]) is returned as-is; a query failure is
+/// wrapped in [`StoreError::RootFailure`] naming the root, since the
+/// wrapped variant (e.g. [`StoreError::Query`]) carries no path of its own.
+///
+/// # Examples
+///
+/// ```rust
+/// use mif_store::{VectorStore, multi_root_get};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let dir_a = tempfile::tempdir()?;
+/// let dir_b = tempfile::tempdir()?;
+/// let root_a = dir_a.path().join("vectors.db");
+/// let root_b = dir_b.path().join("vectors.db");
+///
+/// VectorStore::open(&root_b)?.upsert("only-in-b", &[1.0, 0.0], "h", "t")?;
+///
+/// let found = multi_root_get(&[root_a, root_b.clone()], "only-in-b")?;
+/// let (root, stored) = found.expect("row exists in root_b");
+/// assert_eq!(root, root_b);
+/// assert_eq!(stored.vector, vec![1.0, 0.0]);
+/// # Ok(())
+/// # }
+/// ```
+pub fn multi_root_get(
+    roots: &[PathBuf],
+    id: &str,
+) -> Result<Option<(PathBuf, StoredVector)>, StoreError> {
+    for root in roots {
+        let store = VectorStore::open(root)?;
+        if let Some(stored) = wrap_root_error(root, store.get(id))? {
+            return Ok(Some((root.clone(), stored)));
+        }
+    }
+    Ok(None)
+}
+
+/// Summary statistics over multiple [`VectorStore`] roots.
+///
+/// Follows the same fail-closed policy as [`multi_root_top_k_similar`].
+///
+/// # Errors
+///
+/// Returns the first failure encountered opening or querying any root, in
+/// the order `roots` was given: an open failure ([`StoreError::Open`]/
+/// [`StoreError::MissingParentDir`]) is returned as-is; a query failure is
+/// wrapped in [`StoreError::RootFailure`] naming the root, since the
+/// wrapped variant (e.g. [`StoreError::Query`]) carries no path of its own.
+///
+/// # Examples
+///
+/// ```rust
+/// use mif_store::{VectorStore, multi_root_stats};
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let dir_a = tempfile::tempdir()?;
+/// let dir_b = tempfile::tempdir()?;
+/// let root_a = dir_a.path().join("vectors.db");
+/// let root_b = dir_b.path().join("vectors.db");
+///
+/// VectorStore::open(&root_a)?.upsert("a-doc", &[1.0, 0.0], "h", "t")?;
+/// VectorStore::open(&root_b)?.upsert("b-doc", &[1.0, 0.0, 0.0], "h", "t")?;
+///
+/// let stats = multi_root_stats(&[root_a, root_b])?;
+/// assert_eq!(stats.total_count, 2);
+/// assert_eq!(stats.per_root.len(), 2);
+/// # Ok(())
+/// # }
+/// ```
+pub fn multi_root_stats(roots: &[PathBuf]) -> Result<MultiRootStats, StoreError> {
+    let mut per_root = Vec::with_capacity(roots.len());
+    let mut total_count: u64 = 0;
+    for root in roots {
+        let store = VectorStore::open(root)?;
+        let stats = wrap_root_error(root, store.stats())?;
+        total_count = total_count.saturating_add(stats.count);
+        per_root.push((root.clone(), stats));
+    }
+    Ok(MultiRootStats {
+        per_root,
+        total_count,
+    })
+}
+
+/// Wraps a [`VectorStore`] query's error (e.g. [`StoreError::Query`], which
+/// carries no path of its own) in [`StoreError::RootFailure`] naming `root`,
+/// so a multi-root query failure is as diagnosable as a single-root one.
+/// `VectorStore::open`'s own errors ([`StoreError::Open`]/
+/// [`StoreError::MissingParentDir`]) already carry their path and are left
+/// unwrapped — this only covers the class of error that doesn't.
+fn wrap_root_error<T>(root: &Path, result: Result<T, StoreError>) -> Result<T, StoreError> {
+    result.map_err(|source| StoreError::RootFailure {
+        root: root.display().to_string(),
+        source: Box::new(source),
+    })
 }
 
 /// The Euclidean norm of `vector`.
@@ -811,5 +1089,251 @@ mod tests {
                 mif_problem::Applicability::Unspecified
             );
         }
+    }
+
+    fn open_temp_root() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vectors.db");
+        VectorStore::open(&path).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn multi_root_top_k_similar_merges_and_ranks_across_roots() {
+        let (_dir_a, root_a) = open_temp_root();
+        let (_dir_b, root_b) = open_temp_root();
+        VectorStore::open(&root_a)
+            .unwrap()
+            .upsert("same", &[1.0, 0.0], "h", "t")
+            .unwrap();
+        VectorStore::open(&root_b)
+            .unwrap()
+            .upsert("orthogonal", &[0.0, 1.0], "h", "t")
+            .unwrap();
+        VectorStore::open(&root_b)
+            .unwrap()
+            .upsert("opposite", &[-1.0, 0.0], "h", "t")
+            .unwrap();
+
+        let matches =
+            multi_root_top_k_similar(&[root_a.clone(), root_b.clone()], &[1.0, 0.0], 10).unwrap();
+        let ids: Vec<&str> = matches.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["same", "orthogonal", "opposite"]);
+        assert_eq!(matches[0].root, root_a);
+        assert_eq!(matches[1].root, root_b);
+        assert_eq!(matches[2].root, root_b);
+    }
+
+    #[test]
+    fn multi_root_top_k_similar_respects_the_limit_across_roots() {
+        let (_dir_a, root_a) = open_temp_root();
+        let (_dir_b, root_b) = open_temp_root();
+        for i in 0_u8..3 {
+            VectorStore::open(&root_a)
+                .unwrap()
+                .upsert(&format!("a-{i}"), &[1.0, f32::from(i)], "h", "t")
+                .unwrap();
+            VectorStore::open(&root_b)
+                .unwrap()
+                .upsert(&format!("b-{i}"), &[1.0, f32::from(i) + 0.5], "h", "t")
+                .unwrap();
+        }
+
+        let matches = multi_root_top_k_similar(&[root_a, root_b], &[1.0, 0.0], 2).unwrap();
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn multi_root_top_k_similar_keeps_colliding_ids_from_different_roots_distinct() {
+        // Two roots can each independently contain a row with the same id
+        // (e.g. the same document copied into both a project-local and a
+        // central store). Both must survive the merge, distinguishable only
+        // by `root`.
+        let (_dir_a, root_a) = open_temp_root();
+        let (_dir_b, root_b) = open_temp_root();
+        VectorStore::open(&root_a)
+            .unwrap()
+            .upsert("shared-id", &[1.0, 0.0], "h", "t")
+            .unwrap();
+        VectorStore::open(&root_b)
+            .unwrap()
+            .upsert("shared-id", &[1.0, 0.0], "h", "t")
+            .unwrap();
+
+        let matches =
+            multi_root_top_k_similar(&[root_a.clone(), root_b.clone()], &[1.0, 0.0], 10).unwrap();
+        assert_eq!(matches.len(), 2);
+        assert!(matches.iter().all(|m| m.id == "shared-id"));
+        let roots: std::collections::HashSet<_> = matches.iter().map(|m| m.root.clone()).collect();
+        assert_eq!(roots, std::collections::HashSet::from([root_a, root_b]));
+    }
+
+    #[test]
+    fn multi_root_top_k_similar_treats_a_not_yet_created_root_as_empty() {
+        // The second root's parent directory exists (a fresh tempdir), but
+        // its database file has never been opened. VectorStore::open
+        // creates it on demand, so this must succeed with only root_a's
+        // rows, not error.
+        let (_dir_a, root_a) = open_temp_root();
+        VectorStore::open(&root_a)
+            .unwrap()
+            .upsert("only-doc", &[1.0, 0.0], "h", "t")
+            .unwrap();
+        let not_yet_created_dir = tempfile::tempdir().unwrap();
+        let not_yet_created_root = not_yet_created_dir.path().join("vectors.db");
+
+        let matches =
+            multi_root_top_k_similar(&[root_a, not_yet_created_root], &[1.0, 0.0], 10).unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].id, "only-doc");
+    }
+
+    #[test]
+    fn multi_root_top_k_similar_fails_closed_when_a_root_cannot_be_opened() {
+        let (_dir_a, root_a) = open_temp_root();
+        let missing_parent_dir = tempfile::tempdir().unwrap();
+        let bad_root = missing_parent_dir.path().join("no-such-subdir/vectors.db");
+
+        let error = multi_root_top_k_similar(&[root_a, bad_root], &[1.0, 0.0], 10).unwrap_err();
+        assert!(matches!(error, StoreError::MissingParentDir { .. }));
+    }
+
+    #[test]
+    fn wrap_root_error_attaches_the_root_to_a_query_class_failure_that_has_no_path_of_its_own() {
+        // Unlike StoreError::Open/MissingParentDir, StoreError::Query carries
+        // no path field at all -- this is exactly the gap multi_root_* fixes
+        // by wrapping a query failure in RootFailure before returning it, so
+        // a caller querying several roots can still tell which one broke.
+        let bogus_source = {
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            conn.execute("SELECT * FROM no_such_table_at_all", [])
+                .unwrap_err()
+        };
+        let root = std::path::Path::new("/some/second/root/vectors.db");
+
+        let wrapped = wrap_root_error(
+            root,
+            Err::<(), _>(StoreError::Query {
+                source: bogus_source,
+            }),
+        )
+        .unwrap_err();
+
+        let StoreError::RootFailure {
+            root: got_root,
+            source,
+        } = wrapped
+        else {
+            unreachable!("wrap_root_error always wraps in StoreError::RootFailure");
+        };
+        assert_eq!(got_root, root.display().to_string());
+        assert!(matches!(*source, StoreError::Query { .. }));
+    }
+
+    #[test]
+    fn wrap_root_error_passes_success_through_unchanged() {
+        let root = std::path::Path::new("/irrelevant.db");
+        assert_eq!(wrap_root_error(root, Ok::<_, StoreError>(42)).unwrap(), 42);
+    }
+
+    #[test]
+    fn multi_root_get_finds_the_row_in_whichever_root_has_it() {
+        let (_dir_a, root_a) = open_temp_root();
+        let (_dir_b, root_b) = open_temp_root();
+        VectorStore::open(&root_b)
+            .unwrap()
+            .upsert("only-in-b", &[1.0, 0.0, 0.0], "h", "t")
+            .unwrap();
+
+        let found = multi_root_get(&[root_a, root_b.clone()], "only-in-b")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.0, root_b);
+        assert_eq!(found.1.vector, vec![1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn multi_root_get_returns_none_when_absent_from_every_root() {
+        let (_dir_a, root_a) = open_temp_root();
+        let (_dir_b, root_b) = open_temp_root();
+
+        assert_eq!(multi_root_get(&[root_a, root_b], "missing").unwrap(), None);
+    }
+
+    #[test]
+    fn multi_root_get_returns_the_first_matching_root_in_order_on_a_collision() {
+        let (_dir_a, root_a) = open_temp_root();
+        let (_dir_b, root_b) = open_temp_root();
+        VectorStore::open(&root_a)
+            .unwrap()
+            .upsert("shared-id", &[9.0], "h", "first")
+            .unwrap();
+        VectorStore::open(&root_b)
+            .unwrap()
+            .upsert("shared-id", &[9.0], "h", "second")
+            .unwrap();
+
+        let found = multi_root_get(&[root_a.clone(), root_b], "shared-id")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.0, root_a);
+        assert_eq!(found.1.updated_at, "first");
+    }
+
+    #[test]
+    fn multi_root_stats_sums_counts_and_preserves_per_root_breakdown() {
+        let (_dir_a, root_a) = open_temp_root();
+        let (_dir_b, root_b) = open_temp_root();
+        VectorStore::open(&root_a)
+            .unwrap()
+            .upsert("a-1", &[1.0, 0.0], "h", "t")
+            .unwrap();
+        VectorStore::open(&root_b)
+            .unwrap()
+            .upsert("b-1", &[1.0, 0.0, 0.0], "h", "t")
+            .unwrap();
+        VectorStore::open(&root_b)
+            .unwrap()
+            .upsert("b-2", &[1.0, 0.0, 0.0], "h", "t")
+            .unwrap();
+
+        let stats = multi_root_stats(&[root_a.clone(), root_b.clone()]).unwrap();
+        assert_eq!(stats.total_count, 3);
+        assert_eq!(
+            stats.per_root,
+            vec![
+                (
+                    root_a,
+                    CorpusStats {
+                        count: 1,
+                        dim: Some(2)
+                    }
+                ),
+                (
+                    root_b,
+                    CorpusStats {
+                        count: 2,
+                        dim: Some(3)
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn multi_root_stats_treats_a_not_yet_created_root_as_zero_count() {
+        let (_dir_a, root_a) = open_temp_root();
+        let not_yet_created_dir = tempfile::tempdir().unwrap();
+        let not_yet_created_root = not_yet_created_dir.path().join("vectors.db");
+
+        let stats = multi_root_stats(&[root_a, not_yet_created_root]).unwrap();
+        assert_eq!(stats.total_count, 0);
+        assert_eq!(
+            stats.per_root[1].1,
+            CorpusStats {
+                count: 0,
+                dim: None
+            }
+        );
     }
 }

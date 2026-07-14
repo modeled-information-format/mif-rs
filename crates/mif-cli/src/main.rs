@@ -80,6 +80,15 @@ enum Command {
         /// `.mif/vectors.db`.
         #[arg(long)]
         db_path: Option<PathBuf>,
+        /// Additional `SQLite` vector store database(s) to search alongside
+        /// `--db-path` (or its default), merge-ranked by cosine similarity
+        /// into one result list. Repeatable (`--extra-db-path a --extra-db-path
+        /// b`). A root queried more than once (the same path given twice, or
+        /// given as both `--db-path` and `--extra-db-path`) is not
+        /// deduplicated, so its rows are counted and ranked once per
+        /// occurrence.
+        #[arg(long)]
+        extra_db_path: Vec<PathBuf>,
         /// Maximum number of ranked results to return.
         #[arg(long, default_value_t = 10)]
         limit: usize,
@@ -92,6 +101,13 @@ enum Command {
         /// `.mif/vectors.db`.
         #[arg(long)]
         db_path: Option<PathBuf>,
+        /// Additional `SQLite` vector store database(s) to search alongside
+        /// `--db-path` (or its default). See `search`'s `--extra-db-path`
+        /// for the exact semantics. `id` is looked up across every root (the
+        /// first root, in `--db-path` then `--extra-db-path` order, that has
+        /// it), and excluded from the merged results wherever it appears.
+        #[arg(long)]
+        extra_db_path: Vec<PathBuf>,
         /// Maximum number of ranked results to return (excluding `id`
         /// itself).
         #[arg(long, default_value_t = 10)]
@@ -103,6 +119,11 @@ enum Command {
         /// `.mif/vectors.db`.
         #[arg(long)]
         db_path: Option<PathBuf>,
+        /// Additional `SQLite` vector store database(s) to summarize
+        /// alongside `--db-path` (or its default). See `search`'s
+        /// `--extra-db-path` for the exact semantics.
+        #[arg(long)]
+        extra_db_path: Vec<PathBuf>,
     },
     /// Prove a MIF document's markdown <-> JSON-LD round trip is lossless.
     /// "Lossless" means format fidelity only (no field silently dropped or
@@ -325,10 +346,19 @@ fn run(command: &Command) -> Result<String, CliError> {
         Command::Search {
             query,
             db_path,
+            extra_db_path,
             limit,
-        } => search(query, db_path.as_deref(), *limit),
-        Command::FindSimilar { id, db_path, limit } => find_similar(id, db_path.as_deref(), *limit),
-        Command::CorpusStats { db_path } => corpus_stats(db_path.as_deref()),
+        } => search(query, db_path.as_deref(), extra_db_path, *limit),
+        Command::FindSimilar {
+            id,
+            db_path,
+            extra_db_path,
+            limit,
+        } => find_similar(id, db_path.as_deref(), extra_db_path, *limit),
+        Command::CorpusStats {
+            db_path,
+            extra_db_path,
+        } => corpus_stats(db_path.as_deref(), extra_db_path),
         Command::Roundtrip { file, shape } => roundtrip(
             file,
             mif_frontmatter::FrontmatterShape::try_from(shape.as_str())?,
@@ -351,6 +381,17 @@ fn resolve_db_path(db_path: Option<&Path>) -> PathBuf {
     db_path.map_or_else(|| PathBuf::from(DEFAULT_DB_PATH), Path::to_path_buf)
 }
 
+/// Resolves an optional primary `--db-path` plus zero or more
+/// `--extra-db-path` values to the full ordered list of vector store roots
+/// to query: `--db-path` (defaulting to `.mif/vectors.db` exactly as
+/// [`resolve_db_path`] does), followed by every `--extra-db-path` in the
+/// order given.
+fn resolve_db_paths(db_path: Option<&Path>, extra: &[PathBuf]) -> Vec<PathBuf> {
+    let mut roots = vec![resolve_db_path(db_path)];
+    roots.extend(extra.iter().cloned());
+    roots
+}
+
 /// Formats a ranked similarity result list for display, one line per match.
 fn format_matches(matches: &[mif_store::SimilarityMatch]) -> String {
     if matches.is_empty() {
@@ -359,6 +400,22 @@ fn format_matches(matches: &[mif_store::SimilarityMatch]) -> String {
     matches
         .iter()
         .map(|m| format!("{:.4}  {}", m.score, m.id))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Formats a multi-root ranked similarity result list for display, one line
+/// per match. Unlike [`format_matches`], each line also shows which root
+/// produced the match — with more than one root queried, two matches can
+/// share an `id` (the same document copied into multiple roots), so the
+/// root is what tells them apart.
+fn format_rooted_matches(matches: &[mif_store::RootedMatch]) -> String {
+    if matches.is_empty() {
+        return "(no matches)".to_string();
+    }
+    matches
+        .iter()
+        .map(|m| format!("{:.4}  {}  (root={})", m.score, m.id, m.root.display()))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -507,63 +564,133 @@ fn ingest(file: &Path, db_path: Option<&Path>) -> Result<String, CliError> {
 /// Embeds `query` and ranks previously ingested documents by cosine
 /// similarity to it.
 ///
+/// When `extra_db_path` is empty, this queries only the resolved `db_path`
+/// root, identically to single-root usage before multi-root support existed.
+/// Otherwise it queries `db_path` (or its default) together with every
+/// `extra_db_path` root, merge-ranked by cosine similarity via
+/// [`mif_store::multi_root_top_k_similar`].
+///
 /// # Errors
 ///
 /// Returns [`CliError`] if the embedding model cannot be loaded or run, or
-/// the vector store cannot be opened or queried.
-fn search(query: &str, db_path: Option<&Path>, limit: usize) -> Result<String, CliError> {
+/// any queried vector store root cannot be opened or queried.
+fn search(
+    query: &str,
+    db_path: Option<&Path>,
+    extra_db_path: &[PathBuf],
+    limit: usize,
+) -> Result<String, CliError> {
     let embedder = mif_embed::Embedder::load()?;
     let vector = embedder.embed(query)?;
 
-    let db_path = resolve_db_path(db_path);
-    let store = mif_store::VectorStore::open(&db_path)?;
-    let matches = store.top_k_similar(&vector, limit)?;
+    if extra_db_path.is_empty() {
+        let db_path = resolve_db_path(db_path);
+        let store = mif_store::VectorStore::open(&db_path)?;
+        let matches = store.top_k_similar(&vector, limit)?;
+        return Ok(format_matches(&matches));
+    }
 
-    Ok(format_matches(&matches))
+    let roots = resolve_db_paths(db_path, extra_db_path);
+    let matches = mif_store::multi_root_top_k_similar(&roots, &vector, limit)?;
+    Ok(format_rooted_matches(&matches))
 }
 
 /// Finds documents similar to an already-ingested one, identified by `id`.
 ///
+/// Follows the same single-root-unless-`extra_db_path`-given behavior as
+/// [`search`]. With more than one root, `id` is looked up across every root
+/// (the first, in `db_path` then `extra_db_path` order, that has it) and
+/// excluded from the merged results wherever it appears across every root,
+/// not just the one it was found in — see
+/// [`mif_store::RootedMatch`]'s doc comment for why that distinction
+/// matters once roots can carry colliding ids.
+///
 /// # Errors
 ///
 /// Returns [`CliError::DocumentNotFound`] if `id` has never been ingested
-/// into this store, or [`CliError`] if the vector store cannot be opened or
-/// queried.
-fn find_similar(id: &str, db_path: Option<&Path>, limit: usize) -> Result<String, CliError> {
-    let db_path = resolve_db_path(db_path);
-    let store = mif_store::VectorStore::open(&db_path)?;
-    let anchor = store
-        .get(id)?
-        .ok_or_else(|| CliError::DocumentNotFound(id.to_string()))?;
-
-    // Request one extra match so excluding the anchor document itself still
+/// into any queried root, or [`CliError`] if any queried vector store root
+/// cannot be opened or queried.
+fn find_similar(
+    id: &str,
+    db_path: Option<&Path>,
+    extra_db_path: &[PathBuf],
+    limit: usize,
+) -> Result<String, CliError> {
+    // Request extra matches so excluding the anchor document itself still
     // leaves up to `limit` genuinely-similar results. `saturating_add` avoids
     // an overflow panic (debug builds) / silent wraparound (release builds)
     // if a caller passes `limit = usize::MAX`.
-    let matches: Vec<_> = store
-        .top_k_similar(&anchor.vector, limit.saturating_add(1))?
+    //
+    // Single-root: the anchor id is unique within one `VectorStore`, so it
+    // occupies exactly one slot in the fetched window — `limit + 1` is
+    // always enough.
+    if extra_db_path.is_empty() {
+        let over_fetch = limit.saturating_add(1);
+        let db_path = resolve_db_path(db_path);
+        let store = mif_store::VectorStore::open(&db_path)?;
+        let anchor = store
+            .get(id)?
+            .ok_or_else(|| CliError::DocumentNotFound(id.to_string()))?;
+        let matches: Vec<_> = store
+            .top_k_similar(&anchor.vector, over_fetch)?
+            .into_iter()
+            .filter(|m| m.id != id)
+            .take(limit)
+            .collect();
+        return Ok(format_matches(&matches));
+    }
+
+    // Multi-root: the anchor id can independently exist in every queried
+    // root (see `RootedMatch`'s doc comment), so it can occupy up to
+    // `roots.len()` slots in the merged window, not just one. Sizing the
+    // over-fetch as `limit + 1` here would let those extra anchor copies
+    // crowd out genuinely-better matches before the exclusion filter below
+    // ever runs, silently returning fewer than `limit` results even when
+    // enough real matches exist.
+    let roots = resolve_db_paths(db_path, extra_db_path);
+    let over_fetch = limit.saturating_add(roots.len());
+    let (_root, anchor) = mif_store::multi_root_get(&roots, id)?
+        .ok_or_else(|| CliError::DocumentNotFound(id.to_string()))?;
+    let matches: Vec<_> = mif_store::multi_root_top_k_similar(&roots, &anchor.vector, over_fetch)?
         .into_iter()
         .filter(|m| m.id != id)
         .take(limit)
         .collect();
-
-    Ok(format_matches(&matches))
+    Ok(format_rooted_matches(&matches))
 }
 
 /// Summarizes the vector store's contents.
 ///
+/// Follows the same single-root-unless-`extra_db_path`-given behavior as
+/// [`search`]. With more than one root, the output leads with the summed
+/// `total_count` across every root, followed by one line per root showing
+/// that root's own count and (if non-empty) representative dimensionality.
+///
 /// # Errors
 ///
-/// Returns [`CliError`] if the vector store cannot be opened or queried.
-fn corpus_stats(db_path: Option<&Path>) -> Result<String, CliError> {
-    let db_path = resolve_db_path(db_path);
-    let store = mif_store::VectorStore::open(&db_path)?;
-    let stats = store.stats()?;
+/// Returns [`CliError`] if any queried vector store root cannot be opened or
+/// queried.
+fn corpus_stats(db_path: Option<&Path>, extra_db_path: &[PathBuf]) -> Result<String, CliError> {
+    if extra_db_path.is_empty() {
+        let db_path = resolve_db_path(db_path);
+        let store = mif_store::VectorStore::open(&db_path)?;
+        let stats = store.stats()?;
+        return Ok(stats.dim.map_or_else(
+            || format!("count=0 db={}", db_path.display()),
+            |dim| format!("count={} dim={dim} db={}", stats.count, db_path.display()),
+        ));
+    }
 
-    Ok(stats.dim.map_or_else(
-        || format!("count=0 db={}", db_path.display()),
-        |dim| format!("count={} dim={dim} db={}", stats.count, db_path.display()),
-    ))
+    let roots = resolve_db_paths(db_path, extra_db_path);
+    let multi = mif_store::multi_root_stats(&roots)?;
+    let mut lines = vec![format!("total_count={}", multi.total_count)];
+    lines.extend(multi.per_root.iter().map(|(root, stats)| {
+        stats.dim.map_or_else(
+            || format!("  count=0 db={}", root.display()),
+            |dim| format!("  count={} dim={dim} db={}", stats.count, root.display()),
+        )
+    }));
+    Ok(lines.join("\n"))
 }
 
 /// Proves a MIF document's markdown <-> JSON-LD round trip is lossless, by
@@ -1430,6 +1557,7 @@ No type field.
         let search_result = run(&Command::Search {
             query: "test content".to_string(),
             db_path: Some(db_path.clone()),
+            extra_db_path: Vec::new(),
             limit: 5,
         });
         assert!(search_result.is_ok());
@@ -1437,12 +1565,14 @@ No type field.
         let find_similar_result = run(&Command::FindSimilar {
             id: "urn:mif:memory:test-001".to_string(),
             db_path: Some(db_path.clone()),
+            extra_db_path: Vec::new(),
             limit: 5,
         });
         assert!(find_similar_result.is_ok());
 
         let corpus_stats_result = run(&Command::CorpusStats {
             db_path: Some(db_path),
+            extra_db_path: Vec::new(),
         });
         assert!(corpus_stats_result.is_ok());
     }
@@ -1470,7 +1600,7 @@ No type field.
             "Quarterly revenue exceeded analyst expectations.",
         );
 
-        let result = search("A furry pet cat", Some(&db_path), 10).unwrap();
+        let result = search("A furry pet cat", Some(&db_path), &[], 10).unwrap();
         let first_line = result.lines().next().unwrap();
         assert!(first_line.ends_with("urn:mif:memory:cats"));
     }
@@ -1482,7 +1612,7 @@ No type field.
         let db_path = db_dir.path().join("vectors.db");
         mif_store::VectorStore::open(&db_path).unwrap();
 
-        let result = search("anything", Some(&db_path), 10).unwrap();
+        let result = search("anything", Some(&db_path), &[], 10).unwrap();
         assert_eq!(result, "(no matches)");
     }
 
@@ -1493,7 +1623,7 @@ No type field.
         ingest_fixture(&db_path, "memory:a", "Cats are small domesticated felines.");
         ingest_fixture(&db_path, "memory:b", "Dogs are loyal domesticated canines.");
 
-        let result = find_similar("urn:mif:memory:a", Some(&db_path), 10).unwrap();
+        let result = find_similar("urn:mif:memory:a", Some(&db_path), &[], 10).unwrap();
         assert!(!result.contains("memory:a"));
         assert!(result.contains("memory:b"));
     }
@@ -1504,7 +1634,7 @@ No type field.
         let db_path = db_dir.path().join("vectors.db");
         mif_store::VectorStore::open(&db_path).unwrap();
 
-        let error = find_similar("urn:mif:memory:missing", Some(&db_path), 10).unwrap_err();
+        let error = find_similar("urn:mif:memory:missing", Some(&db_path), &[], 10).unwrap_err();
         let problem = error.to_problem();
         assert_eq!(
             problem.problem_type,
@@ -1518,13 +1648,183 @@ No type field.
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("vectors.db");
         assert_eq!(
-            corpus_stats(Some(&db_path)).unwrap(),
+            corpus_stats(Some(&db_path), &[]).unwrap(),
             format!("count=0 db={}", db_path.display())
         );
 
         ingest_fixture(&db_path, "memory:one", "Some content.");
-        let result = corpus_stats(Some(&db_path)).unwrap();
+        let result = corpus_stats(Some(&db_path), &[]).unwrap();
         assert!(result.contains("count=1"));
         assert!(result.contains("dim=384"));
+    }
+
+    #[test]
+    fn search_with_extra_db_path_merges_and_ranks_across_roots() {
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        let db_dir_b = tempfile::tempdir().unwrap();
+        let db_path_b = db_dir_b.path().join("vectors.db");
+        ingest_fixture(
+            &db_path_a,
+            "memory:cats",
+            "Cats are small domesticated felines.",
+        );
+        ingest_fixture(
+            &db_path_b,
+            "memory:finance",
+            "Quarterly revenue exceeded analyst expectations.",
+        );
+
+        let result = search(
+            "A furry pet cat",
+            Some(&db_path_a),
+            std::slice::from_ref(&db_path_b),
+            10,
+        )
+        .unwrap();
+        let first_line = result.lines().next().unwrap();
+        assert!(first_line.contains("urn:mif:memory:cats"));
+        assert!(first_line.contains(&format!("root={}", db_path_a.display())));
+        assert!(result.contains("urn:mif:memory:finance"));
+    }
+
+    #[test]
+    fn find_similar_with_extra_db_path_excludes_the_anchor_from_every_root() {
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        let db_dir_b = tempfile::tempdir().unwrap();
+        let db_path_b = db_dir_b.path().join("vectors.db");
+        ingest_fixture(
+            &db_path_a,
+            "memory:a",
+            "Cats are small domesticated felines.",
+        );
+        ingest_fixture(
+            &db_path_b,
+            "memory:b",
+            "Dogs are loyal domesticated canines.",
+        );
+
+        let result = find_similar(
+            "urn:mif:memory:a",
+            Some(&db_path_a),
+            std::slice::from_ref(&db_path_b),
+            10,
+        )
+        .unwrap();
+        assert!(!result.contains("memory:a"));
+        assert!(result.contains("memory:b"));
+    }
+
+    #[test]
+    fn find_similar_still_returns_a_real_match_when_the_anchor_id_collides_across_every_root() {
+        // Regression test: over_fetch used to be sized as `limit + 1`
+        // regardless of root count, on the assumption that the anchor id
+        // occupies exactly one slot. Once the same id is ingested into every
+        // queried root (a realistic multi-root scenario -- see
+        // RootedMatch's doc comment), the anchor occupies one slot PER root
+        // it lives in, so a tight `limit` could get crowded out entirely by
+        // duplicate anchor copies before the exclusion filter ever ran,
+        // silently returning zero results even though a real match exists.
+        // No embedder needed here -- upsert crafted vectors directly.
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        let db_dir_b = tempfile::tempdir().unwrap();
+        let db_path_b = db_dir_b.path().join("vectors.db");
+
+        // Anchor lives in BOTH roots (identical vector, so both copies tie
+        // for the highest possible cosine similarity, 1.0, against
+        // themselves).
+        mif_store::VectorStore::open(&db_path_a)
+            .unwrap()
+            .upsert("anchor", &[1.0, 0.0], "h", "t")
+            .unwrap();
+        mif_store::VectorStore::open(&db_path_b)
+            .unwrap()
+            .upsert("anchor", &[1.0, 0.0], "h", "t")
+            .unwrap();
+        // A real, genuinely-similar (but not identical) match, ranked just
+        // behind the two anchor copies.
+        mif_store::VectorStore::open(&db_path_b)
+            .unwrap()
+            .upsert("match", &[0.9, 0.1], "h", "t")
+            .unwrap();
+
+        let result = find_similar(
+            "anchor",
+            Some(&db_path_a),
+            std::slice::from_ref(&db_path_b),
+            1,
+        )
+        .unwrap();
+
+        assert!(
+            result.contains("match"),
+            "expected the real match to survive anchor-collision exclusion, got: {result}"
+        );
+    }
+
+    #[test]
+    fn find_similar_with_extra_db_path_finds_the_anchor_in_a_non_primary_root() {
+        // The anchor lives only in --extra-db-path, not the primary
+        // --db-path root; multi_root_get must still locate it there.
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        mif_store::VectorStore::open(&db_path_a).unwrap();
+        let db_dir_b = tempfile::tempdir().unwrap();
+        let db_path_b = db_dir_b.path().join("vectors.db");
+        ingest_fixture(
+            &db_path_b,
+            "memory:a",
+            "Cats are small domesticated felines.",
+        );
+        ingest_fixture(
+            &db_path_b,
+            "memory:b",
+            "Dogs are loyal domesticated canines.",
+        );
+
+        let result = find_similar(
+            "urn:mif:memory:a",
+            Some(&db_path_a),
+            std::slice::from_ref(&db_path_b),
+            10,
+        )
+        .unwrap();
+        assert!(!result.contains("memory:a"));
+        assert!(result.contains("memory:b"));
+    }
+
+    #[test]
+    fn corpus_stats_with_extra_db_path_reports_a_total_and_a_per_root_breakdown() {
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        let db_dir_b = tempfile::tempdir().unwrap();
+        let db_path_b = db_dir_b.path().join("vectors.db");
+        ingest_fixture(&db_path_a, "memory:one", "Some content.");
+        ingest_fixture(&db_path_b, "memory:two", "Other content.");
+        ingest_fixture(&db_path_b, "memory:three", "More content.");
+
+        let result = corpus_stats(Some(&db_path_a), std::slice::from_ref(&db_path_b)).unwrap();
+        assert!(result.contains("total_count=3"));
+        assert!(result.contains(&format!("count=1 dim=384 db={}", db_path_a.display())));
+        assert!(result.contains(&format!("count=2 dim=384 db={}", db_path_b.display())));
+    }
+
+    #[test]
+    fn corpus_stats_with_extra_db_path_treats_a_not_yet_created_root_as_zero() {
+        let db_dir_a = tempfile::tempdir().unwrap();
+        let db_path_a = db_dir_a.path().join("vectors.db");
+        ingest_fixture(&db_path_a, "memory:one", "Some content.");
+        let not_yet_created_dir = tempfile::tempdir().unwrap();
+        let not_yet_created_path = not_yet_created_dir.path().join("vectors.db");
+
+        let result = corpus_stats(
+            Some(&db_path_a),
+            std::slice::from_ref(&not_yet_created_path),
+        )
+        .unwrap();
+        assert!(result.contains("total_count=1"));
+        assert!(result.contains(&format!("count=0 db={}", not_yet_created_path.display())));
     }
 }
