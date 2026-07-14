@@ -49,7 +49,7 @@ fancy-regex = "0.18.0"
 # on the belief that sysinfo >=0.38 required a newer Rust than this
 # workspace's MSRV; verified false (mif-rs#56) — no MSRV or transitive
 # constraint requires an exact pin, so this now allows 0.38.x patch updates.
-sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 # Discovery-pattern content matching for mif-rh (the direct equivalent of
 # rht's bash `[[ =~ ]]` regex fallback classifier).
 regex = "1.12.4"
