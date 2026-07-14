@@ -50,14 +50,27 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-cov-
 
-      - name: Generate coverage
+      - name: Run instrumented tests
+        # Run the instrumented workspace test suite exactly ONCE and stop
+        # (--no-report). Previously this step, plus the summary-only call
+        # below, invoked `cargo llvm-cov --all-features --workspace`
+        # (lcov/html/json/summary) FOUR separate times, each of which
+        # reran every test in the workspace from scratch under
+        # instrumentation — confirmed via CI logs (run 29296674101):
+        # identical test-result lines (e.g. "53 passed ... finished in
+        # ~130s") recurred four times, ~7.3 minutes apart, quadrupling
+        # runtime for identical results and blowing the 30m budget. All
+        # four report formats below are now generated from the single
+        # profile this step produces via `cargo llvm-cov report`, which
+        # reuses existing coverage data and does not re-execute tests.
         run: |
-          cargo llvm-cov --all-features --workspace \
-            --lcov --output-path lcov.info
-          cargo llvm-cov --all-features --workspace \
-            --html --output-dir coverage-html
-          cargo llvm-cov --all-features --workspace \
-            --json --output-path coverage.json
+          cargo llvm-cov --all-features --workspace --no-report
+
+      - name: Export lcov/html/json reports
+        run: |
+          cargo llvm-cov report --lcov --output-path lcov.info
+          cargo llvm-cov report --html --output-dir coverage-html
+          cargo llvm-cov report --json --output-path coverage.json
 
       - name: Parse coverage percentage
         id: coverage
@@ -83,8 +96,7 @@ jobs:
             echo "## Summary"
             echo ""
             echo "\`\`\`"
-            cargo llvm-cov --all-features \
-              --workspace --summary-only
+            cargo llvm-cov report --summary-only
             echo "\`\`\`"
             echo ""
             echo "Full HTML report available in CI artifacts."
