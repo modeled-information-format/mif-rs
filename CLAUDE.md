@@ -19,7 +19,7 @@ Format)](https://mif-spec.dev) specification in Rust (edition 2024, MSRV
 | `mif-store` | library | `SQLite`-backed vector store for document embeddings (`rusqlite`, bundled), with brute-force cosine-similarity ranking (`top_k_similar`) |
 | `mif-rh` | library | Compiled research-harness ontology engine: deterministic `resolve()`/`review()` (rht bash parity), plus the hypothesis layer — `suggest_type()` (tier-annotated suggestions), the `FindingIndex` (FTS5 + vectors + tier-3 miss store), the suggestion queue, and `stamped-quantile-v1` calibration |
 | `mif-cli` | binary | CLI: `mif-cli validate <file>`, `mif-cli ontology resolve <id> --ontologies-dir <dir>`, `mif-cli ingest <file> [--db-path <path>]`, `mif-cli search <query>`, `mif-cli find-similar <id>`, `mif-cli corpus-stats` |
-| `mif-mcp` | binary | MCP server exposing `validate_mif_document`, `resolve_ontology_reference`, `ingest_mif_document`, `search_documents`, `find_similar_documents`, and `corpus_stats` as tools |
+| `mif-mcp` | binary | MCP server exposing nine tools: `validate_mif_document`, `resolve_ontology_reference`, `ingest_mif_document`, `search_documents`, `find_similar_documents`, `corpus_stats`, `roundtrip_mif_document`, `emit_jsonld_document`, `emit_markdown_document` |
 | `mif-rh-cli` | binary | Research-harness CLI: `resolve`, `review [--strict --followup --build-index --suggest]`, `suggest-type [--record]`, `calibrate`, `expansion-candidates` |
 | `mif-rh-mcp` | binary | Read-only MCP server over the mif-rh index: `search`, `suggest_type`, `find_similar` (tier-annotated), `corpus_stats` |
 
