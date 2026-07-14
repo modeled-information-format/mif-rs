@@ -38,7 +38,7 @@ RUN cargo build --release --locked -p "${BIN}" --bin "${BIN}"
 # them by bumping the base image; glibc-dynamic currently scans clean).
 # Pinned by digest (no :latest) to satisfy Scorecard Pinned-Dependencies and
 # Trivy DS-0001; Dependabot's docker ecosystem keeps the digest fresh.
-FROM cgr.dev/chainguard/glibc-dynamic@sha256:ea9eab0adc5716fb9937ab60155a31bce9cbc8b56e6f2e21fb9af9218be195b7
+FROM cgr.dev/chainguard/glibc-dynamic@sha256:7ff79e2caef2b8a137ddaf9940fb790e91148482092363760d6661e4591fd54c
 
 ARG BIN
 
