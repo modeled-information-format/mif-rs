@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-13
+
+### Added
+
+- **`mif-store`**: `multi_root_top_k_similar`, `multi_root_get`, and `multi_root_stats` free functions (plus `RootedMatch`/`MultiRootStats` result types) let a query span a project-local vector store root and any number of additional roots, merge-ranked by cosine similarity. Each additional root fails closed if it cannot be opened or queried; a not-yet-created root is treated as empty.
+- **`mif-cli`**: `search`, `find-similar`, and `corpus-stats` gain a repeatable `--extra-db-path` flag for multi-root queries; single-root behavior is unchanged, and multi-root output additionally shows which root each match/row came from.
+- **`mif-mcp`**: `search_documents`, `find_similar_documents`, and `corpus_stats` gain a matching `extra_db_paths` array parameter, kept in lockstep with `mif-cli`; single-root JSON output is byte-for-byte unchanged (#99).
+
+### Fixed
+
+- **`mif-rh`**: `render_report`/`render_blog`/`render_book` no longer silently drop an artifact's `subtitle` field — it now projects into the `report` channel's `description` frontmatter and renders as a lede blockquote under the H1 in the `blog`/`book` channels (#81, #85).
+
+### Documentation
+
+- Corrected stale crate/tool counts in `AGENTS.md` and `CLAUDE.md` (workspace has grown to 12 crates; `mif-mcp` now exposes nine tools, not six) (#100).
+
 ## [0.7.0] - 2026-07-11
 
 ### Added
