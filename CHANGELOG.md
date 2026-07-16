@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`mif-rh`**: `rewrite_doc_version` (used by `bump_version`'s family-doc updater) no longer deletes everything after the version on a `**Version:**` row — trailing cells like `| **Kind:** methodology` are preserved; only the leading semver token is replaced (#104).
+- **`mif-rh`**: `read_source_content` now takes `content: Option<&str>` instead of `content: &str` — an explicitly provided value, including an empty one, is taken as the content and refused immediately with `EmptySourceContent` when blank, instead of falling through to a stdin read that blocks forever on a pipe that never reaches EOF. **Breaking** for direct callers of this published function: wrap a previously-passed `&str` in `Some(..)`, and pass `None` (not `""`) to opt into the stdin fallback (#105).
+
 ## [0.8.0] - 2026-07-13
 
 ### Added
