@@ -90,7 +90,13 @@ pub fn wrap_source(
 }
 
 /// Reads source content from `content_file` if given, else `content` if
-/// non-empty, else `stdin` if it is not a TTY.
+/// given, else `stdin` if it is not a TTY.
+///
+/// An explicitly provided `content` — including an empty string — is taken
+/// as the content; it never falls through to the stdin read. Only the
+/// no-file, no-content case consults stdin, so a caller that passed empty
+/// content gets an immediate [`MifRhError::EmptySourceContent`] instead of
+/// blocking on a pipe that never reaches EOF (issue #105).
 ///
 /// # Errors
 ///
@@ -99,13 +105,13 @@ pub fn wrap_source(
 /// of the three sources.
 pub fn read_source_content(
     content_file: Option<&Path>,
-    content: &str,
+    content: Option<&str>,
 ) -> Result<String, MifRhError> {
     use std::io::{IsTerminal, Read};
 
     let text = if let Some(path) = content_file {
         read_text(path)?
-    } else if !content.is_empty() {
+    } else if let Some(content) = content {
         content.to_string()
     } else if std::io::stdin().is_terminal() {
         String::new()
@@ -198,5 +204,38 @@ mod tests {
             error,
             super::MifRhError::SchemaValidationFailed { .. }
         ));
+    }
+
+    use super::read_source_content;
+
+    // Regression tests for issue #105: an explicitly provided `content` —
+    // including an empty one — must never fall through to the blocking
+    // stdin read.
+    #[test]
+    fn read_source_content_refuses_explicit_empty_content_without_touching_stdin() {
+        let error = read_source_content(None, Some("")).unwrap_err();
+        assert!(matches!(error, super::MifRhError::EmptySourceContent));
+    }
+
+    #[test]
+    fn read_source_content_refuses_explicit_whitespace_only_content() {
+        let error = read_source_content(None, Some("  \n\t")).unwrap_err();
+        assert!(matches!(error, super::MifRhError::EmptySourceContent));
+    }
+
+    #[test]
+    fn read_source_content_takes_explicit_content_verbatim() {
+        let text = read_source_content(None, Some("the paper's full text")).unwrap();
+        assert_eq!(text, "the paper's full text");
+    }
+
+    #[test]
+    fn read_source_content_prefers_the_content_file_over_explicit_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.txt");
+        fs::write(&path, "from the file").unwrap();
+
+        let text = read_source_content(Some(&path), Some("ignored")).unwrap();
+        assert_eq!(text, "from the file");
     }
 }

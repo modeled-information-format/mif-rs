@@ -1922,8 +1922,7 @@ struct WrapSourceArgs<'a> {
 }
 
 fn harness_wrap_source_cmd(args: &WrapSourceArgs<'_>) -> Result<Outcome, CliError> {
-    let content_text =
-        mif_rh::read_source_content(args.content_file, args.content.unwrap_or_default())?;
+    let content_text = mif_rh::read_source_content(args.content_file, args.content)?;
     let created = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let envelope = mif_rh::wrap_source(
         &mif_rh::WrapSourceInputs {

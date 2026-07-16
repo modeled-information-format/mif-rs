@@ -297,9 +297,10 @@ fn skill_version(contents: &str) -> Option<String> {
     })
 }
 
-/// Rewrites the first `**Version:** X` row inside `## <comp>`/`### <comp>`'s
-/// section (bounded by the next heading of any level) to `**Version:**
-/// <new>`.
+/// Rewrites the version value in the first `**Version:** X` row inside
+/// `## <comp>`/`### <comp>`'s section (bounded by the next heading of any
+/// level) to `<new>`, preserving anything after the version token on the
+/// same line (e.g. trailing `| **Kind:** ...` cells).
 fn rewrite_doc_version(contents: &str, component: &str, new_version: &str) -> Option<String> {
     let heading2 = format!("## {component}");
     let heading3 = format!("### {component}");
@@ -310,8 +311,16 @@ fn rewrite_doc_version(contents: &str, component: &str, new_version: &str) -> Op
         if line.starts_with('#') {
             in_section = line == heading2 || line == heading3;
         }
-        if in_section && !done && line.starts_with("**Version:**") {
-            let _ = write!(out, "**Version:** {new_version}");
+        if in_section
+            && !done
+            && let Some(rest) = line.strip_prefix("**Version:**")
+        {
+            let value = rest.trim_start();
+            let token_end = value
+                .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+                .unwrap_or(value.len());
+            let remainder = &value[token_end..];
+            let _ = write!(out, "**Version:** {new_version}{remainder}");
             done = true;
         } else {
             out.push_str(line);
@@ -1286,6 +1295,36 @@ mod tests {
         let id = goal_version_id(&serde_json::json!({"question": "why"}));
         assert!(id.starts_with("gv-"));
         assert_eq!(id.len(), "gv-".len() + 12);
+    }
+
+    use super::rewrite_doc_version;
+
+    // Regression test for issue #104: a version row carrying extra cells
+    // (observed live: `**Version:** 0.14.1 | **Kind:** methodology`) must
+    // keep everything after the version token.
+    #[test]
+    fn rewrite_doc_version_preserves_trailing_cells_on_the_row() {
+        let doc = "# Packs\n\n## monitoring\n\n**Version:** 0.14.1 | **Kind:** methodology\n";
+        let rewritten = rewrite_doc_version(doc, "monitoring", "0.15.3").unwrap();
+        assert_eq!(
+            rewritten,
+            "# Packs\n\n## monitoring\n\n**Version:** 0.15.3 | **Kind:** methodology\n"
+        );
+    }
+
+    #[test]
+    fn rewrite_doc_version_leaves_a_bare_version_row_bare() {
+        let doc = "## monitoring\n\n**Version:** 0.14.1\n";
+        let rewritten = rewrite_doc_version(doc, "monitoring", "0.15.3").unwrap();
+        assert_eq!(rewritten, "## monitoring\n\n**Version:** 0.15.3\n");
+    }
+
+    #[test]
+    fn rewrite_doc_version_only_touches_the_named_section() {
+        let doc = "## other\n\n**Version:** 1.0.0 | keep\n\n## monitoring\n\n**Version:** 0.14.1 | **Kind:** methodology\n";
+        let rewritten = rewrite_doc_version(doc, "monitoring", "0.15.3").unwrap();
+        assert!(rewritten.contains("**Version:** 1.0.0 | keep"));
+        assert!(rewritten.contains("**Version:** 0.15.3 | **Kind:** methodology"));
     }
 
     use super::{BumpOptions, PACK_DOC_DIR, bump_version};
