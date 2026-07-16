@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-16
+
 ### Fixed
 
 - **`mif-rh`**: `rewrite_doc_version` (used by `bump_version`'s family-doc updater) no longer deletes everything after the version on a `**Version:**` row — trailing cells like `| **Kind:** methodology` are preserved; only the leading semver token is replaced (#104).
