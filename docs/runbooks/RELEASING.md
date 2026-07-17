@@ -2,7 +2,7 @@
 id: how-to-release-mif-rs
 type: procedural
 created: '2026-07-02T00:00:00Z'
-modified: '2026-07-17T03:23:40.794Z'
+modified: '2026-07-17T03:41:18.123Z'
 namespace: how-to/release
 title: How to Release mif-rs
 tags:
@@ -30,12 +30,11 @@ entity:
   entity_type: how-to-guide
 provenance:
   '@type': Provenance
-  agent: claude-code/claude-fable-5
-  wasGeneratedBy:
-    '@id': urn:mif:activity:claude-code-session:a47ce636-2dc2-4a9f-90ea-ecd8dad5b9c0
-    '@type': prov:Activity
-  trustLevel: user_stated
-  agentVersion: 2.1.212
+  sourceType: user_explicit
+  trustLevel: verified
+  wasDerivedFrom:
+    '@id': urn:mif:tree:mif-rs/docs
+    '@type': prov:Entity
 ---
 
 # How to Release mif-rs

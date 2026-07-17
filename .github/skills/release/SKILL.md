@@ -3,8 +3,8 @@ name: release
 argument-hint: v<X.Y.Z> | patch | minor | major
 description: >-
   Orchestrate and monitor a full attested release of this project
-  end-to-end: release-prep PR, tag, attested binaries + SBOM (per
-  binary crate), crates.io Trusted Publishing with .crate attestation
+  end-to-end: release-prep PR, tag, attested binaries + one combined
+  workspace SBOM, crates.io Trusted Publishing with .crate attestation
   (per library/binary crate), container images (per binary crate) +
   conditional Homebrew propagation, and independent workstation
   verification. Use
