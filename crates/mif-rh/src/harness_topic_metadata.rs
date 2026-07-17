@@ -17,11 +17,19 @@ use serde_json::Value;
 use crate::error::MifRhError;
 use crate::harness_project::read_json;
 
+/// The README title budget: an emitted [`TopicMetadata::title`] never
+/// exceeds this many characters (including the truncation marker).
+const TITLE_MAX_CHARS: usize = 80;
+
 /// Everything `build-topic-readme.sh` previously computed via `jq`, ready
 /// to be emitted as shell variable assignments.
 #[derive(Debug, Clone)]
 pub struct TopicMetadata {
-    /// The topic's registered title (falls back to the topic id).
+    /// The topic's registered title (falls back to the topic id), trimmed
+    /// of surrounding whitespace and truncated on a word boundary to
+    /// [`TITLE_MAX_CHARS`] characters with a `…` marker when longer. It
+    /// never starts or ends with whitespace, so the README `# <TITLE>`
+    /// heading built from it cannot fail markdownlint MD009.
     pub title: String,
     /// The topic's registered status (falls back to `"active"`).
     pub status: String,
@@ -288,6 +296,36 @@ fn render_tags(tags: &[String]) -> String {
     }
 }
 
+/// Sanitizes a topic title for README emission.
+///
+/// Trims surrounding whitespace, and when the result still exceeds
+/// [`TITLE_MAX_CHARS`] characters, cuts it back to the last word boundary
+/// inside the budget (falling back to a hard character cut when a single
+/// unbroken token overruns it), trims again, and appends `…` so a
+/// truncated title stays distinguishable from a short one. The result
+/// never starts or ends with whitespace, no matter where in the input the
+/// cut lands — a registered title carrying an upstream 80-character
+/// cutoff's trailing space comes out clean (issue #86).
+fn sanitize_title(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.chars().count() <= TITLE_MAX_CHARS {
+        return trimmed.to_string();
+    }
+    // Reserve one character of the budget for the truncation marker.
+    let budget = TITLE_MAX_CHARS - 1;
+    let head: String = trimmed.chars().take(budget).collect();
+    let cut = if trimmed.chars().nth(budget).is_some_and(char::is_whitespace) {
+        // The cut already lands on a word boundary: keep the whole head.
+        head.as_str()
+    } else {
+        // Mid-word cut: back up to the last word boundary, or keep the
+        // hard cut when the head is one unbroken token.
+        head.rfind(char::is_whitespace)
+            .map_or(head.as_str(), |idx| &head[..idx])
+    };
+    format!("{}…", cut.trim_end())
+}
+
 fn render_purpose(goal: &Value, title: &str) -> String {
     for key in ["goal_statement", "research_question", "goal", "question"] {
         if let Some(value) = goal.get(key).and_then(Value::as_str)
@@ -324,10 +362,12 @@ pub fn topic_metadata(
             topic: topic.to_string(),
             config_path: config_path.display().to_string(),
         })?;
-    let title = topic_entry
-        .get("title")
-        .and_then(Value::as_str)
-        .map_or_else(|| topic.to_string(), str::to_string);
+    let title = sanitize_title(
+        topic_entry
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or(topic),
+    );
     let status = topic_entry
         .get("status")
         .and_then(Value::as_str)
@@ -480,6 +520,85 @@ mod tests {
 
         let meta = topic_metadata("t1", &config_path, &findings_dir, &goal_path).unwrap();
         assert_eq!(meta.purpose, "Understand the market.");
+    }
+
+    /// Regression for issue #86: an upstream registrar truncates a
+    /// `goal_statement` to 80 characters for the registered title; when
+    /// that cutoff lands right after a space the config carries a title
+    /// with a trailing space, which used to reach the emitted `TITLE=`
+    /// verbatim and fail markdownlint MD009 in the generated README.
+    #[test]
+    fn title_from_an_80_char_cutoff_landing_after_a_space_has_no_trailing_whitespace() {
+        // Engineered so the 80th character of the goal statement lands
+        // right after a space: the first 80 chars end with "to the ".
+        let goal_statement = "Enable the decision of whether and how to add a set of Claude \
+                              Code hooks to the github-sdlc-planning plugin";
+        let registered_title: String = goal_statement.chars().take(80).collect();
+        assert_eq!(registered_title.chars().count(), 80);
+        assert!(
+            registered_title.ends_with(' '),
+            "fixture must reproduce the cut-after-a-space case"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("harness.config.json");
+        fs::write(
+            &config_path,
+            serde_json::json!({"topics": [{"id": "t1", "title": registered_title}]}).to_string(),
+        )
+        .unwrap();
+        let findings_dir = dir.path().join("findings");
+        fs::create_dir_all(&findings_dir).unwrap();
+
+        let meta = topic_metadata(
+            "t1",
+            &config_path,
+            &findings_dir,
+            &dir.path().join("goal.json"),
+        )
+        .unwrap();
+        assert_eq!(meta.title, registered_title.trim_end());
+        assert_eq!(meta.title, meta.title.trim());
+        let title_line = meta
+            .to_shell_script()
+            .lines()
+            .next()
+            .map(str::to_string)
+            .unwrap();
+        assert!(!title_line.trim_end_matches('\'').ends_with(' '));
+    }
+
+    #[test]
+    fn over_budget_title_cut_landing_on_a_word_boundary_keeps_the_whole_head() {
+        // 5-char groups: the 79-char head ends exactly at the 16th word.
+        let long = "word ".repeat(30);
+        let title = super::sanitize_title(&long);
+        assert_eq!(title, format!("{}…", "word ".repeat(16).trim_end()));
+        assert_eq!(title.chars().count(), 80);
+    }
+
+    #[test]
+    fn over_budget_title_cut_landing_mid_word_backs_up_to_the_last_word_boundary() {
+        // 6-char groups: the 79-char head ends one char into the 14th
+        // word, so the cut backs up to the 13th word's end.
+        let long = "alpha ".repeat(30);
+        let title = super::sanitize_title(&long);
+        assert_eq!(title, format!("{}…", "alpha ".repeat(13).trim_end()));
+        assert!(title.chars().count() <= 80);
+    }
+
+    #[test]
+    fn over_budget_unbroken_token_title_is_hard_cut_with_a_marker() {
+        let long = "x".repeat(100);
+        let title = super::sanitize_title(&long);
+        assert_eq!(title, format!("{}…", "x".repeat(79)));
+        assert_eq!(title.chars().count(), 80);
+    }
+
+    #[test]
+    fn exactly_80_char_title_without_trailing_space_is_unchanged() {
+        let exact = "y".repeat(80);
+        assert_eq!(super::sanitize_title(&exact), exact);
     }
 
     #[test]
