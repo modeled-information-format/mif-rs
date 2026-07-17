@@ -28,7 +28,7 @@ pub struct TopicMetadata {
     /// The topic's registered title (falls back to the topic id when the
     /// title is absent or sanitizes to nothing), trimmed
     /// of surrounding whitespace and truncated on a word boundary to
-    /// [`TITLE_MAX_CHARS`] characters with a `…` marker when longer. It
+    /// `TITLE_MAX_CHARS` (80) characters with a `…` marker when longer. It
     /// never starts or ends with whitespace, so the README `# <TITLE>`
     /// heading built from it cannot fail markdownlint MD009.
     pub title: String,
