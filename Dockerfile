@@ -31,7 +31,7 @@ COPY . .
 # for all images, instead of once per bin. release-docker.yml builds the
 # four images sequentially in a single job against this shared stage; each
 # per-bin build after the first is a pure BuildKit cache hit up to here.
-RUN cargo build --release --locked --bins
+RUN cargo build --release --locked --workspace --bins
 
 # Runtime stage - use Chainguard's glibc-dynamic for minimal attack surface
 # while keeping glibc + CA certificates (unlike distroless/static or scratch,
