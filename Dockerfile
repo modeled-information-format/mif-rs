@@ -18,15 +18,20 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
-# Which workspace binary to build into this image: mif-cli or mif-mcp.
-# Passed by the CI matrix in release-docker.yml — never guess it here.
-ARG BIN
 COPY --from=planner /app/recipe.json recipe.json
 # Builds only the dependency graph, cached independently of application
-# source changes.
+# source changes. cargo-chef masks local (workspace) crate versions in both
+# the manifests and Cargo.lock when generating the recipe, so release-prep
+# version bumps do NOT invalidate this layer — only a real dependency
+# change does.
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-RUN cargo build --release --locked -p "${BIN}" --bin "${BIN}"
+# Build every [[bin]] target in one pass so the shared workspace dependency
+# tree (including the candle ML stack via mif-embed) compiles exactly once
+# for all images, instead of once per bin. release-docker.yml builds the
+# four images sequentially in a single job against this shared stage; each
+# per-bin build after the first is a pure BuildKit cache hit up to here.
+RUN cargo build --release --locked --workspace --bins
 
 # Runtime stage - use Chainguard's glibc-dynamic for minimal attack surface
 # while keeping glibc + CA certificates (unlike distroless/static or scratch,
@@ -40,6 +45,9 @@ RUN cargo build --release --locked -p "${BIN}" --bin "${BIN}"
 # Trivy DS-0001; Dependabot's docker ecosystem keeps the digest fresh.
 FROM cgr.dev/chainguard/glibc-dynamic@sha256:7ff79e2caef2b8a137ddaf9940fb790e91148482092363760d6661e4591fd54c
 
+# Which workspace binary this image ships: mif-cli, mif-mcp, mif-rh-cli, or
+# mif-rh-mcp. Passed per image by release-docker.yml — never guess it here.
+# Only this final stage varies by BIN; everything above it is shared.
 ARG BIN
 
 # Copy binary from builder. glibc-dynamic has no shell, so BIN can't be

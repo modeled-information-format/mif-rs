@@ -24,11 +24,8 @@ name: Docker
       image-digests:
         description: >-
           JSON object mapping each bin name to its image's manifest digest
-          (sha256:...); values are empty when push is false. A matrix job's
-          `outputs` only exposes its LAST completed cell's value in GitHub
-          Actions, so per-bin digests are collected via artifact upload/
-          download (collect-digests job) rather than a naive job output.
-        value: ${{ jobs.collect-digests.outputs.digests }}
+          (sha256:...); values are empty when push is false.
+        value: ${{ jobs.build-and-push.outputs.digests }}
   workflow_dispatch:
     inputs:
       push:
@@ -49,9 +46,10 @@ permissions:
   contents: read
 
 jobs:
-  # Resolves every [[bin]] target across the workspace so build-and-push can
-  # matrix over it — mif-cli and mif-mcp each get their own image
-  # (ghcr.io/<repo>/<bin>), not .packages[0]'s single binary.
+  # Resolves every [[bin]] target across the workspace so downstream
+  # consumers (docker-sign/docker-verify in pipeline.yml) can matrix over
+  # it, and so build-and-push can verify its hardcoded build steps still
+  # cover the whole workspace.
   meta:
     name: Resolve Binary Targets
     runs-on: ubuntu-latest
@@ -76,21 +74,47 @@ jobs:
           echo "bins=${BINS}" >> "$GITHUB_OUTPUT"
           echo "Resolved bins: ${BINS}"
 
+  # All four images are built SEQUENTIALLY in this one job, not as a
+  # per-bin matrix. The Dockerfile's builder stage compiles the entire
+  # workspace (cargo build --release --bins) once; only the thin final
+  # stage varies by BIN. Sequential builds share the job's local BuildKit
+  # cache, so the expensive dependency + workspace compile happens exactly
+  # once per run instead of once per bin (the old matrix burned ~6
+  # runner-hours per tag recompiling the shared dep tree — including the
+  # candle ML stack — four times; see #110). type=gha cache carries the
+  # cook layer across runs: cargo-chef masks local crate versions in the
+  # recipe, so version-only release bumps don't invalidate it.
   build-and-push:
-    name: Build and Push Docker Image (${{ matrix.bin }})
+    name: Build and Push Docker Images
     needs: [meta]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        bin: ${{ fromJson(needs.meta.outputs.bins) }}
+    outputs:
+      digests: ${{ steps.collect.outputs.digests }}
     steps:
       - name: Checkout repository
         # v7.0.0
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      # The build steps below are intentionally explicit (GitHub Actions
+      # cannot generate steps dynamically), so a new [[bin]] target must
+      # fail loudly here instead of silently shipping no image.
+      - name: Verify build steps cover every workspace bin
+        env:
+          RESOLVED_BINS: ${{ needs.meta.outputs.bins }}
+        run: |
+          set -euo pipefail
+          expected='["mif-cli","mif-mcp","mif-rh-cli","mif-rh-mcp"]'
+          actual=$(jq -cS 'sort' <<< "${RESOLVED_BINS}")
+          if [ "${actual}" != "$(jq -cS 'sort' <<< "${expected}")" ]; then
+            echo "::error::Workspace [[bin]] targets ${actual} no longer" \
+              "match this workflow's sequential build steps ${expected}." \
+              "Add/remove a metadata + build step pair (and its digest" \
+              "entry in the collect step) in release-docker.yml."
+            exit 1
+          fi
 
       # Login must precede Buildx setup so the BuildKit builder image
       # is pulled with credentials, not anonymously.
@@ -109,14 +133,15 @@ jobs:
         uses: >-
           docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
 
-      - name: Extract metadata
-        id: meta
+      # ---- mif-cli -------------------------------------------------
+      - name: Extract metadata (mif-cli)
+        id: meta-mif-cli
         # v6.0.0
         uses: >-
           docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
         with:
           images: >-
-            ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.bin }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/mif-cli
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -126,8 +151,12 @@ jobs:
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push Docker image
-        id: build
+      # The first build compiles the shared builder stage for every image;
+      # it is the only step that exports the cache (mode=max) — the later
+      # bins' unique layers are single tiny COPYs not worth three more
+      # multi-gigabyte cache uploads of the same shared layers.
+      - name: Build and push Docker image (mif-cli)
+        id: build-mif-cli
         # v6.10.0
         uses: >-
           docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
@@ -135,58 +164,129 @@ jobs:
           context: .
           platforms: ${{ inputs.platforms }}
           push: ${{ inputs.push }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.bin }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.bin }}
+          tags: ${{ steps.meta-mif-cli.outputs.tags }}
+          labels: ${{ steps.meta-mif-cli.outputs.labels }}
+          cache-from: type=gha,scope=docker-shared
+          cache-to: type=gha,mode=max,scope=docker-shared
           build-args: |
-            BIN=${{ matrix.bin }}
+            BIN=mif-cli
 
-      # A matrix job's `outputs` only exposes its LAST completed cell's
-      # value in GitHub Actions — write this cell's digest to a file and
-      # upload it so collect-digests can gather every bin's digest
-      # correctly, not just whichever cell happened to finish last.
-      - name: Record digest for collection
-        run: |
-          mkdir -p digest-out
-          echo -n '${{ steps.build.outputs.digest }}' \
-            > "digest-out/${{ matrix.bin }}"
-
-      - name: Upload digest
-        # v7.0.1
+      # ---- mif-mcp -------------------------------------------------
+      - name: Extract metadata (mif-mcp)
+        id: meta-mif-mcp
+        # v6.0.0
         uses: >-
-          actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+          docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
         with:
-          name: docker-digest-${{ matrix.bin }}
-          path: digest-out/${{ matrix.bin }}
-          if-no-files-found: error
+          images: >-
+            ${{ env.REGISTRY }}/${{ github.repository }}/mif-mcp
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
 
-  collect-digests:
-    name: Collect Image Digests
-    needs: [meta, build-and-push]
-    runs-on: ubuntu-latest
-    outputs:
-      digests: ${{ steps.collect.outputs.digests }}
-    steps:
-      - name: Download all digest artifacts
-        # v8.0.1
+      - name: Build and push Docker image (mif-mcp)
+        id: build-mif-mcp
+        # v6.10.0
         uses: >-
-          actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+          docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
-          pattern: docker-digest-*
-          path: digests
-          merge-multiple: true
+          context: .
+          platforms: ${{ inputs.platforms }}
+          push: ${{ inputs.push }}
+          tags: ${{ steps.meta-mif-mcp.outputs.tags }}
+          labels: ${{ steps.meta-mif-mcp.outputs.labels }}
+          cache-from: type=gha,scope=docker-shared
+          build-args: |
+            BIN=mif-mcp
 
-      - name: Merge into one JSON object
+      # ---- mif-rh-cli ----------------------------------------------
+      - name: Extract metadata (mif-rh-cli)
+        id: meta-mif-rh-cli
+        # v6.0.0
+        uses: >-
+          docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
+        with:
+          images: >-
+            ${{ env.REGISTRY }}/${{ github.repository }}/mif-rh-cli
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image (mif-rh-cli)
+        id: build-mif-rh-cli
+        # v6.10.0
+        uses: >-
+          docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          platforms: ${{ inputs.platforms }}
+          push: ${{ inputs.push }}
+          tags: ${{ steps.meta-mif-rh-cli.outputs.tags }}
+          labels: ${{ steps.meta-mif-rh-cli.outputs.labels }}
+          cache-from: type=gha,scope=docker-shared
+          build-args: |
+            BIN=mif-rh-cli
+
+      # ---- mif-rh-mcp ----------------------------------------------
+      - name: Extract metadata (mif-rh-mcp)
+        id: meta-mif-rh-mcp
+        # v6.0.0
+        uses: >-
+          docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
+        with:
+          images: >-
+            ${{ env.REGISTRY }}/${{ github.repository }}/mif-rh-mcp
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image (mif-rh-mcp)
+        id: build-mif-rh-mcp
+        # v6.10.0
+        uses: >-
+          docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          platforms: ${{ inputs.platforms }}
+          push: ${{ inputs.push }}
+          tags: ${{ steps.meta-mif-rh-mcp.outputs.tags }}
+          labels: ${{ steps.meta-mif-rh-mcp.outputs.labels }}
+          cache-from: type=gha,scope=docker-shared
+          build-args: |
+            BIN=mif-rh-mcp
+
+      # Sequential steps mean every bin's digest is directly addressable —
+      # no matrix-output collision, no artifact upload/download dance.
+      - name: Collect image digests
         id: collect
+        env:
+          DIGEST_MIF_CLI: ${{ steps.build-mif-cli.outputs.digest }}
+          DIGEST_MIF_MCP: ${{ steps.build-mif-mcp.outputs.digest }}
+          DIGEST_MIF_RH_CLI: ${{ steps.build-mif-rh-cli.outputs.digest }}
+          DIGEST_MIF_RH_MCP: ${{ steps.build-mif-rh-mcp.outputs.digest }}
         run: |
           set -euo pipefail
-          JSON="{}"
-          for f in digests/*; do
-            bin=$(basename "$f")
-            digest=$(cat "$f")
-            JSON=$(jq -c --arg bin "$bin" --arg digest "$digest" \
-              '. + {($bin): $digest}' <<< "$JSON")
-          done
+          JSON=$(jq -cn \
+            --arg cli "${DIGEST_MIF_CLI}" \
+            --arg mcp "${DIGEST_MIF_MCP}" \
+            --arg rhcli "${DIGEST_MIF_RH_CLI}" \
+            --arg rhmcp "${DIGEST_MIF_RH_MCP}" \
+            '{"mif-cli": $cli, "mif-mcp": $mcp,
+              "mif-rh-cli": $rhcli, "mif-rh-mcp": $rhmcp}')
           echo "digests=${JSON}" >> "$GITHUB_OUTPUT"
           echo "Collected digests: ${JSON}"
