@@ -2,7 +2,7 @@
 id: how-to-release-mif-rs
 type: procedural
 created: '2026-07-02T00:00:00Z'
-modified: '2026-07-17T03:41:18.123Z'
+modified: '2026-07-17T12:38:30.943Z'
 namespace: how-to/release
 title: How to Release mif-rs
 tags:
@@ -31,10 +31,15 @@ entity:
 provenance:
   '@type': Provenance
   sourceType: user_explicit
-  trustLevel: verified
+  trustLevel: user_stated
   wasDerivedFrom:
     '@id': urn:mif:tree:mif-rs/docs
     '@type': prov:Entity
+  agent: claude-code/claude-sonnet-5
+  wasGeneratedBy:
+    '@id': urn:mif:activity:claude-code-session:510bf739-31a0-4ce7-a88a-aa51484ddbbd
+    '@type': prov:Activity
+  agentVersion: 2.1.212
 ---
 
 # How to Release mif-rs
@@ -75,15 +80,13 @@ in the body.
 
 ### Publication gate
 
-The original 9 crates are already published on crates.io at `0.1.0`; `mif-rh`,
-`mif-rh-cli`, and `mif-rh-mcp` (added later, alongside the rest of the
-workspace) have never been published at all. None of the 12 carries a
-`publish = false` line, so `publish.yml`'s guard job (which reads
-`.packages[] | select(.publish != [])` from `cargo metadata`, not a
-hardcoded crate list) treats every workspace member as publishable already —
-there is no publish-gate flag to flip, but the 3 new crates still need their
-own one-time crates.io setup (below) before a tag-triggered publish can
-include them.
+All 12 crates, including `mif-rh`, `mif-rh-cli`, and `mif-rh-mcp` (added later,
+alongside the rest of the workspace), are now published on crates.io. None of
+the 12 carries a `publish = false` line, so `publish.yml`'s guard job (which
+reads `.packages[] | select(.publish != [])` from `cargo metadata`, not a
+hardcoded crate list) treats every workspace member as publishable — no
+publish-gate flag to flip, and no per-crate onboarding step remains
+outstanding.
 
 Republishing the next release requires a **version bump in two places**,
 both in the root `Cargo.toml`: bump `[workspace.package].version`, **and**
@@ -112,7 +115,7 @@ Secrets and variables > Actions**):
 
 | Item | Purpose | How to set up |
 |---|---|---|
-| crates.io Trusted Publishing (one-time, **per crate**) | Publish via OIDC — no long-lived token | On crates.io, for each of the 9 already-published crates: crate **Settings > Trusted Publishing** > add repo `modeled-information-format/mif-rs`, workflow `publish.yml`, environment `release`. `mif-rh`, `mif-rh-cli`, `mif-rh-mcp` have no crates.io page yet — Trusted Publishing can't be configured until each has been published at least once via a manual `cargo login` + `cargo publish -p <crate>` (in dependency order: `mif-rh` first, then `mif-rh-cli`/`mif-rh-mcp`), which itself requires their `mif-core`/`mif-ontology`/`mif-embed`/`mif-problem` dependencies to already be live at the new version |
+| crates.io Trusted Publishing (one-time, **per crate**) | Publish via OIDC — no long-lived token | On crates.io, for each of the 12 published crates: crate **Settings > Trusted Publishing** > add repo `modeled-information-format/mif-rs`, workflow `publish.yml`, environment `release`. All 12, including `mif-rh`, `mif-rh-cli`, and `mif-rh-mcp`, have this configured — a brand-new crate not yet on crates.io still needs its first publish done manually (`cargo login` + `cargo publish -p <crate>`, in dependency order) before Trusted Publishing can be added for it |
 | `HOMEBREW_TAP_TOKEN` (secret, optional) | Push formula updates to the Homebrew tap | Fine-grained PAT with write access to `{owner}/homebrew-tap` |
 | `HOMEBREW_TAP_REPO` (variable, optional) | Override the tap repo name (default `homebrew-tap`) | **Settings > Secrets and variables > Actions > Variables** |
 | `GITHUB_TOKEN` | Provided automatically | No setup needed |
@@ -202,7 +205,7 @@ Pushing a `v*.*.*` tag triggers these workflows in parallel:
 | Workflow | File | What it does |
 |---|---|---|
 | **Release** | `release.yml` | Builds every binary crate (`mif-cli`, `mif-mcp`, `mif-rh-cli`, `mif-rh-mcp`) across 5 platforms each (`{bin}-{version}-{platform}`), resolved dynamically from `cargo metadata` — with SLSA build provenance, generates + attests a CycloneDX SBOM, verifies every attestation **fail-closed**, then creates the GitHub Release with auto-generated notes |
-| **Publish** | `publish.yml` | Publishes every publishable workspace member (all 12 crates: `mif-core`, `mif-problem`, `mif-schema`, `mif-frontmatter`, `mif-ontology`, `mif-embed`, `mif-store`, `mif-cli`, `mif-mcp`, `mif-rh`, `mif-rh-cli`, `mif-rh-mcp`) to crates.io independently, in dependency order, each via its own crates.io Trusted Publishing (OIDC) config — then downloads each registry-served `.crate`, byte-compares it, and attests it. **Until `mif-rh`/`mif-rh-cli`/`mif-rh-mcp` have their Trusted Publishing configured (see Prerequisites), this job fails for those three specifically** — the other 9 are unaffected since nothing in their dependency order depends on `mif-rh` |
+| **Publish** | `publish.yml` | Publishes every publishable workspace member (all 12 crates: `mif-core`, `mif-problem`, `mif-schema`, `mif-frontmatter`, `mif-ontology`, `mif-embed`, `mif-store`, `mif-cli`, `mif-mcp`, `mif-rh`, `mif-rh-cli`, `mif-rh-mcp`) to crates.io independently, in dependency order, each via its own crates.io Trusted Publishing (OIDC) config — then downloads each registry-served `.crate`, byte-compares it, and attests it. All 12 crates, including `mif-rh`/`mif-rh-cli`/`mif-rh-mcp`, have Trusted Publishing configured and publish cleanly |
 | **Pipeline (container)** | `pipeline.yml` | Builds and pushes one multi-platform container image (linux/amd64, linux/arm64) **per binary crate** to `ghcr.io/modeled-information-format/mif-rs/{bin}` (`mif-cli`, `mif-mcp`, `mif-rh-cli`, `mif-rh-mcp`) — the bin matrix is resolved dynamically from `cargo metadata` — each signed/attested by the central signer workflow and verified fail-closed |
 
 After the Release workflow completes, `package-homebrew.yml` fires via
@@ -241,7 +244,7 @@ gh run view <run-id> --log-failed
 | SBOM (generate + attest) | ~1 min | Attestation permissions (`id-token`, `attestations`) |
 | Verify Attestations | &lt;1 min | Fail-closed gate: any missing/unverifiable attestation blocks the release |
 | Create Release | ~1 min | Only runs on tags, after verify passes |
-| Publish (crates.io, 12 crates) | ~5 min | Trusted Publishing not configured for one of the crates (expected for `mif-rh`/`mif-rh-cli`/`mif-rh-mcp` until their one-time manual publish, see Prerequisites); dependency-order failure blocking a downstream crate |
+| Publish (crates.io, 12 crates) | ~5 min | Trusted Publishing misconfigured or revoked for one of the crates (see Prerequisites); dependency-order failure blocking a downstream crate |
 | Docker chain (pipeline) | ~5-10 min | Buildx multi-platform, central signer/verify |
 | Homebrew (after Release) | ~2 min | `workflow_run` trigger, tap token |
 
@@ -285,9 +288,7 @@ Run through this after all workflows complete.
   done
   ```
 - [ ] **crates.io** — each of the 12 crates is updated, and each served
-      `.crate` attestation verifies (the 3 `mif-rh-*` crates only apply once
-      their one-time manual publish + Trusted Publishing setup is done, see
-      Prerequisites):
+      `.crate` attestation verifies:
   ```bash
   for NAME in mif-core mif-problem mif-schema mif-frontmatter mif-ontology mif-embed mif-store mif-cli mif-mcp mif-rh mif-rh-cli mif-rh-mcp; do
     curl -fsSL -A 'release-check' \
@@ -465,8 +466,8 @@ Conventional commit prefixes map onto changelog sections:
 
 - **Packages:** `mif-core`, `mif-problem`, `mif-schema`, `mif-frontmatter`,
   `mif-ontology`, `mif-embed`, `mif-store`, `mif-cli`, `mif-mcp`, `mif-rh`,
-  `mif-rh-cli`, `mif-rh-mcp` — each published independently, each requiring
-  its own one-time Trusted Publishing setup (see Prerequisites above). A
+  `mif-rh-cli`, `mif-rh-mcp` — each published independently, each via its own
+  Trusted Publishing (OIDC) config on crates.io (see Prerequisites above). A
   failure on one crate does not block the others' channels, but does block
   anything published after it in the dependency order.
 
