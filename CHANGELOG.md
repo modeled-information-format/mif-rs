@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`mif-rh`**: `topic_metadata` (backing `mif-rh-cli harness topic-metadata`) no longer emits a `TITLE` with leading/trailing whitespace — a registered title carrying an upstream 80-character cutoff's trailing space (which landed in the generated README's H1 and failed markdownlint MD009) is trimmed on read, and a title over the 80-character budget is now truncated on a word boundary with a `…` marker so truncated titles stay distinguishable. A title that is absent or sanitizes to nothing (e.g. a whitespace-only value) falls back to the topic id rather than blanking the README H1 (#86).
+
 ## [0.9.0] - 2026-07-16
 
 ### Fixed
