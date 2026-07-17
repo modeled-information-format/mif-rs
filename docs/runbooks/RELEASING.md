@@ -2,7 +2,7 @@
 id: how-to-release-mif-rs
 type: procedural
 created: '2026-07-02T00:00:00Z'
-modified: '2026-07-02T00:00:00Z'
+modified: '2026-07-17T03:08:22.773Z'
 namespace: how-to/release
 title: How to Release mif-rs
 tags:
@@ -28,6 +28,14 @@ ontology:
 entity:
   name: Release mif-rs
   entity_type: how-to-guide
+provenance:
+  '@type': Provenance
+  agent: claude-code/claude-fable-5
+  wasGeneratedBy:
+    '@id': urn:mif:activity:claude-code-session:a47ce636-2dc2-4a9f-90ea-ecd8dad5b9c0
+    '@type': prov:Activity
+  trustLevel: user_stated
+  agentVersion: 2.1.212
 ---
 
 # How to Release mif-rs
@@ -198,7 +206,10 @@ Pushing a `v*.*.*` tag triggers these workflows in parallel:
 | **Pipeline (container)** | `pipeline.yml` | Builds and pushes the multi-platform container image (linux/amd64, linux/arm64) to `ghcr.io/modeled-information-format/mif-rs`, signed/attested by the central signer workflow and verified fail-closed |
 
 After the Release workflow completes, `package-homebrew.yml` fires via
-`workflow_run` and regenerates the tap formula(e) in `{owner}/homebrew-tap`.
+`workflow_run` and regenerates the tap formula(e) in `{owner}/homebrew-tap`
+— but only when that workflow is enabled **and** the tap repo exists; as of
+this writing it is `disabled_manually` and no tap repo exists, so no
+Homebrew run is expected (see Post-Release Verification).
 
 **Never re-run `release.yml` against an existing tag.** Builds are not
 reproducible; a re-run would overwrite published assets with different
@@ -283,8 +294,15 @@ Run through this after all workflows complete.
       --repo modeled-information-format/mif-rs
   done
   ```
-- [ ] **Homebrew formula** updated in the tap (a `package-homebrew.yml` run
-      appeared after Release completed)
+- [ ] **Homebrew formula** — only if the Homebrew chain is armed, i.e.
+      the `package-homebrew.yml` workflow is enabled
+      (`gh api repos/modeled-information-format/mif-rs/actions/workflows/package-homebrew.yml --jq .state`
+      reports `active`) **and** the `{owner}/homebrew-tap` repo exists:
+      a `package-homebrew.yml` run appeared after Release completed and
+      the tap formula shows the new version. If the workflow is disabled
+      or there is no tap repo (the current state — the workflow is
+      `disabled_manually` and no tap exists), no run is expected; mark
+      this item skipped and move on
 - [ ] Install and test each binary crate on at least one platform:
   ```bash
   cargo install mif-cli --locked
