@@ -2,7 +2,7 @@
 id: how-to-release-mif-rs
 type: procedural
 created: '2026-07-02T00:00:00Z'
-modified: '2026-07-17T03:08:22.773Z'
+modified: '2026-07-17T03:23:40.794Z'
 namespace: how-to/release
 title: How to Release mif-rs
 tags:
@@ -45,7 +45,8 @@ workspace: 12 crates (`mif-core`, `mif-problem`, `mif-schema`,
 `mif-frontmatter`, `mif-ontology`, `mif-embed`, `mif-store`, `mif-cli`,
 `mif-mcp`, `mif-rh`, `mif-rh-cli`, `mif-rh-mcp`) published independently to
 crates.io, plus attested binaries for the four binary crates (`mif-cli`,
-`mif-mcp`, `mif-rh-cli`, `mif-rh-mcp`) and a container image.
+`mif-mcp`, `mif-rh-cli`, `mif-rh-mcp`) and one container image per binary
+crate.
 
 > **Prefer the `/release` skill.** Releases are orchestrated end-to-end by
 > the `/release` skill (`.github/skills/release/SKILL.md`): release-prep PR,
@@ -203,7 +204,7 @@ Pushing a `v*.*.*` tag triggers these workflows in parallel:
 |---|---|---|
 | **Release** | `release.yml` | Builds every binary crate (`mif-cli`, `mif-mcp`, `mif-rh-cli`, `mif-rh-mcp`) across 5 platforms each (`{bin}-{version}-{platform}`), resolved dynamically from `cargo metadata` — with SLSA build provenance, generates + attests a CycloneDX SBOM, verifies every attestation **fail-closed**, then creates the GitHub Release with auto-generated notes |
 | **Publish** | `publish.yml` | Publishes every publishable workspace member (all 12 crates: `mif-core`, `mif-problem`, `mif-schema`, `mif-frontmatter`, `mif-ontology`, `mif-embed`, `mif-store`, `mif-cli`, `mif-mcp`, `mif-rh`, `mif-rh-cli`, `mif-rh-mcp`) to crates.io independently, in dependency order, each via its own crates.io Trusted Publishing (OIDC) config — then downloads each registry-served `.crate`, byte-compares it, and attests it. **Until `mif-rh`/`mif-rh-cli`/`mif-rh-mcp` have their Trusted Publishing configured (see Prerequisites), this job fails for those three specifically** — the other 9 are unaffected since nothing in their dependency order depends on `mif-rh` |
-| **Pipeline (container)** | `pipeline.yml` | Builds and pushes the multi-platform container image (linux/amd64, linux/arm64) to `ghcr.io/modeled-information-format/mif-rs`, signed/attested by the central signer workflow and verified fail-closed |
+| **Pipeline (container)** | `pipeline.yml` | Builds and pushes one multi-platform container image (linux/amd64, linux/arm64) **per binary crate** to `ghcr.io/modeled-information-format/mif-rs/{bin}` (`mif-cli`, `mif-mcp`, `mif-rh-cli`, `mif-rh-mcp`) — the bin matrix is resolved dynamically from `cargo metadata` — each signed/attested by the central signer workflow and verified fail-closed |
 
 After the Release workflow completes, `package-homebrew.yml` fires via
 `workflow_run` and regenerates the tap formula(e) in `{owner}/homebrew-tap`
@@ -277,10 +278,12 @@ Run through this after all workflows complete.
   shasum -a 256 -c *-X.Y.Z-checksums.txt
   ```
 - [ ] **Release notes** are generated correctly
-- [ ] **Container image** is pushed:
+- [ ] **Container images** are pushed — one per binary crate:
   ```bash
-  docker pull ghcr.io/modeled-information-format/mif-rs:vX.Y.Z
-  docker pull ghcr.io/modeled-information-format/mif-rs:latest
+  for BIN in mif-cli mif-mcp mif-rh-cli mif-rh-mcp; do
+    docker pull ghcr.io/modeled-information-format/mif-rs/${BIN}:vX.Y.Z
+    docker pull ghcr.io/modeled-information-format/mif-rs/${BIN}:latest
+  done
   ```
 - [ ] **crates.io** — each of the 12 crates is updated, and each served
       `.crate` attestation verifies (the 3 `mif-rh-*` crates only apply once
@@ -343,12 +346,15 @@ git tag -d vX.Y.Z
 
 GHCR images are immutable by tag. To mitigate:
 
-1. **Point users to a previous version:**
+1. **Point users to a previous version** (per binary crate):
    ```bash
-   docker pull ghcr.io/modeled-information-format/mif-rs:vPREVIOUS
+   for BIN in mif-cli mif-mcp mif-rh-cli mif-rh-mcp; do
+     docker pull ghcr.io/modeled-information-format/mif-rs/${BIN}:vPREVIOUS
+   done
    ```
-2. **Delete the package version** via GitHub UI: Packages > mif-rs > Package
-   versions > Delete.
+2. **Delete the package version** via GitHub UI, for each affected package
+   (`mif-rs/mif-cli`, `mif-rs/mif-mcp`, `mif-rs/mif-rh-cli`,
+   `mif-rs/mif-rh-mcp`): Packages > `<package>` > Package versions > Delete.
 3. **Re-tag `latest`** to the previous good version by re-pushing a
    known-good tag.
 
@@ -449,7 +455,8 @@ Conventional commit prefixes map onto changelog sections:
 
 ### Container Image (GHCR)
 
-- **Registry:** `ghcr.io/modeled-information-format/mif-rs`
+- **Registry:** `ghcr.io/modeled-information-format/mif-rs/{bin}` — one image
+  per binary crate (`mif-cli`, `mif-mcp`, `mif-rh-cli`, `mif-rh-mcp`)
 - **Platforms:** linux/amd64, linux/arm64
 - **Base image:** `chainguard/glibc-dynamic` (minimal attack surface, rebuilt from source continuously)
 - **User:** `nonroot:nonroot` (unprivileged)
