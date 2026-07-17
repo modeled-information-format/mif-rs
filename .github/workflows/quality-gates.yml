@@ -75,6 +75,8 @@ jobs:
     # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
       modeled-information-format/.github/.github/workflows/reusable-scorecard.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
+    secrets:
+      app-private-key: ${{ secrets.CI_CLIENT_APP_PRIVATE_KEY }}
 
   # IaC + license — Trivy filesystem scan (Dockerfile, manifests, licenses).
   # No image-ref: this job never scans a container image (that's
