@@ -25,7 +25,8 @@ const TITLE_MAX_CHARS: usize = 80;
 /// to be emitted as shell variable assignments.
 #[derive(Debug, Clone)]
 pub struct TopicMetadata {
-    /// The topic's registered title (falls back to the topic id), trimmed
+    /// The topic's registered title (falls back to the topic id when the
+    /// title is absent or sanitizes to nothing), trimmed
     /// of surrounding whitespace and truncated on a word boundary to
     /// [`TITLE_MAX_CHARS`] characters with a `…` marker when longer. It
     /// never starts or ends with whitespace, so the README `# <TITLE>`
@@ -362,12 +363,18 @@ pub fn topic_metadata(
             topic: topic.to_string(),
             config_path: config_path.display().to_string(),
         })?;
-    let title = sanitize_title(
-        topic_entry
-            .get("title")
-            .and_then(Value::as_str)
-            .unwrap_or(topic),
-    );
+    // Fall back to the topic id when the entry has no title, or when a
+    // present title sanitizes to nothing (e.g. a whitespace-only value) —
+    // an empty `TITLE` would blank the README H1 and defeat the fix.
+    let title = {
+        let raw = topic_entry.get("title").and_then(Value::as_str);
+        let sanitized = raw.map(sanitize_title).unwrap_or_default();
+        if sanitized.is_empty() {
+            sanitize_title(topic)
+        } else {
+            sanitized
+        }
+    };
     let status = topic_entry
         .get("status")
         .and_then(Value::as_str)
@@ -599,6 +606,31 @@ mod tests {
     fn exactly_80_char_title_without_trailing_space_is_unchanged() {
         let exact = "y".repeat(80);
         assert_eq!(super::sanitize_title(&exact), exact);
+    }
+
+    /// A present-but-whitespace-only title sanitizes to an empty string;
+    /// `topic_metadata` must fall back to the topic id rather than emit a
+    /// blank `TITLE` (which would produce an empty README H1).
+    #[test]
+    fn whitespace_only_title_falls_back_to_the_topic_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("harness.config.json");
+        fs::write(
+            &config_path,
+            serde_json::json!({"topics": [{"id": "market-sizing", "title": "   "}]}).to_string(),
+        )
+        .unwrap();
+        let findings_dir = dir.path().join("findings");
+        fs::create_dir_all(&findings_dir).unwrap();
+
+        let meta = topic_metadata(
+            "market-sizing",
+            &config_path,
+            &findings_dir,
+            &dir.path().join("goal.json"),
+        )
+        .unwrap();
+        assert_eq!(meta.title, "market-sizing");
     }
 
     #[test]
