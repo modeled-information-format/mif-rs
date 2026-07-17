@@ -37,9 +37,10 @@ We follow responsible disclosure practices:
 
 ### Scope
 
-This policy applies to all 9 published `mif-rs` workspace crates (`mif-core`,
+This policy applies to all 12 published `mif-rs` workspace crates (`mif-core`,
 `mif-problem`, `mif-schema`, `mif-frontmatter`, `mif-ontology`, `mif-embed`,
-`mif-store`, `mif-cli`, `mif-mcp`) and their published artifacts. Third-party
+`mif-store`, `mif-cli`, `mif-mcp`, `mif-rh`, `mif-rh-cli`, `mif-rh-mcp`) and
+their published artifacts. Third-party
 dependencies are managed via `cargo-deny` and audited regularly through our CI
 pipeline.
 
@@ -105,8 +106,8 @@ cosign verify-attestation "ghcr.io/modeled-information-format/mif-rs@${DIGEST}" 
 Binaries attached to a GitHub Release carry SLSA build provenance and a
 CycloneDX SBOM attestation, both attested by this repository's own
 release workflow (no `--signer-workflow` needed). Artifact names embed
-the version: `<bin>-<version>-<platform>`, for each of the two binary
-crates (`mif-cli`, `mif-mcp`).
+the version: `<bin>-<version>-<platform>`, for each of the four binary
+crates (`mif-cli`, `mif-mcp`, `mif-rh-cli`, `mif-rh-mcp`).
 
 ```bash
 gh release download v<X.Y.Z> --repo modeled-information-format/mif-rs
@@ -182,7 +183,7 @@ passed).
 The `.crate` archive served by crates.io is downloaded back from the
 registry after publish, byte-compared against the locally packaged
 archive, and attested — the attestation covers the bytes the registry
-actually serves. This runs for every one of the 9 published crates; the
+actually serves. This runs for every one of the 12 published crates; the
 example below uses `mif-cli`:
 
 ```bash
