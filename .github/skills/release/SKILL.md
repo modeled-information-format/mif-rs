@@ -3,10 +3,11 @@ name: release
 argument-hint: v<X.Y.Z> | patch | minor | major
 description: >-
   Orchestrate and monitor a full attested release of this project
-  end-to-end: release-prep PR, tag, attested binaries + SBOM (per
-  binary crate), crates.io Trusted Publishing with .crate attestation
-  (per library/binary crate), container images + Homebrew propagation
-  (per binary crate), and independent workstation verification. Use
+  end-to-end: release-prep PR, tag, attested binaries + one combined
+  workspace SBOM, crates.io Trusted Publishing with .crate attestation
+  (per library/binary crate), container images (per binary crate) +
+  conditional Homebrew propagation, and independent workstation
+  verification. Use
   this skill whenever the user invokes /release v<n.n.n> or /release
   patch|minor|major, or says "cut a release", "ship a release",
   "release version X", "bump and release", "do a patch/minor/major
@@ -24,30 +25,36 @@ either an explicit version (`/release v1.4.0`) or a bump type
 current `[workspace.package].version`. Every phase below ends with a
 verification; do not proceed past a failure — fix it or stop and report.
 
-This is a **9-crate workspace** — `mif-core`, `mif-problem`, `mif-schema`,
-`mif-frontmatter`, `mif-ontology`, `mif-embed`, `mif-store` (libraries),
-`mif-cli`, `mif-mcp` (binaries) — with **one shared version**
-(`version.workspace = true` on every member). A release ships every
-publishable crate together, at the same version number; there is
-no per-crate version skew. Names are never hardcoded: resolve the full
-package list from `cargo metadata --no-deps --format-version 1` (every
-`.packages[]`, never `.packages[0]`) and the `owner/repo` from
-`gh repo view --json nameWithOwner` at the start — this is what keeps the
-crate count in this skill from going stale the next time a crate is added.
+This is a **12-crate workspace** — `mif-core`, `mif-problem`, `mif-schema`,
+`mif-frontmatter`, `mif-ontology`, `mif-embed`, `mif-store`, `mif-rh`
+(libraries), `mif-cli`, `mif-mcp`, `mif-rh-cli`, `mif-rh-mcp` (binaries) —
+with **one shared version** (`version.workspace = true` on every member).
+A release ships every publishable crate together, at the same version
+number; there is no per-crate version skew. Names are never hardcoded:
+resolve the full package list from
+`cargo metadata --no-deps --format-version 1` (every `.packages[]`, never
+`.packages[0]`), the binary list from the same metadata
+(`.packages[].targets[] | select(.kind | index("bin")) | .name` — this is
+exactly how the workflows themselves resolve their matrices), and the
+`owner/repo` from `gh repo view --json nameWithOwner` at the start — this
+is what keeps the crate and binary counts in this skill from going stale
+the next time a crate is added.
 
 The pipeline this skill drives (all already wired in `.github/workflows/`):
 
 ```
 prep PR ──merge──> tag push ──┬─> release.yml  (test + audit gates → bin x platform
-                              │    matrix, 2 bins x 5 platforms → provenance + SBOM
+                              │    matrix, every [[bin]] target x 5 platforms
+                              │    (4 bins x 5 = 20 cells today) → provenance + SBOM
                               │    attestations → fail-closed verify → GitHub Release)
                               ├─> publish.yml  (pre-publish checks → crates.io
                               │    Trusted Publishing → download each registry
                               │    .crate → sha256 match → attest all)
-                              └─> pipeline.yml (container: build x2 (mif-cli,
-                                   mif-mcp) → central sign-and-attest x2 →
-                                   fail-closed verify x2)
-release.yml completion ─workflow_run─> package-homebrew.yml (formula update x2)
+                              └─> pipeline.yml (container: build per bin →
+                                   central sign-and-attest per bin →
+                                   fail-closed verify per bin)
+release.yml completion ─workflow_run─> package-homebrew.yml (formula update
+                                        per bin — CONDITIONAL, see Phase 4)
 ```
 
 ## Help / no argument
@@ -66,11 +73,12 @@ USAGE
 
 WHAT IT DOES
     prep PR (version locations) -> required-checks green -> squash merge
-    -> annotated tag -> monitors: attested binaries (mif-cli, mif-mcp x 5
-    platforms) + SBOM + fail-closed verify -> GitHub Release; crates.io
-    Trusted Publishing + .crate attestation for every publishable crate; attested
-    container images x2; Homebrew auto-update x2 -> independent
-    workstation verification of every artifact.
+    -> annotated tag -> monitors: attested binaries (every [[bin]] target
+    x 5 platforms) + SBOM + fail-closed verify -> GitHub Release; crates.io
+    Trusted Publishing + .crate attestation for every publishable crate;
+    attested container images (one per bin); Homebrew auto-update per bin
+    (only when the workflow is enabled AND the tap repo exists)
+    -> independent workstation verification of every artifact.
 
 NOTES
     - Publishing to crates.io is irreversible; versions are immutable.
@@ -81,11 +89,11 @@ NOTES
 ## Phase 0 — Preflight
 
 0. **Publication gate** — this project ships from `mif-rs`, where each
-   of the 9 crates' publication is controlled independently via an
+   of the 12 crates' publication is controlled independently via an
    optional `publish` line in `crates/<name>/Cargo.toml` (the workflows
    read this via `cargo metadata`; a crate with `publish = false` is
    excluded from `cargo publish --workspace` and from Homebrew updates).
-   None of the 9 crates sets this line today, so all are publishable by
+   None of the 12 crates sets this line today, so all are publishable by
    Cargo's default — a crate would only gain one if it needed
    restricting. This is
    separate from `pipeline.yml`'s `has-bin-target` gate, which is a single
@@ -134,7 +142,7 @@ locations (missing one ships inconsistent metadata):
 | `Cargo.toml` | `[workspace.package].version = "<X.Y.Z>"` — one line arms every crate, since every member uses `version.workspace = true` |
 | `Cargo.lock` | run `cargo check --workspace` after the Toml edit — never hand-edit |
 | `CHANGELOG.md` | insert `## [<X.Y.Z>] - <today>` under `## [Unreleased]`; update the `[Unreleased]:` compare link and add the new version's compare link at the bottom |
-| `SECURITY.md` | any `<bin>-<version>-<platform>` example versions, for both `mif-cli` and `mif-mcp` |
+| `SECURITY.md` | any `<bin>-<version>-<platform>` example versions, for every binary crate that appears |
 | `CITATION.cff` | if present: `version:` and `date-released:` — every occurrence |
 
 Validate locally before the PR: `cargo fmt --all -- --check` and
@@ -189,32 +197,49 @@ Four things run; watch all of them with the Monitor tool (one monitor,
 multiple conditions — report each as it lands):
 
 1. **Release run** (`release.yml`). Expect: Resolve Project Metadata,
-   Test, Cargo Audit, 10 × Build (`mif-cli` and `mif-mcp`, each across 5
-   platforms), SBOM (generate + attest, one combined SBOM covering every
-   binary), Verify Attestations, Create Release — all success.
+   Test, Cargo Audit, one Build job per (bin, platform) cell — every
+   `[[bin]]` target across 5 platforms, resolved from `cargo metadata`
+   (20 cells today: 4 bins x 5 platforms), SBOM (generate + attest, one
+   combined SBOM covering every binary), Verify Attestations, Create
+   Release — all success.
 2. **Publish run** (`publish.yml`). Expect: pre-publish checks, Trusted
    Publishing auth, a "Resolve unpublished members" step naming which of
-   the 9 crates are actually being published this run (already-live
+   the 12 crates are actually being published this run (already-live
    versions are skipped, not an error), `cargo publish`, then the
    crate-attestation steps ("Download published crates from registry"
    and "Attest crate provenance" — both now loop over every publishable
    crate, not one). Report these step conclusions explicitly, and which
    crates were skipped as already-published if this is a re-run.
 3. **Pipeline run** (`pipeline.yml`, container chain on the tag).
-   Expect: Docker build/push **x2** (`mif-cli`, `mif-mcp`), Sign and
-   Attest Image **x2** (central signer, matrixed per bin), Verify Image
-   Attestations **x2** — all success. The Trivy image-scan gate
+   Expect: Docker build/push, Sign and Attest Image (central signer), and
+   Verify Image Attestations, each **once per bin** (the matrix is
+   resolved dynamically from `cargo metadata` — 4 cells each today) — all
+   success. The Trivy image-scan gate
    (`gate-image`/`attest-container-scan`) runs **once**, against the
    first resolved bin only — this is deliberate (the org's
    `reusable-trivy.yml` uploads its SARIF under a fixed artifact name, so
-   a second matrix cell in the same run would collide; both images share
+   a second matrix cell in the same run would collide; all images share
    the same base image and dependency tree, so one scan is representative)
-   — do not treat a missing second Trivy run as a bug.
-4. **Homebrew run** (`package-homebrew.yml`) must appear **on its own**
-   after the Release run completes, via `workflow_run`, and matrix over
-   both bins (one formula update per bin). If no run appears within a few
-   minutes of Release success, the trigger regressed — fall back to
-   manual dispatch
+   — do not treat missing per-bin Trivy runs as a bug.
+4. **Homebrew run** (`package-homebrew.yml`) — **conditional, not
+   mandatory**. This chain only applies when BOTH hold:
+   - the workflow is enabled:
+     `gh api repos/<owner>/<repo>/actions/workflows/package-homebrew.yml --jq .state`
+     reports `active`, and
+   - the tap repo exists: `gh repo view <owner>/homebrew-tap` succeeds
+     (`HOMEBREW_TAP_REPO` overrides the name).
+
+   If either check fails — as of this writing the workflow is
+   `disabled_manually` and no tap repo exists — **skip this chain
+   cleanly**: do not wait for a run, do not dispatch one (dispatching a
+   disabled workflow 422s), and record "Homebrew: skipped (workflow
+   disabled / no tap repo)" in the final report. A missing run in that
+   state is expected, not a regression.
+
+   When both hold, a run must appear **on its own** after the Release run
+   completes, via `workflow_run`, and matrix over every bin (one formula
+   update per bin). If no run appears within a few minutes of Release
+   success, the trigger regressed — fall back to manual dispatch
    (`gh workflow run package-homebrew.yml -f version=<X.Y.Z> -f dry_run=false`)
    and investigate.
 
@@ -227,8 +252,8 @@ multiple conditions — report each as it lands):
 | Crate download step exhausts retries | static.crates.io CDN propagation | Re-run the failed job; the publish itself succeeded. The step re-checks every publishable crate, so a re-run doesn't re-publish anything already live. |
 | Crate sha256 mismatch (registry vs local package) for any crate | Should never happen — cargo packaging is deterministic per commit | Hard stop. Do not attest. Investigate before anything else. Report which specific crate(s) mismatched. |
 | Cargo Audit job fails | Real advisory in `Cargo.lock` | Fix the dependency (usually `cargo update -p <crate>`) via a normal PR, then start the release over at Phase 0. Note: cargo-deny may NOT have flagged it — deny analyzes the feature/target graph, audit scans the raw lockfile; an unreachable phantom lock entry trips audit only. Both gates are intentional; keep both. |
-| A build leg fails | Platform/toolchain issue for a specific (bin, platform) cell | The matrix is `mif-cli`/`mif-mcp` x 5 platforms: linux-amd64, linux-arm64 (`ubuntu-24.04-arm`), macos-arm64, macos-amd64 (cross-target on macos-latest), windows-amd64. Binaries build with **default features** (matches `cargo install`). Report which specific (bin, platform) cell failed, not just "a build leg." |
-| Release event didn't trigger Homebrew | Releases are authored by `github-actions[bot]`; bot events don't trigger workflows | The `workflow_run` trigger handles this; `head_branch` in the workflow_run payload IS the tag name for tag-triggered runs (verified empirically — and the payload has no `ref` field, whatever a reviewer may claim). |
+| A build leg fails | Platform/toolchain issue for a specific (bin, platform) cell | The matrix is every `[[bin]]` target (from `cargo metadata`) x 5 platforms: linux-amd64, linux-arm64 (`ubuntu-24.04-arm`), macos-arm64, macos-amd64 (cross-target on macos-latest), windows-amd64. Binaries build with **default features** (matches `cargo install`). Report which specific (bin, platform) cell failed, not just "a build leg." |
+| Release event didn't trigger Homebrew (only applies when the Homebrew chain is armed — see Phase 4 item 4) | Releases are authored by `github-actions[bot]`; bot events don't trigger workflows | The `workflow_run` trigger handles this; `head_branch` in the workflow_run payload IS the tag name for tag-triggered runs (verified empirically — and the payload has no `ref` field, whatever a reviewer may claim). |
 | Image verify fails on the tag run for a specific bin | Central signer/verify regression | Check the central repo pin in `pipeline.yml` (both `docker-sign`/`docker-verify` matrix cells reference the same SHA) and `references/platform-constraints.md` of the modeled-information-format skill before anything else. |
 
 ## Phase 5 — Independent workstation verification
@@ -237,12 +262,19 @@ In-pipeline success is necessary; this is the acceptance test. Run from
 the local machine, in a scratch dir:
 
 ```bash
-gh release download v<X.Y.Z> --repo <owner>/<repo>
-# Expect 13 assets: 10 binaries (mif-cli + mif-mcp x 5 platforms), one
-# combined mif-rs-<X.Y.Z>-sbom.cdx.json, one mif-rs-<X.Y.Z>-source.tar.gz,
-# one mif-rs-<X.Y.Z>-checksums.txt
+# Resolve the binary list once, from cargo metadata — never hardcode it
+# (the same query the workflows' own matrices use, so a newly added binary
+# crate is covered without editing this skill):
+BINS=$(cargo metadata --no-deps --format-version 1 \
+  | jq -r '[.packages[].targets[] | select(.kind | index("bin")) | .name] | unique | .[]')
 
-for BIN in mif-cli mif-mcp; do
+gh release download v<X.Y.Z> --repo <owner>/<repo>
+# Expect (<bin count> x 5) + 3 assets: one binary per (bin, platform) cell,
+# plus one combined mif-rs-<X.Y.Z>-sbom.cdx.json, one
+# mif-rs-<X.Y.Z>-source.tar.gz, one mif-rs-<X.Y.Z>-checksums.txt.
+# (23 today: 4 bins x 5 platforms + 3.)
+
+for BIN in $BINS; do
   for PLATFORM in linux-amd64 linux-arm64 macos-arm64 macos-amd64 windows-amd64.exe; do
     f="${BIN}-<X.Y.Z>-${PLATFORM}"
     gh attestation verify "$f" --repo <owner>/<repo>                  # provenance
@@ -265,9 +297,10 @@ for NAME in $(cargo metadata --no-deps --format-version 1 \
     | jq -r .crate.max_version
 done
 
-# Container images (digest per bin from the pipeline run's docker job outputs —
-# release-docker.yml's image-digests output is a JSON object keyed by bin name):
-for BIN in mif-cli mif-mcp; do
+# Container images — one per bin, same $BINS list as above (digest per bin
+# from the pipeline run's docker job outputs — release-docker.yml's
+# image-digests output is a JSON object keyed by bin name):
+for BIN in $BINS; do
   gh attestation verify "oci://ghcr.io/<owner>/<repo>/${BIN}@<digest-for-this-bin>" \
     --repo <owner>/<repo> \
     --signer-workflow <owner>/.github/.github/workflows/sign-and-attest.yml \
@@ -284,8 +317,10 @@ need `--signer-workflow`: they are signed by the central workflow.
 ## Final report
 
 Summarize for the user: version, merge commit, tag; per-channel status
-(GitHub Release / crates.io **per crate**, every publishable crate / container images
-**per bin**, both / Homebrew **per bin**, both); workstation verification
+(GitHub Release / crates.io **per crate**, every publishable crate /
+container images **per bin**, every bin / Homebrew **per bin** when the
+chain is armed, or an explicit "skipped: workflow disabled / no tap repo"
+line when it is not — see Phase 4 item 4); workstation verification
 results; and anything from the failure playbook that fired. If any
 channel is incomplete, say exactly what is pending, which specific
 crate/bin it affects, and what unblocks it.
