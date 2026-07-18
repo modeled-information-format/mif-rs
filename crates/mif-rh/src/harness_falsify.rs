@@ -27,10 +27,12 @@ const DEFAULT_BASIS: &str = "Adversarial queries executed; no disconfirming evid
 /// The result of one [`falsify`] call.
 ///
 /// Carries the (possibly updated) finding, and the exact operator-facing
-/// log line the original script emits to stderr (either a
-/// `"falsification-gate: run (...)"` or a
-/// `"falsification-gate: skipped (...)"` line — callers assert on this
-/// exact text to prove the gate ran exactly once per session).
+/// log line the original script emits to stderr (a
+/// `"falsification-gate: run (...)"`, `"falsification-gate: skipped (...)"`,
+/// or — when the caller forces a re-grade with `regate` — a
+/// `"falsification-gate: regated (...)"` line; callers assert on this exact
+/// text to prove the gate ran exactly once per session, or that a `regate`
+/// override genuinely re-graded an already-graded finding).
 #[derive(Debug, Clone)]
 pub struct FalsifyResult {
     /// The finding JSON, updated with a verdict unless the one-round rule
