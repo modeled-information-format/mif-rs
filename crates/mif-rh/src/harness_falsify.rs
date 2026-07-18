@@ -6,7 +6,9 @@
 //! consults an offline evidence fixture keyed by finding `@id`, assigns an
 //! ordinal verdict, and writes it back into
 //! `extensions.harness.verification` — never re-grading a finding that
-//! already carries a verdict from a prior round (the one-round rule).
+//! already carries a verdict from a prior round (the one-round rule),
+//! unless the caller explicitly opts into a `regate` override
+//! (issue #119) for that single invocation.
 
 use std::path::Path;
 
@@ -101,8 +103,9 @@ fn with_verification(finding: Value, verification: Value) -> Value {
 pub fn falsify(
     finding_path: &Path,
     fixture_path: Option<&Path>,
+    regate: bool,
 ) -> Result<FalsifyResult, MifRhError> {
-    falsify_with_now(finding_path, fixture_path, chrono::Utc::now())
+    falsify_with_now(finding_path, fixture_path, chrono::Utc::now(), regate)
 }
 
 /// Runs the falsification gate over `finding_path`, consulting
@@ -111,16 +114,26 @@ pub fn falsify(
 ///
 /// A finding that already carries `extensions.harness.verification.attempted_at`
 /// from a prior round is returned unchanged (the one-round rule — grading it
-/// again would never terminate). Otherwise an explicit fixture entry's
-/// verdict is recorded as-is, defaulting `attempted_at` to `now` when the
-/// fixture omits it (rather than a fixed placeholder — a fixture author
-/// forgetting the field should record the real grading time, not a value
-/// that reads as maximally stale to freshness projections); a finding with
-/// no fixture entry is recorded as a placeholder `inconclusive` (never a
-/// false `survived`) that omits `attempted_at` entirely, so a later real
-/// gate run can still overwrite it. `now` is a caller-supplied parameter
-/// (mirroring [`crate::resolve_membership`]'s `now`) rather than an internal
-/// clock call, so tests stay deterministic; [`falsify`] is the real-clock
+/// again would never terminate), **unless `regate` is `true`**, in which case
+/// the one-round short-circuit is bypassed for this single invocation only —
+/// every other invariant (fixture-keyed verdict lookup, the
+/// `extensions.harness.verification` merge shape) is unchanged. A finding
+/// that actually gets re-graded this way logs a distinct
+/// `"falsification-gate: regated (...)"` line rather than `"run"`, so a
+/// caller can assert a regate genuinely happened (issue #119) — a finding
+/// that was not already graded logs the ordinary `"run"` line regardless of
+/// `regate`, since there was nothing to override.
+///
+/// Otherwise an explicit fixture entry's verdict is recorded as-is,
+/// defaulting `attempted_at` to `now` when the fixture omits it (rather than
+/// a fixed placeholder — a fixture author forgetting the field should record
+/// the real grading time, not a value that reads as maximally stale to
+/// freshness projections); a finding with no fixture entry is recorded as a
+/// placeholder `inconclusive` (never a false `survived`) that omits
+/// `attempted_at` entirely, so a later real gate run can still overwrite it.
+/// `now` is a caller-supplied parameter (mirroring
+/// [`crate::resolve_membership`]'s `now`) rather than an internal clock
+/// call, so tests stay deterministic; [`falsify`] is the real-clock
 /// convenience wrapper most callers want.
 ///
 /// # Errors
@@ -131,6 +144,7 @@ pub fn falsify_with_now(
     finding_path: &Path,
     fixture_path: Option<&Path>,
     now: chrono::DateTime<chrono::Utc>,
+    regate: bool,
 ) -> Result<FalsifyResult, MifRhError> {
     let finding = read_json(finding_path)?;
     let id = finding
@@ -139,12 +153,14 @@ pub fn falsify_with_now(
         .unwrap_or("")
         .to_string();
 
-    if already_graded(&finding) {
+    let was_already_graded = already_graded(&finding);
+    if was_already_graded && !regate {
         return Ok(FalsifyResult {
             finding,
             log_line: format!("falsification-gate: skipped (already falsified this session): {id}"),
         });
     }
+    let regated = was_already_graded && regate;
 
     let entry = fixture_entry(fixture_path, &id);
     let explicit_verdict = entry
@@ -196,9 +212,14 @@ pub fn falsify_with_now(
     }
 
     let updated = with_verification(finding, Value::Object(verification));
+    let log_line = if regated {
+        format!("falsification-gate: regated ({id} -> {verdict})")
+    } else {
+        format!("falsification-gate: run ({id} -> {verdict})")
+    };
     Ok(FalsifyResult {
         finding: updated,
-        log_line: format!("falsification-gate: run ({id} -> {verdict})"),
+        log_line,
     })
 }
 
@@ -224,7 +245,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let finding = write(dir.path(), "f.json", r#"{"@id": "urn:mif:f1"}"#);
 
-        let result = falsify_with_now(&finding, None, now()).unwrap();
+        let result = falsify_with_now(&finding, None, now(), false).unwrap();
         assert_eq!(
             result.finding["extensions"]["harness"]["verification"]["verdict"],
             "inconclusive"
@@ -250,7 +271,7 @@ mod tests {
             r#"{"urn:mif:f1": {"verdict": "falsified", "basis": "contradicted", "attempted_at": "2026-01-01T00:00:00Z", "disconfirming": ["https://example.com"]}}"#,
         );
 
-        let result = falsify_with_now(&finding, Some(&fixture), now()).unwrap();
+        let result = falsify_with_now(&finding, Some(&fixture), now(), false).unwrap();
         let verification = &result.finding["extensions"]["harness"]["verification"];
         assert_eq!(verification["verdict"], "falsified");
         assert_eq!(verification["verdict_basis"], "contradicted");
@@ -276,7 +297,7 @@ mod tests {
             r#"{"urn:mif:f1": {"verdict": "survived", "basis": "no contradicting evidence found"}}"#,
         );
 
-        let result = falsify_with_now(&finding, Some(&fixture), now()).unwrap();
+        let result = falsify_with_now(&finding, Some(&fixture), now(), false).unwrap();
         let verification = &result.finding["extensions"]["harness"]["verification"];
         assert_eq!(verification["verdict"], "survived");
         assert_eq!(verification["attempted_at"], "2026-06-01T00:00:00Z");
@@ -296,7 +317,7 @@ mod tests {
 
         let before: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&finding).unwrap()).unwrap();
-        let result = falsify_with_now(&finding, None, now()).unwrap();
+        let result = falsify_with_now(&finding, None, now(), false).unwrap();
         assert_eq!(result.finding, before);
         assert_eq!(
             result.log_line,
@@ -313,7 +334,7 @@ mod tests {
             r#"{"@id": "urn:mif:f1", "title": "keep me", "extensions": {"other": "keep too"}}"#,
         );
 
-        let result = falsify_with_now(&finding, None, now()).unwrap();
+        let result = falsify_with_now(&finding, None, now(), false).unwrap();
         assert_eq!(result.finding["title"], "keep me");
         assert_eq!(result.finding["extensions"]["other"], "keep too");
         assert_eq!(
@@ -324,8 +345,55 @@ mod tests {
 
     #[test]
     fn errors_on_a_missing_finding_file() {
-        let error =
-            falsify_with_now(std::path::Path::new("/no/such/file.json"), None, now()).unwrap_err();
+        let error = falsify_with_now(
+            std::path::Path::new("/no/such/file.json"),
+            None,
+            now(),
+            false,
+        )
+        .unwrap_err();
         assert!(matches!(error, super::MifRhError::Io { .. }));
+    }
+
+    #[test]
+    fn regate_bypasses_the_one_round_rule_and_logs_a_distinct_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let finding = write(
+            dir.path(),
+            "f.json",
+            r#"{"@id": "urn:mif:f1", "extensions": {"harness": {"verification": {
+                "verdict": "survived", "verdict_basis": "x", "attempted_at": "2026-01-01T00:00:00Z"
+            }}}}"#,
+        );
+        let fixture = write(
+            dir.path(),
+            "evidence.json",
+            r#"{"urn:mif:f1": {"verdict": "falsified", "basis": "new disconfirming evidence"}}"#,
+        );
+
+        let result = falsify_with_now(&finding, Some(&fixture), now(), true).unwrap();
+        let verification = &result.finding["extensions"]["harness"]["verification"];
+        assert_eq!(verification["verdict"], "falsified");
+        assert_eq!(verification["verdict_basis"], "new disconfirming evidence");
+        assert_eq!(verification["attempted_at"], "2026-06-01T00:00:00Z");
+        assert_eq!(
+            result.log_line,
+            "falsification-gate: regated (urn:mif:f1 -> falsified)"
+        );
+    }
+
+    #[test]
+    fn regate_on_a_finding_never_graded_logs_the_ordinary_run_line() {
+        // regate=true has nothing to override when the finding was never
+        // graded in the first place -- it should behave identically to a
+        // plain run, not fabricate a "regated" line.
+        let dir = tempfile::tempdir().unwrap();
+        let finding = write(dir.path(), "f.json", r#"{"@id": "urn:mif:f1"}"#);
+
+        let result = falsify_with_now(&finding, None, now(), true).unwrap();
+        assert_eq!(
+            result.log_line,
+            "falsification-gate: run (urn:mif:f1 -> inconclusive)"
+        );
     }
 }
