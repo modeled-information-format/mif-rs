@@ -720,6 +720,14 @@ enum HarnessCommand {
         /// The evidence fixture (JSON object keyed by finding `@id`); omit
         /// for a placeholder `inconclusive` verdict.
         fixture: Option<PathBuf>,
+        /// Bypass the one-round rule for this single invocation and force a
+        /// re-grade of a finding that already carries a verdict (issue #119)
+        /// — logs a distinct `falsification-gate: regated (...)` line
+        /// instead of `run`/`skipped` so a caller can assert a regate
+        /// genuinely happened. Has no effect on a finding that was never
+        /// graded in the first place.
+        #[arg(long)]
+        regate: bool,
     },
     /// Corpus-wide relationship-target integrity gate: every
     /// `relationships[].target` in the active corpus must resolve to a
@@ -1459,9 +1467,11 @@ fn harness_cmd(action: &HarnessCommand) -> Result<Outcome, CliError> {
         HarnessCommand::CheckShippableTyping { reports_dir } => {
             harness_check_shippable_typing_cmd(reports_dir)
         },
-        HarnessCommand::Falsify { finding, fixture } => {
-            harness_falsify_cmd(finding, fixture.as_deref())
-        },
+        HarnessCommand::Falsify {
+            finding,
+            fixture,
+            regate,
+        } => harness_falsify_cmd(finding, fixture.as_deref(), *regate),
         HarnessCommand::CheckRelationshipTargets { reports_dir } => {
             harness_check_relationship_targets_cmd(reports_dir)
         },
@@ -1552,8 +1562,9 @@ fn harness_check_shippable_typing_cmd(reports_dir: &Path) -> Result<Outcome, Cli
 fn harness_falsify_cmd(
     finding_path: &Path,
     fixture_path: Option<&Path>,
+    regate: bool,
 ) -> Result<Outcome, CliError> {
-    let result = mif_rh::falsify(finding_path, fixture_path)?;
+    let result = mif_rh::falsify(finding_path, fixture_path, regate)?;
     // The log line is a direct stderr side effect, not part of the Outcome:
     // callers redirect stdout (the finding JSON) and stderr (this line) to
     // separate destinations and assert on each independently.
@@ -3790,21 +3801,59 @@ mod tests {
     }
 
     #[test]
-    fn falsify_cmd_writes_a_placeholder_inconclusive_verdict_and_logs_the_run_line() {
+    fn falsify_cmd_writes_a_placeholder_inconclusive_verdict() {
+        // Only the JSON returned via `Outcome::message` is asserted here.
+        // `harness_falsify_cmd`'s log line is a direct `eprintln!` stderr
+        // side effect (see its doc comment), not something this outcome
+        // exposes to capture -- the log-line text itself is covered at the
+        // library level by `mif_rh::harness_falsify`'s own unit tests.
         let dir = tempfile::tempdir().unwrap();
         let finding = dir.path().join("f.json");
         fs::write(&finding, r#"{"@id":"urn:mif:f1"}"#).unwrap();
 
-        let outcome = harness_falsify_cmd(&finding, None).unwrap();
+        let outcome = harness_falsify_cmd(&finding, None, false).unwrap();
         assert_eq!(outcome.exit_code, 0);
         assert!(outcome.message.contains("\"inconclusive\""));
     }
 
     #[test]
     fn falsify_cmd_errors_on_a_missing_finding_file() {
-        let error =
-            harness_falsify_cmd(std::path::Path::new("/no/such/file.json"), None).unwrap_err();
+        let error = harness_falsify_cmd(std::path::Path::new("/no/such/file.json"), None, false)
+            .unwrap_err();
         assert!(matches!(error, mif_rh::MifRhError::Io { .. }));
+    }
+
+    #[test]
+    fn falsify_cmd_regate_forces_a_regrade() {
+        // Regression coverage for issue #119: --regate must thread through
+        // the CLI and bypass the one-round short-circuit for a single
+        // invocation, producing a changed verdict. The distinct "regated"
+        // log line this bypass emits is a direct `eprintln!` stderr side
+        // effect this outcome does not expose to capture; it is asserted on
+        // directly at the library level by
+        // `mif_rh::harness_falsify::tests::regate_bypasses_the_one_round_rule_and_logs_a_distinct_line`.
+        let dir = tempfile::tempdir().unwrap();
+        let finding = dir.path().join("f.json");
+        fs::write(
+            &finding,
+            r#"{"@id":"urn:mif:f1","extensions":{"harness":{"verification":{
+                "verdict":"survived","verdict_basis":"x","attempted_at":"2026-01-01T00:00:00Z"
+            }}}}"#,
+        )
+        .unwrap();
+        let fixture = dir.path().join("evidence.json");
+        fs::write(
+            &fixture,
+            r#"{"urn:mif:f1": {"verdict": "falsified", "basis": "new disconfirming evidence"}}"#,
+        )
+        .unwrap();
+
+        let without_regate = harness_falsify_cmd(&finding, Some(&fixture), false).unwrap();
+        assert!(without_regate.message.contains("\"survived\""));
+
+        let outcome = harness_falsify_cmd(&finding, Some(&fixture), true).unwrap();
+        assert_eq!(outcome.exit_code, 0);
+        assert!(outcome.message.contains("\"falsified\""));
     }
 
     fn write_concordance_fixture(

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`mif-rh`**/**`mif-rh-cli`**: `harness_falsify`'s one-round rule gains an explicit `regate` override — `falsify`/`falsify_with_now` take a new `regate: bool` parameter, and `mif-rh-cli harness falsify` gains a `--regate` flag — that bypasses `already_graded()`'s short-circuit for a single invocation and force-regrades a finding that already carries a verdict, logging a distinct `falsification-gate: regated (...)` line (parallel to the existing `run`/`skipped` lines) rather than silently skipping. A finding that was never graded behaves identically whether or not `regate` is set. **Breaking** for direct callers of `mif_rh::falsify`/`falsify_with_now`: pass `false` to keep prior behavior (#119).
+
 ### Fixed
 
 - **`mif-rh`**: `topic_metadata` (backing `mif-rh-cli harness topic-metadata`) no longer emits a `TITLE` with leading/trailing whitespace — a registered title carrying an upstream 80-character cutoff's trailing space (which landed in the generated README's H1 and failed markdownlint MD009) is trimmed on read, and a title over the 80-character budget is now truncated on a word boundary with a `…` marker so truncated titles stay distinguishable. A title that is absent or sanitizes to nothing (e.g. a whitespace-only value) falls back to the topic id rather than blanking the README H1 (#86).
