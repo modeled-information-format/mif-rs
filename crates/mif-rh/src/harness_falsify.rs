@@ -130,10 +130,15 @@ pub fn falsify(
 /// defaulting `attempted_at` to `now` when the fixture omits it (rather than
 /// a fixed placeholder — a fixture author forgetting the field should record
 /// the real grading time, not a value that reads as maximally stale to
-/// freshness projections); a finding with no fixture entry is recorded as a
-/// placeholder `inconclusive` (never a false `survived`) that omits
-/// `attempted_at` entirely, so a later real gate run can still overwrite it.
-/// `now` is a caller-supplied parameter (mirroring
+/// freshness projections); a finding with no fixture entry **that was not
+/// already graded** is recorded as a placeholder `inconclusive` (never a
+/// false `survived`) that omits `attempted_at` entirely, so a later real
+/// gate run can still overwrite it. A `regate` that produces this same
+/// no-fixture-entry placeholder is the one exception: `attempted_at` is
+/// still recorded, because the finding was already graded going into this
+/// call — omitting it would defeat the one-round guard by making
+/// `already_graded` read the finding as never-graded, letting a later
+/// *non*-regate call re-grade it again. `now` is a caller-supplied parameter (mirroring
 /// [`crate::resolve_membership`]'s `now`) rather than an internal clock
 /// call, so tests stay deterministic; [`falsify`] is the real-clock
 /// convenience wrapper most callers want.
@@ -209,7 +214,17 @@ pub fn falsify_with_now(
         "disconfirming_evidence".to_string(),
         Value::Array(disconfirming),
     );
-    if !placeholder {
+    // A `regated` finding was already graded before this call, so it must
+    // stay graded afterward — recording `attempted_at` even when this
+    // regate produced a placeholder (no fixture entry) verdict. Without
+    // this, `already_graded()` (which keys solely on `attempted_at`) would
+    // read this finding as never-graded, defeating the one-round guard: a
+    // later *non*-regate call would silently re-grade it again, exactly the
+    // repeated-grading the one-round rule exists to prevent. A finding that
+    // was never graded before this call keeps the placeholder-omits-
+    // `attempted_at` behavior, so a later real fixture-backed run can still
+    // overwrite it.
+    if !placeholder || regated {
         verification.insert("attempted_at".to_string(), Value::String(attempted_at));
     }
 
@@ -396,6 +411,46 @@ mod tests {
         assert_eq!(
             result.log_line,
             "falsification-gate: run (urn:mif:f1 -> inconclusive)"
+        );
+    }
+
+    #[test]
+    fn regate_with_no_fixture_entry_still_records_attempted_at_to_keep_the_one_round_guard() {
+        // Regression for a review finding on #120: regate-ing an
+        // already-graded finding against a fixture that has no entry for it
+        // (or no fixture at all) produces the same placeholder `inconclusive`
+        // verdict as a fresh, never-graded finding would. Unlike that fresh
+        // case, this finding was ALREADY graded going into this call --
+        // `attempted_at` must still be recorded, or `already_graded()` would
+        // read it as never-graded and let a later non-regate call re-grade
+        // it again, defeating the one-round rule the whole feature exists to
+        // preserve exactly once past.
+        let dir = tempfile::tempdir().unwrap();
+        let finding = write(
+            dir.path(),
+            "f.json",
+            r#"{"@id": "urn:mif:f1", "extensions": {"harness": {"verification": {
+                "verdict": "survived", "verdict_basis": "x", "attempted_at": "2026-01-01T00:00:00Z"
+            }}}}"#,
+        );
+
+        let regated = falsify_with_now(&finding, None, now(), true).unwrap();
+        let verification = &regated.finding["extensions"]["harness"]["verification"];
+        assert_eq!(verification["verdict"], "inconclusive");
+        assert_eq!(verification["attempted_at"], "2026-06-01T00:00:00Z");
+        assert_eq!(
+            regated.log_line,
+            "falsification-gate: regated (urn:mif:f1 -> inconclusive)"
+        );
+
+        // The guard must hold afterward: write the regated result back out
+        // and confirm a subsequent non-regate call skips it, not re-grades.
+        fs::write(&finding, serde_json::to_string(&regated.finding).unwrap()).unwrap();
+        let after = falsify_with_now(&finding, None, now(), false).unwrap();
+        assert_eq!(after.finding, regated.finding);
+        assert_eq!(
+            after.log_line,
+            "falsification-gate: skipped (already falsified this session): urn:mif:f1"
         );
     }
 }

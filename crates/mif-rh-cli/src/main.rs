@@ -3801,7 +3801,12 @@ mod tests {
     }
 
     #[test]
-    fn falsify_cmd_writes_a_placeholder_inconclusive_verdict_and_logs_the_run_line() {
+    fn falsify_cmd_writes_a_placeholder_inconclusive_verdict() {
+        // Only the JSON returned via `Outcome::message` is asserted here.
+        // `harness_falsify_cmd`'s log line is a direct `eprintln!` stderr
+        // side effect (see its doc comment), not something this outcome
+        // exposes to capture -- the log-line text itself is covered at the
+        // library level by `mif_rh::harness_falsify`'s own unit tests.
         let dir = tempfile::tempdir().unwrap();
         let finding = dir.path().join("f.json");
         fs::write(&finding, r#"{"@id":"urn:mif:f1"}"#).unwrap();
@@ -3819,10 +3824,14 @@ mod tests {
     }
 
     #[test]
-    fn falsify_cmd_regate_forces_a_regrade_and_logs_the_regated_line() {
-        // Regression coverage for issue #119: --regate must bypass the
-        // one-round short-circuit for a single invocation and surface a
-        // distinct "regated" line a caller can assert on.
+    fn falsify_cmd_regate_forces_a_regrade() {
+        // Regression coverage for issue #119: --regate must thread through
+        // the CLI and bypass the one-round short-circuit for a single
+        // invocation, producing a changed verdict. The distinct "regated"
+        // log line this bypass emits is a direct `eprintln!` stderr side
+        // effect this outcome does not expose to capture; it is asserted on
+        // directly at the library level by
+        // `mif_rh::harness_falsify::tests::regate_bypasses_the_one_round_rule_and_logs_a_distinct_line`.
         let dir = tempfile::tempdir().unwrap();
         let finding = dir.path().join("f.json");
         fs::write(
