@@ -74,7 +74,7 @@ jobs:
       actions: read
     # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-scorecard.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
+      modeled-information-format/.github/.github/workflows/reusable-scorecard.yml@667ee7b3bc93a8789c65cb9b4fedc6d827fcd36a
     secrets:
       app-private-key: ${{ secrets.CI_CLIENT_APP_PRIVATE_KEY }}
 
