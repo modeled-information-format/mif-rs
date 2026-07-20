@@ -2,7 +2,7 @@
 # The :tag is kept alongside the digest for human readability; Dependabot's
 # docker ecosystem keeps the digest fresh. Refresh with:
 #   docker buildx imagetools inspect <image> --format '{{.Manifest.Digest}}'
-FROM rust:1.97-slim@sha256:14c4fe50ea427dc42381a1a09a9a839c1d2346a2e508cd491bf02c659dbc0ed7 AS chef
+FROM rust:1.97-slim@sha256:5c6f46a6e4472ab1ca7ba7d494e6677f2f219ebc02f32025d3986f057635ec9c AS chef
 RUN cargo install cargo-chef --locked --version 0.1.77
 WORKDIR /app
 
