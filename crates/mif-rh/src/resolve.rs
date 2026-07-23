@@ -163,6 +163,46 @@ fn chain_reaches(
     Ok(chain.iter().any(|resolved| resolved.id == target))
 }
 
+/// The `(allowed packs, direct bound ids, extends metadata map)` triple
+/// [`build_allowed_with_context`] returns — named to keep its signature
+/// under clippy's `type_complexity` threshold.
+type AllowedWithContext<'a> = (
+    Vec<&'a OntologyPack>,
+    HashSet<String>,
+    HashMap<String, mif_ontology::OntologyMetadata>,
+);
+
+/// [`build_allowed`]'s actual work, additionally returning the
+/// `direct_bound_ids`/`extends_metadata_map` intermediates it computed
+/// along the way, so a caller that also needs the declared-`ontology.id`
+/// acceptance check (see [`resolve_finding`]) can reuse them instead of
+/// recomputing both from scratch via a second `direct_bound_ids`/
+/// `extends_metadata_map` call.
+///
+/// # Errors
+///
+/// Same as [`build_allowed`].
+fn build_allowed_with_context<'a>(
+    ctx: &ResolveContext<'a>,
+) -> Result<AllowedWithContext<'a>, MifRhError> {
+    let direct_ids = direct_bound_ids(ctx)?;
+    let metadata_map = extends_metadata_map(ctx);
+
+    let mut allowed_ids: HashSet<String> = HashSet::new();
+    for id in &direct_ids {
+        let chain = mif_ontology::resolve_chain(id, &metadata_map)?;
+        allowed_ids.extend(chain.into_iter().map(|m| m.id));
+    }
+    allowed_ids.extend(direct_ids.iter().cloned());
+
+    let packs = allowed_ids
+        .iter()
+        .filter_map(|id| ctx.ontology_packs.get(id))
+        .collect();
+
+    Ok((packs, direct_ids, metadata_map))
+}
+
 /// Resolves the set of ontologies allowed for `ctx.topic`: every core
 /// ontology, every directly bound ontology (version-checked), and their
 /// transitive `extends` ancestors.
@@ -175,20 +215,7 @@ fn chain_reaches(
 /// for an allowed ontology fails (a missing ancestor or an `extends`
 /// cycle).
 pub fn build_allowed<'a>(ctx: &ResolveContext<'a>) -> Result<Vec<&'a OntologyPack>, MifRhError> {
-    let direct_ids = direct_bound_ids(ctx)?;
-    let metadata_map = extends_metadata_map(ctx);
-
-    let mut allowed_ids: HashSet<String> = HashSet::new();
-    for id in &direct_ids {
-        let chain = mif_ontology::resolve_chain(id, &metadata_map)?;
-        allowed_ids.extend(chain.into_iter().map(|m| m.id));
-    }
-    allowed_ids.extend(direct_ids);
-
-    Ok(allowed_ids
-        .iter()
-        .filter_map(|id| ctx.ontology_packs.get(id))
-        .collect())
+    build_allowed_with_context(ctx).map(|(packs, _, _)| packs)
 }
 
 fn discovery_classify(finding: &Finding, allowed: &[&OntologyPack]) -> MapRecord {
@@ -326,7 +353,7 @@ pub fn resolve_finding(
         return Ok(unresolved(&finding.id, None));
     };
 
-    let allowed = build_allowed(ctx)?;
+    let (allowed, direct_ids, metadata_map) = build_allowed_with_context(ctx)?;
     let matches: Vec<(&OntologyPack, &crate::ontology_pack::EntityType)> = allowed
         .iter()
         .filter_map(|pack| {
@@ -354,9 +381,9 @@ pub fn resolve_finding(
                     // reaches the pack that declares this entity type. The
                     // `oid == pack.id` case is subsumed by `chain_reaches`
                     // for free (see its doc comment) — no separate
-                    // fast-path branch needed.
-                    let direct_ids = direct_bound_ids(ctx)?;
-                    let metadata_map = extends_metadata_map(ctx);
+                    // fast-path branch needed. `direct_ids`/`metadata_map`
+                    // are already the ones `build_allowed_with_context`
+                    // computed above; no need to recompute them here.
                     let accepted =
                         direct_ids.contains(oid) && chain_reaches(oid, &pack.id, &metadata_map)?;
                     if accepted {
