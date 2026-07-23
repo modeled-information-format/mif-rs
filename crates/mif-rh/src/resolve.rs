@@ -190,10 +190,12 @@ fn build_allowed_with_context<'a>(
 
     let mut allowed_ids: HashSet<String> = HashSet::new();
     for id in &direct_ids {
+        // `resolve_chain` always includes `id`'s own metadata last in the
+        // returned chain, so every direct id is already covered here —
+        // no separate `allowed_ids.extend(direct_ids...)` pass is needed.
         let chain = mif_ontology::resolve_chain(id, &metadata_map)?;
         allowed_ids.extend(chain.into_iter().map(|m| m.id));
     }
-    allowed_ids.extend(direct_ids.iter().cloned());
 
     let packs = allowed_ids
         .iter()
