@@ -87,18 +87,19 @@ pub struct ResolveContext<'a> {
     pub ontology_packs: &'a HashMap<String, OntologyPack>,
 }
 
-/// Resolves the set of ontologies allowed for `ctx.topic`: every core
-/// ontology, every directly bound ontology (version-checked), and their
-/// transitive `extends` ancestors.
+/// The topic's *directly* bound ontology ids: every core catalog id, plus
+/// the topic's own `topic_bindings` (version-checked). Deliberately **not**
+/// closed over `extends` ancestors — this is the set an explicit
+/// `ontology.id` must be a member of per `resolve-ontology.sh`'s own
+/// contract ("an ontology.id outside the topic's bound set -> non-zero"),
+/// as distinct from [`build_allowed`]'s extends-closed set of types a
+/// finding may actually resolve *against*.
 ///
 /// # Errors
 ///
 /// Returns [`MifRhError::DirectBindingInvalid`] if a topic binding names an
-/// uncataloged ontology or pins a version that does not match the
-/// catalog, or [`MifRhError::Ontology`] if resolving the `extends` chain
-/// for an allowed ontology fails (a missing ancestor or an `extends`
-/// cycle).
-pub fn build_allowed<'a>(ctx: &ResolveContext<'a>) -> Result<Vec<&'a OntologyPack>, MifRhError> {
+/// uncataloged ontology or pins a version that does not match the catalog.
+fn direct_bound_ids(ctx: &ResolveContext<'_>) -> Result<HashSet<String>, MifRhError> {
     let mut direct_ids: HashSet<String> = ctx.catalog.core_ids().map(str::to_string).collect();
 
     for binding in ctx.config.topic_bindings(ctx.topic) {
@@ -120,8 +121,15 @@ pub fn build_allowed<'a>(ctx: &ResolveContext<'a>) -> Result<Vec<&'a OntologyPac
         direct_ids.insert(binding.id);
     }
 
-    let metadata_map: HashMap<String, mif_ontology::OntologyMetadata> = ctx
-        .ontology_packs
+    Ok(direct_ids)
+}
+
+/// Builds the `pack.id -> OntologyMetadata` map [`mif_ontology::resolve_chain`]
+/// needs, from every loaded ontology pack.
+fn extends_metadata_map(
+    ctx: &ResolveContext<'_>,
+) -> HashMap<String, mif_ontology::OntologyMetadata> {
+    ctx.ontology_packs
         .values()
         .map(|pack| {
             (
@@ -134,7 +142,41 @@ pub fn build_allowed<'a>(ctx: &ResolveContext<'a>) -> Result<Vec<&'a OntologyPac
                 },
             )
         })
-        .collect();
+        .collect()
+}
+
+/// Whether `target` is `oid` itself or reachable from `oid` via its
+/// `extends` chain. [`mif_ontology::resolve_chain`] returns the chain in
+/// base-to-specific order with `oid`'s own metadata last, so this subsumes
+/// the `oid == target` case for free — no separate equality check needed.
+///
+/// # Errors
+///
+/// Returns [`MifRhError::Ontology`] if resolving `oid`'s `extends` chain
+/// fails (a missing ancestor or an `extends` cycle).
+fn chain_reaches(
+    oid: &str,
+    target: &str,
+    metadata_map: &HashMap<String, mif_ontology::OntologyMetadata>,
+) -> Result<bool, MifRhError> {
+    let chain = mif_ontology::resolve_chain(oid, metadata_map)?;
+    Ok(chain.iter().any(|resolved| resolved.id == target))
+}
+
+/// Resolves the set of ontologies allowed for `ctx.topic`: every core
+/// ontology, every directly bound ontology (version-checked), and their
+/// transitive `extends` ancestors.
+///
+/// # Errors
+///
+/// Returns [`MifRhError::DirectBindingInvalid`] if a topic binding names an
+/// uncataloged ontology or pins a version that does not match the
+/// catalog, or [`MifRhError::Ontology`] if resolving the `extends` chain
+/// for an allowed ontology fails (a missing ancestor or an `extends`
+/// cycle).
+pub fn build_allowed<'a>(ctx: &ResolveContext<'a>) -> Result<Vec<&'a OntologyPack>, MifRhError> {
+    let direct_ids = direct_bound_ids(ctx)?;
+    let metadata_map = extends_metadata_map(ctx);
 
     let mut allowed_ids: HashSet<String> = HashSet::new();
     for id in &direct_ids {
@@ -302,10 +344,27 @@ pub fn resolve_finding(
         1 => {
             let (pack, def) = matches[0];
             match declared_ontology_id {
-                Some(oid) if oid != pack.id => {
-                    return Ok(unresolved(&finding.id, Some(entity_type)));
+                Some(oid) => {
+                    // Accept only when `oid` is one of the topic's directly
+                    // bound ontologies (never a same-id equality check
+                    // alone — an un-bound base layer named directly, e.g.
+                    // `ontology.id: engineering-base`, must NOT resolve
+                    // just because it happens to equal the declaring
+                    // pack's id) AND `oid`'s own `extends` chain actually
+                    // reaches the pack that declares this entity type. The
+                    // `oid == pack.id` case is subsumed by `chain_reaches`
+                    // for free (see its doc comment) — no separate
+                    // fast-path branch needed.
+                    let direct_ids = direct_bound_ids(ctx)?;
+                    let metadata_map = extends_metadata_map(ctx);
+                    let accepted =
+                        direct_ids.contains(oid) && chain_reaches(oid, &pack.id, &metadata_map)?;
+                    if accepted {
+                        (pack, def, Basis::Declared)
+                    } else {
+                        return Ok(unresolved(&finding.id, Some(entity_type)));
+                    }
                 },
-                Some(_) => (pack, def, Basis::Declared),
                 None => (pack, def, Basis::Resolved),
             }
         },
@@ -674,5 +733,106 @@ discovery:
             error,
             super::MifRhError::DirectBindingInvalid { .. }
         ));
+    }
+
+    /// Two-pack `extends` fixture matching issue #135's repro: `base`
+    /// declares an entity type and has no `extends` of its own; `descendant`
+    /// extends `[base]` and declares no entity types of its own, relying on
+    /// the chain. Only `descendant` is bound to the `"eng"` topic — `base`
+    /// is a shared layer reached solely via the chain, exactly like
+    /// `engineering-base`/`software-engineering` in the real corpus.
+    fn extends_chain_setup() -> (
+        HashMap<String, crate::ontology_pack::OntologyPack>,
+        Catalog,
+        HarnessConfig,
+    ) {
+        let mut packs = HashMap::new();
+        packs.insert(
+            "base".to_string(),
+            parse_pack(
+                "ontology:\n  id: base\n  version: \"0.1.0\"\nentity_types:\n  - name: decision\n    schema: {}\n",
+                "base.yaml",
+            )
+            .unwrap(),
+        );
+        packs.insert(
+            "descendant".to_string(),
+            parse_pack(
+                "ontology:\n  id: descendant\n  version: \"0.1.0\"\n  extends: [base]\nentity_types: []\n",
+                "descendant.yaml",
+            )
+            .unwrap(),
+        );
+        let catalog = Catalog {
+            ontologies: vec![
+                CatalogEntry {
+                    id: "base".to_string(),
+                    version: "0.1.0".to_string(),
+                    source: None,
+                    core: false,
+                },
+                CatalogEntry {
+                    id: "descendant".to_string(),
+                    version: "0.1.0".to_string(),
+                    source: None,
+                    core: false,
+                },
+            ],
+        };
+        let config = HarnessConfig {
+            topics: vec![TopicConfig {
+                id: "eng".to_string(),
+                // Only the descendant is bound directly — `base` is reached
+                // solely through `descendant`'s `extends` chain, never
+                // bound to the topic itself.
+                ontologies: vec!["descendant".to_string()],
+            }],
+        };
+        (packs, catalog, config)
+    }
+
+    #[test]
+    fn extends_chain_type_resolves_via_topic_bound_descendant_id() {
+        let (packs, catalog, config) = extends_chain_setup();
+        let ctx = ctx_fixture(&packs, &catalog, &config, "eng");
+        let finding = finding_from_json(json!({
+            "@id": "f-extends-declared",
+            "entity": {"entity_type": "decision"},
+            "ontology": {"id": "descendant"}
+        }));
+
+        let record = resolve_finding(&finding, &ctx).unwrap();
+        assert_eq!(record.basis, Basis::Declared);
+        assert!(record.valid);
+        // Load-bearing: `resolved_ontology` names the pack that actually
+        // DECLARES the schema (`base`), never the pinned `ontology.id`
+        // (`descendant`) — matches the existing parity test
+        // `transitive_extends_does_not_leak_across_unrelated_topics`
+        // (crates/mif-rh/tests/parity.rs), which asserts the identical
+        // convention for an implicit/None `ontology.id`, and
+        // `find_pin_safety_gaps` (crates/mif-rh/src/vendor.rs), which keys
+        // pin-safety-gap detection off `resolved_ontology` naming the
+        // schema-declaring pack.
+        assert_eq!(record.resolved_ontology.as_deref(), Some("base@0.1.0"));
+    }
+
+    #[test]
+    fn extends_chain_base_layer_named_directly_is_rejected() {
+        let (packs, catalog, config) = extends_chain_setup();
+        let ctx = ctx_fixture(&packs, &catalog, &config, "eng");
+        // `base` is NOT one of the topic's directly bound ontologies (only
+        // `descendant` is) — naming it directly must be rejected per
+        // resolve-ontology.sh's own contract ("an ontology.id outside the
+        // topic's bound set -> non-zero"), even though `base` is the exact
+        // pack that declares this entity type.
+        let finding = finding_from_json(json!({
+            "@id": "f-extends-base-direct",
+            "entity": {"entity_type": "decision"},
+            "ontology": {"id": "base"}
+        }));
+
+        let record = resolve_finding(&finding, &ctx).unwrap();
+        assert_eq!(record.basis, Basis::Unresolved);
+        assert!(!record.valid);
     }
 }
