@@ -166,10 +166,14 @@ fn chain_reaches(
 /// Filters the ambiguous branch's `matches` down to the candidates `oid`
 /// actually disambiguates: empty immediately if `oid` isn't one of the
 /// topic's directly bound ontologies (see [`direct_bound_ids`]), otherwise
-/// every candidate whose declaring pack [`chain_reaches`] from `oid`. Used
-/// by [`resolve_finding`]'s `matches.len() > 1` arm — see its call site for
-/// why the result's length (0, 1, or 2+) is what actually decides the
-/// classification.
+/// every candidate whose declaring pack id appears in `oid`'s resolved
+/// `extends` chain. `oid` is constant across every candidate in a single
+/// call, so the chain is resolved once up front and reused as a membership
+/// set — unlike [`chain_reaches`] (used where only one candidate needs
+/// checking), this avoids re-running `resolve_chain`'s graph traversal once
+/// per candidate. Used by [`resolve_finding`]'s `matches.len() > 1` arm —
+/// see its call site for why the result's length (0, 1, or 2+) is what
+/// actually decides the classification.
 ///
 /// # Errors
 ///
@@ -184,16 +188,12 @@ fn reachable_candidates<'a>(
     if !direct_ids.contains(oid) {
         return Ok(Vec::new());
     }
-    matches
+    let chain = mif_ontology::resolve_chain(oid, metadata_map)?;
+    let chain_ids: HashSet<&str> = chain.iter().map(|resolved| resolved.id.as_str()).collect();
+    Ok(matches
         .into_iter()
-        .filter_map(
-            |(pack, def)| match chain_reaches(oid, &pack.id, metadata_map) {
-                Ok(true) => Some(Ok((pack, def))),
-                Ok(false) => None,
-                Err(source) => Some(Err(source)),
-            },
-        )
-        .collect()
+        .filter(|(pack, _)| chain_ids.contains(pack.id.as_str()))
+        .collect())
 }
 
 /// The `(allowed packs, direct bound ids, extends metadata map)` triple
@@ -920,7 +920,7 @@ discovery:
         assert!(!record.valid);
     }
 
-    /// Four-pack fixture for the `matches.len() > 1` (ambiguous) branch's
+    /// Five-pack fixture for the `matches.len() > 1` (ambiguous) branch's
     /// extends-chain disambiguation (issue #136): `base`/`base2` each
     /// independently declare the `widget` entity type and have no
     /// `extends` of their own; `descendant`/`descendant2` extend
