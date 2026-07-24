@@ -163,6 +163,39 @@ fn chain_reaches(
     Ok(chain.iter().any(|resolved| resolved.id == target))
 }
 
+/// Filters the ambiguous branch's `matches` down to the candidates `oid`
+/// actually disambiguates: empty immediately if `oid` isn't one of the
+/// topic's directly bound ontologies (see [`direct_bound_ids`]), otherwise
+/// every candidate whose declaring pack [`chain_reaches`] from `oid`. Used
+/// by [`resolve_finding`]'s `matches.len() > 1` arm — see its call site for
+/// why the result's length (0, 1, or 2+) is what actually decides the
+/// classification.
+///
+/// # Errors
+///
+/// Returns [`MifRhError::Ontology`] if resolving `oid`'s `extends` chain
+/// fails (a missing ancestor or an `extends` cycle).
+fn reachable_candidates<'a>(
+    oid: &str,
+    matches: Vec<(&'a OntologyPack, &'a crate::ontology_pack::EntityType)>,
+    direct_ids: &HashSet<String>,
+    metadata_map: &HashMap<String, mif_ontology::OntologyMetadata>,
+) -> Result<Vec<(&'a OntologyPack, &'a crate::ontology_pack::EntityType)>, MifRhError> {
+    if !direct_ids.contains(oid) {
+        return Ok(Vec::new());
+    }
+    matches
+        .into_iter()
+        .filter_map(
+            |(pack, def)| match chain_reaches(oid, &pack.id, metadata_map) {
+                Ok(true) => Some(Ok((pack, def))),
+                Ok(false) => None,
+                Err(source) => Some(Err(source)),
+            },
+        )
+        .collect()
+}
+
 /// The `(allowed packs, direct bound ids, extends metadata map)` triple
 /// [`build_allowed_with_context`] returns — named to keep its signature
 /// under clippy's `type_complexity` threshold.
@@ -407,14 +440,36 @@ pub fn resolve_finding(
                     valid: false,
                 });
             };
-            match matches.into_iter().find(|(pack, _)| pack.id == oid) {
-                Some((pack, def)) => (pack, def, Basis::Declared),
-                // An `ontology.id` that names none of the ambiguous candidates
-                // is still an ambiguous classification, not a fresh
-                // "unresolved" one — matches resolve-ontology.sh's own
-                // `mcount > 1` branch, which records "ambiguous" whether the
-                // declared id is absent or simply doesn't match.
-                None => {
+            // Apply the identical extends-chain-reachability acceptance
+            // test the `matches.len() == 1` branch above uses (see #135):
+            // `oid` must be one of the topic's directly bound ontologies,
+            // AND its own `extends` chain must reach a candidate's
+            // declaring pack. Literal `pack.id == oid` equality is
+            // subsumed by `chain_reaches` for free (see its doc comment),
+            // so this also accepts a bound descendant naming an ancestor
+            // candidate it inherits the type from, not just a candidate
+            // named by its own id. `direct_ids`/`metadata_map` are the
+            // same ones `build_allowed_with_context` computed above.
+            let reachable = reachable_candidates(oid, matches, &direct_ids, &metadata_map)?;
+
+            match reachable.len() {
+                // Exactly one of the 2+ ambiguous candidates is reachable
+                // from the declared id — an unambiguous disambiguation.
+                1 => {
+                    let (pack, def) = reachable[0];
+                    (pack, def, Basis::Declared)
+                },
+                // Zero reachable (oid isn't directly bound, or its chain
+                // reaches none of the candidates) or 2+ reachable (oid's
+                // chain reaches more than one ambiguous candidate — issue
+                // #136's open design question: there is no principled way
+                // to pick a winner among multiple genuinely-reachable
+                // siblings, so this stays ambiguous rather than guessing)
+                // both fall back to Ambiguous, never Unresolved — matches
+                // resolve-ontology.sh's own `mcount > 1` branch, which
+                // never returns "unresolved" once there are 2+
+                // type-declaring candidates.
+                _ => {
                     return Ok(MapRecord {
                         finding_id: finding.id.clone(),
                         entity_type: Some(entity_type.to_string()),
@@ -863,5 +918,154 @@ discovery:
         let record = resolve_finding(&finding, &ctx).unwrap();
         assert_eq!(record.basis, Basis::Unresolved);
         assert!(!record.valid);
+    }
+
+    /// Four-pack fixture for the `matches.len() > 1` (ambiguous) branch's
+    /// extends-chain disambiguation (issue #136): `base`/`base2` each
+    /// independently declare the `widget` entity type and have no
+    /// `extends` of their own; `descendant`/`descendant2` extend
+    /// `base`/`base2` respectively and declare no entity types of their
+    /// own. `multi` extends **both** `base` and `base2`, modeling the
+    /// "chain reaches two ambiguous candidates" case the issue's own
+    /// design question is about. Only `descendant`, `descendant2`, and
+    /// `multi` are bound to the `"eng"` topic — `base`/`base2` are shared
+    /// layers reached solely via a chain, never bound directly.
+    fn ambiguous_extends_chain_setup() -> (
+        HashMap<String, crate::ontology_pack::OntologyPack>,
+        Catalog,
+        HarnessConfig,
+    ) {
+        let mut packs = HashMap::new();
+        packs.insert(
+            "base".to_string(),
+            parse_pack(
+                "ontology:\n  id: base\n  version: \"0.1.0\"\nentity_types:\n  - name: widget\n    schema: {}\n",
+                "base.yaml",
+            )
+            .unwrap(),
+        );
+        packs.insert(
+            "base2".to_string(),
+            parse_pack(
+                "ontology:\n  id: base2\n  version: \"0.1.0\"\nentity_types:\n  - name: widget\n    schema: {}\n",
+                "base2.yaml",
+            )
+            .unwrap(),
+        );
+        packs.insert(
+            "descendant".to_string(),
+            parse_pack(
+                "ontology:\n  id: descendant\n  version: \"0.1.0\"\n  extends: [base]\nentity_types: []\n",
+                "descendant.yaml",
+            )
+            .unwrap(),
+        );
+        packs.insert(
+            "descendant2".to_string(),
+            parse_pack(
+                "ontology:\n  id: descendant2\n  version: \"0.1.0\"\n  extends: [base2]\nentity_types: []\n",
+                "descendant2.yaml",
+            )
+            .unwrap(),
+        );
+        packs.insert(
+            "multi".to_string(),
+            parse_pack(
+                "ontology:\n  id: multi\n  version: \"0.1.0\"\n  extends: [base, base2]\nentity_types: []\n",
+                "multi.yaml",
+            )
+            .unwrap(),
+        );
+        let catalog = Catalog {
+            ontologies: ["base", "base2", "descendant", "descendant2", "multi"]
+                .iter()
+                .map(|id| CatalogEntry {
+                    id: (*id).to_string(),
+                    version: "0.1.0".to_string(),
+                    source: None,
+                    core: false,
+                })
+                .collect(),
+        };
+        let config = HarnessConfig {
+            topics: vec![TopicConfig {
+                id: "eng".to_string(),
+                // `base`/`base2` are reached only through the chain —
+                // never bound to the topic themselves.
+                ontologies: vec![
+                    "descendant".to_string(),
+                    "descendant2".to_string(),
+                    "multi".to_string(),
+                ],
+            }],
+        };
+        (packs, catalog, config)
+    }
+
+    #[test]
+    fn ambiguous_branch_declared_id_disambiguates_via_bound_descendant_chain() {
+        let (packs, catalog, config) = ambiguous_extends_chain_setup();
+        let ctx = ctx_fixture(&packs, &catalog, &config, "eng");
+        // `descendant`'s chain reaches `base` but not `base2` — exactly
+        // one of the two ambiguous `widget` candidates is reachable, so
+        // this is an unambiguous disambiguation even though `oid` never
+        // equals either candidate's own id.
+        let finding = finding_from_json(json!({
+            "@id": "f-amb-extends-declared",
+            "entity": {"entity_type": "widget"},
+            "ontology": {"id": "descendant"}
+        }));
+
+        let record = resolve_finding(&finding, &ctx).unwrap();
+        assert_eq!(record.basis, Basis::Declared);
+        assert!(record.valid);
+        assert_eq!(record.resolved_ontology.as_deref(), Some("base@0.1.0"));
+    }
+
+    #[test]
+    fn ambiguous_branch_base_layer_named_directly_stays_ambiguous_not_unresolved() {
+        let (packs, catalog, config) = ambiguous_extends_chain_setup();
+        let ctx = ctx_fixture(&packs, &catalog, &config, "eng");
+        // `base` is NOT one of the topic's directly bound ontologies
+        // (only `descendant`/`descendant2`/`multi` are). Before this fix,
+        // literal `pack.id == oid` equality would have accepted this
+        // (`base` names itself) and wrongly resolved `Declared` — the
+        // exact bug #136 reports. It must stay `Ambiguous` (never
+        // `Unresolved`, matching resolve-ontology.sh's `mcount > 1`
+        // contract), same as the un-bound base layer case in the
+        // single-match branch's own regression test above.
+        let finding = finding_from_json(json!({
+            "@id": "f-amb-base-direct",
+            "entity": {"entity_type": "widget"},
+            "ontology": {"id": "base"}
+        }));
+
+        let record = resolve_finding(&finding, &ctx).unwrap();
+        assert_eq!(record.basis, Basis::Ambiguous);
+        assert!(!record.valid);
+        assert_eq!(record.resolved_ontology, None);
+    }
+
+    #[test]
+    fn ambiguous_branch_declared_id_reaching_two_candidates_stays_ambiguous() {
+        let (packs, catalog, config) = ambiguous_extends_chain_setup();
+        let ctx = ctx_fixture(&packs, &catalog, &config, "eng");
+        // `multi` extends both `base` and `base2` — its chain reaches
+        // BOTH ambiguous `widget` candidates. Issue #136's own open
+        // design question ("if a bound descendant's extends chain
+        // reaches two of the ambiguous candidates, which one should
+        // win?") is resolved conservatively here: no principled winner
+        // exists among genuinely-reachable siblings, so this never
+        // guesses and stays `Ambiguous`.
+        let finding = finding_from_json(json!({
+            "@id": "f-amb-multi-reaches-both",
+            "entity": {"entity_type": "widget"},
+            "ontology": {"id": "multi"}
+        }));
+
+        let record = resolve_finding(&finding, &ctx).unwrap();
+        assert_eq!(record.basis, Basis::Ambiguous);
+        assert!(!record.valid);
+        assert_eq!(record.resolved_ontology, None);
     }
 }
