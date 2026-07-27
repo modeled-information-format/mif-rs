@@ -43,7 +43,7 @@ RUN cargo build --release --locked --workspace --bins
 # them by bumping the base image; glibc-dynamic currently scans clean).
 # Pinned by digest (no :latest) to satisfy Scorecard Pinned-Dependencies and
 # Trivy DS-0001; Dependabot's docker ecosystem keeps the digest fresh.
-FROM cgr.dev/chainguard/glibc-dynamic@sha256:7ff79e2caef2b8a137ddaf9940fb790e91148482092363760d6661e4591fd54c
+FROM cgr.dev/chainguard/glibc-dynamic@sha256:57e5704e70a85b90191182eb6110d1c817df0d8e96035cb041195c5a351f0861
 
 # Which workspace binary this image ships: mif-cli, mif-mcp, mif-rh-cli, or
 # mif-rh-mcp. Passed per image by release-docker.yml — never guess it here.
