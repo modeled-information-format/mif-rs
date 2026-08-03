@@ -24,7 +24,7 @@ mif-embed.workspace = true
 mif-ontology.workspace = true
 mif-problem.workspace = true
 thiserror.workspace = true
-rmcp = { version = "2.1.0", features = ["server", "transport-io"] }
+rmcp = { version = "3.0.1", features = ["server", "transport-io"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "io-std"] }
