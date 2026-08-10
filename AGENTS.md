@@ -9,7 +9,7 @@ Instructions for AI coding agents working on this Rust project.
 - **Linting**: clippy with pedantic and nursery lints
 - **Formatting**: rustfmt (100-char lines, 4-space indent)
 - **Error Handling**: `thiserror` for custom error types
-- **Testing**: Built-in test framework + proptest for property-based testing
+- **Testing**: Built-in test framework (proptest is NOT currently a workspace dependency — see CLAUDE.md's Testing section for the pattern if adding it)
 - **Supply Chain**: cargo-deny for dependency auditing
 
 ## File Structure
@@ -26,9 +26,9 @@ crates/
   mif-embed/src/        # Local sentence-embedding inference
   mif-store/src/        # SQLite vector store for document embeddings
   mif-rh/src/           # Compiled research-harness ontology engine
-  mif-cli/src/          # CLI binary (validate, ontology resolve, ingest, search, find-similar, corpus-stats)
+  mif-cli/src/          # CLI binary (nine subcommands — see this repo's CLAUDE.md for the full list)
   mif-mcp/src/          # MCP server binary (nine tools — see this repo's CLAUDE.md for the full list)
-  mif-rh-cli/src/       # Research-harness CLI (resolve, review, suggest-type, calibrate, expansion-candidates)
+  mif-rh-cli/src/       # Research-harness CLI (seven subcommands incl. `harness` with 27 more — see CLAUDE.md)
   mif-rh-mcp/src/       # Read-only MCP server over the mif-rh index
 ```
 
@@ -136,6 +136,8 @@ mod tests {
 
 ### Property-Based Tests
 
+Only if `proptest` gets added as a dependency first — it is not one today:
+
 ```rust
 use proptest::prelude::*;
 
@@ -150,7 +152,7 @@ proptest! {
 
 ## Forbidden Patterns
 
-- `unsafe` blocks (unless explicitly justified)
+- `unsafe` blocks — no exceptions; `Cargo.toml` sets `unsafe_code = "forbid"` workspace-wide, so there is no justification path and such code cannot compile
 - `unwrap()`, `expect()`, `panic!()` in library code
 - `todo!()`, `unimplemented!()`
 - `dbg!()`, `print!()`, `println!()`, `eprint!()`, `eprintln!()`

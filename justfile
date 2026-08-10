@@ -20,9 +20,9 @@ build:
 build-release:
     cargo build --release
 
-# Run the binary
-run *ARGS:
-    cargo run -- {{ ARGS }}
+# Run one of the four binaries (mif-cli, mif-mcp, mif-rh-cli, mif-rh-mcp)
+run BIN *ARGS:
+    cargo run --bin {{ BIN }} -- {{ ARGS }}
 
 # Run all tests
 test:
@@ -104,10 +104,6 @@ msrv:
 miri:
     cargo +nightly miri test
 
-# Run benchmarks
-bench:
-    cargo bench --workspace
-
 # WARNING: `review` REWRITES reports/<topic>/ontology-map.json and reports/_meta/
 # inside CORPUS_DIR — point this at a disposable copy, never a pristine checkout.
 # Manual M2 benchmark: time `mif-rh-cli review` over a findings corpus (disposable copy!)
@@ -133,18 +129,16 @@ bench-review CORPUS_DIR:
     echo "wall seconds: ${wall} (PRD M2 target: < 300)"
     echo "findings/sec: ${fps}"
 
-# Run a fuzz target for a given duration (seconds)
-fuzz TARGET DURATION="60":
-    cargo fuzz run {{ TARGET }} -- -max_total_time={{ DURATION }}
-
 # Run mutation testing
 mutants:
     cargo mutants --output mutants.out --json
 
 # === Template Sync ===
 
-# Template upstream repository
-template_repo := "modeled-information-format/mif-rs"
+# Template upstream repository — the template this repo forked from (see
+# CLAUDE.md's CI/CD section); pointing this at mif-rs itself made the sync a
+# self-referential no-op.
+template_repo := "attested-delivery/rust-template"
 template_branch := "main"
 
 # Sync shared tooling from the mif-rs upstream

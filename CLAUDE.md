@@ -18,9 +18,9 @@ Format)](https://mif-spec.dev) specification in Rust (edition 2024, MSRV
 | `mif-embed` | library | Local (offline-after-first-fetch) sentence embeddings via `candle`, `sentence-transformers/all-MiniLM-L6-v2` |
 | `mif-store` | library | `SQLite`-backed vector store for document embeddings (`rusqlite`, bundled), with brute-force cosine-similarity ranking (`top_k_similar`) |
 | `mif-rh` | library | Compiled research-harness ontology engine: deterministic `resolve()`/`review()` (rht bash parity), plus the hypothesis layer — `suggest_type()` (tier-annotated suggestions), the `FindingIndex` (FTS5 + vectors + tier-3 miss store), the suggestion queue, and `stamped-quantile-v1` calibration |
-| `mif-cli` | binary | CLI: `mif-cli validate <file>`, `mif-cli ontology resolve <id> --ontologies-dir <dir>`, `mif-cli ingest <file> [--db-path <path>]`, `mif-cli search <query>`, `mif-cli find-similar <id>`, `mif-cli corpus-stats` |
+| `mif-cli` | binary | CLI, nine subcommands: `validate`, `ontology resolve`, `ingest`, `search`, `find-similar`, `corpus-stats`, `roundtrip`, `emit-jsonld`, `emit-markdown` (the last three mirror the equivalent `mif-mcp` tools) |
 | `mif-mcp` | binary | MCP server exposing nine tools: `validate_mif_document`, `resolve_ontology_reference`, `ingest_mif_document`, `search_documents`, `find_similar_documents`, `corpus_stats`, `roundtrip_mif_document`, `emit_jsonld_document`, `emit_markdown_document` |
-| `mif-rh-cli` | binary | Research-harness CLI: `resolve`, `review [--strict --followup --build-index --suggest]`, `suggest-type [--record]`, `calibrate`, `expansion-candidates` |
+| `mif-rh-cli` | binary | Research-harness CLI, seven subcommands: `resolve`, `review [--strict --followup --build-index --suggest]`, `suggest-type [--record]`, `calibrate`, `expansion-candidates`, `ontology`, and `harness` — which fans out to 27 subcommands, implemented across the 22 `crates/mif-rh/src/harness_*.rs` modules (mostly one module per subcommand, but some modules back several — e.g. `harness_release.rs` exports the four release/version functions). **`review` rewrites `reports/<topic>/ontology-map.json` and `reports/_meta/` in place** (a stale-PID review lock lives in `crates/mif-rh/src/lock.rs`) — point it at a disposable copy, never a pristine checkout |
 | `mif-rh-mcp` | binary | Read-only MCP server over the mif-rh index: `search`, `suggest_type`, `find_similar` (tier-annotated), `corpus_stats` |
 
 Source for each crate lives at `crates/<name>/src/`. This is a **virtual
@@ -65,6 +65,10 @@ just                  # List all recipes
 just check            # Full CI check (fmt + clippy + test + doc + deny), workspace-wide
 just build            # Debug build (workspace)
 just build-release    # Release build (workspace)
+just test-single NAME # One test by name
+just coverage         # llvm-cov coverage (coverage-html for the report)
+just msrv             # cargo +1.95 check — the MSRV gate
+just mutants          # cargo-mutants mutation testing
 ```
 
 <details>
@@ -129,8 +133,10 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 | `crates/mif-problem/src/lib.rs` | `ProblemDetails`, `Applicability`, `SuggestedFix`, `CodeAction`, `ProblemMeta`, `OutputFormat`, the `ToProblem` trait |
 | `crates/mif-frontmatter/src/lib.rs` | `parse_markdown`, `serialize_markdown`, `md_to_jsonld`, `jsonld_to_md`, `roundtrip_lossless` |
 | `crates/mif-embed/src/lib.rs` | `Embedder` (`load`, `embed`), `EMBEDDING_DIM` |
-| `crates/mif-store/src/lib.rs` | `VectorStore` (`open`, `upsert`, `get`, `count`), `StoredVector` |
-| `crates/mif-cli/src/main.rs`, `crates/mif-mcp/src/main.rs` | Thin binaries calling straight into the library crates' public functions |
+| `crates/mif-store/src/lib.rs` | `VectorStore` (`open`, `upsert`, `get`, `count`, `stats`, `top_k_similar`), `StoredVector`, and the `multi_root_top_k_similar`/`multi_root_get`/`multi_root_stats` cross-corpus functions |
+| `crates/mif-ontology/src/{confidence,entity_type}.rs` | The MIF-level classification model (ADR-020): `EntityType` with `embedding_doc()`, confidence tiers, `CalibrationConfig`, `assign_tier` |
+| `crates/mif-rh/src/` | The research-harness engine — 37 modules, including 22 `harness_*.rs` files (backing the 27 `mif-rh-cli harness` subcommands, some modules serving several), the `FindingIndex`, and `lock.rs` (the stale-PID review lock) |
+| `crates/mif-cli/src/main.rs`, `crates/mif-mcp/src/main.rs`, `crates/mif-rh-cli/src/main.rs`, `crates/mif-rh-mcp/src/main.rs` | Thin binaries calling straight into the library crates' public functions |
 | `clippy.toml` | Clippy thresholds and test-mode exemptions (workspace-root, applies to all members) |
 | `rustfmt.toml` | Formatter settings (workspace-root) |
 | `deny.toml` | Supply chain policy: licenses, bans, source restrictions (workspace-root) |
@@ -141,7 +147,7 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 
 - Each library crate owns its own error enum, derived with `thiserror::Error` (`MifSchemaError`, `OntologyError`, `FrontmatterError`, `EmbedError`, `StoreError`, `MifRhError`). No shared top-level error type across the workspace — each crate's errors are scoped to what it actually does.
 - **Propagation**: use `?`. Never `unwrap()`, `expect()`, or `panic!()` in library code (`crates/mif-core`, `mif-schema`, `mif-ontology`, `mif-problem`, `mif-frontmatter`, `mif-embed`, `mif-store`, `mif-rh`) — all are `deny`d workspace-wide via `[workspace.lints.clippy]`. `mif-rh`'s `harness_markdown.rs` has two narrow, function-scoped `#[allow(clippy::expect_used)]` overrides, each with an inline comment explaining why: both `.expect(...)` calls compile a fixed, compile-time-valid regex literal, not a runtime condition a caller can hit.
-- **RFC 9457 Problem Details**: every library error enum implements `mif_problem::ToProblem` (`to_problem(&self) -> ProblemDetails`), mapping each variant to a stable, versioned problem-type URI via a per-variant `ProblemMeta` (see `mif-problem`'s doc comments for the pattern). `mif-cli`'s and `mif-mcp`'s own error enums (`CliError`, `McpError`) delegate to the wrapped library error's `to_problem()` for variants that wrap one, and define their own `ProblemMeta` only for binary-local variants (`Io`, `Json`).
+- **RFC 9457 Problem Details**: every library error enum implements `mif_problem::ToProblem` (`to_problem(&self) -> ProblemDetails`), mapping each variant to a stable, versioned problem-type URI via a per-variant `ProblemMeta` (see `mif-problem`'s doc comments for the pattern). `mif-cli`'s and `mif-mcp`'s own error enums (`CliError`, `McpError`) delegate to the wrapped library error's `to_problem()` for variants that wrap one, and define their own `ProblemMeta` only for binary-local variants (`Io`, `Json`); `mif-rh-mcp` implements `ToProblem` the same way, and `mif-rh-cli` surfaces `mif-rh`'s own error type directly.
 - **`mif-cli`**: `main()` returns `ExitCode`, selects `mif_problem::OutputFormat` via an explicit `--format pretty|json` flag (falling back to stderr TTY detection), and renders errors with `error.render(format)` — pretty text or a compact `application/problem+json` envelope. Exempts itself from `print_stdout`/`print_stderr` via `#![allow(...)]` at the crate root (a CLI naturally needs to print — see "Lint Configuration" below).
 - **`mif-mcp`**: `main()` returns `anyhow::Result<()>`, but its `#[tool]` methods return `String` values through the MCP protocol rather than printing. An MCP client is inherently a machine consumer, so every tool failure always renders as `error.to_problem().to_json()` (no pretty/JSON format choice) — it needs no `print_stdout`/`print_stderr` allow, since it never calls `println!`/`eprintln!`.
 
@@ -277,6 +283,7 @@ All public items require doc comments (`missing_docs = "warn"` workspace-wide). 
 |---|---|
 | Unit tests | `#[cfg(test)] mod tests` inside each crate's source files |
 | Doc tests | `///` examples on public items |
+| Integration tests | `crates/{mif-cli,mif-rh-cli,mif-rh}/tests/` — binary-level and cross-module behavior; prefer these over in-file `#[cfg(test)]` blocks for binary behavior |
 
 **Property test pattern** (if adding `proptest` to a crate that needs it — not currently a workspace dependency):
 
@@ -298,7 +305,7 @@ mod property_tests {
 
 CI runs through `pipeline.yml`, `ci-checks.yml`, and `quality-gates.yml`; releases run through tag-triggered `release.yml`, `publish.yml`, `package-homebrew.yml`. Every security-gate job across `quality-gates.yml` (`sast`, `sca`, `posture`, `trivy`) and `pipeline.yml` (`pin-check`, `validate-workflows`, `docker-sign`, `docker-verify`, `gate-image`, `attest-container-scan`) calls **`modeled-information-format/.github`**'s reusable workflow catalog, not `attested-delivery/.github` — this repo forked from `attested-delivery/rust-template`, but as a member of the `modeled-information-format` org it uses the org's own security-gate infrastructure, matching every other repo in this workspace's ecosystem. (The two files don't share job *names* beyond `reusable-trivy.yml`, called by both `quality-gates.yml`'s `trivy` job and `pipeline.yml`'s `gate-image` job.)
 
-**Multi-crate, multi-binary, not single-package**: `publish.yml`'s guard/publish logic and `release.yml`/`package-homebrew.yml`'s binary-resolution logic are driven dynamically off `cargo metadata` (`.packages[] | select(...)`, never `.packages[0]`) so they scale to any number of workspace members and `[[bin]]` targets — both `mif-cli` and `mif-mcp` build on every release, and a future third binary crate needs zero workflow changes to join them. See `docs/runbooks/RELEASING.md` for the full procedure.
+**Multi-crate, multi-binary, not single-package**: `publish.yml`'s guard/publish logic and `release.yml`/`package-homebrew.yml`'s binary-resolution logic are driven dynamically off `cargo metadata` (`.packages[] | select(...)`, never `.packages[0]`) so they scale to any number of workspace members and `[[bin]]` targets — all four binaries (`mif-cli`, `mif-mcp`, `mif-rh-cli`, `mif-rh-mcp`) build on every release, and a future fifth binary crate needs zero workflow changes to join them. See `docs/runbooks/RELEASING.md` for the full procedure.
 
 **`environment: release`** gates `publish.yml`/`release.yml`/`package-homebrew.yml` (renamed from the template's `copilot`) — configure real protection rules (required reviewer) on it in repo Settings before arming external publish channels.
 
@@ -352,7 +359,7 @@ Enabling `pedantic`, `nursery`, and `cargo` lint groups catches subtle issues ea
 
 ### Why `panic = "abort"` in Release
 
-Release builds use `panic = "abort"` to eliminate unwinding tables, reducing binary size. Combined with `strip = true` and `lto = "thin"`, this produces small, fast binaries for both `mif-cli` and `mif-mcp`. The `release-debug` profile inherits these optimizations but preserves debug symbols for profiling.
+Release builds use `panic = "abort"` to eliminate unwinding tables, reducing binary size. Combined with `strip = true` and `lto = "thin"`, this produces small, fast binaries for all four binary crates. The `release-debug` profile inherits these optimizations but preserves debug symbols for profiling.
 
 ### Why Ban `openssl` and `atty`
 
