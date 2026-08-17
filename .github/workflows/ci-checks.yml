@@ -41,7 +41,7 @@ jobs:
     steps:
       - name: Checkout repository
         # v7.0.0
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install Rust toolchain
         # master
@@ -60,7 +60,7 @@ jobs:
     steps:
       - name: Checkout repository
         # v7.0.0
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install Rust toolchain
         # master
@@ -99,7 +99,7 @@ jobs:
     steps:
       - name: Checkout repository
         # v7.0.0
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install Rust toolchain
         # master
@@ -131,11 +131,11 @@ jobs:
     steps:
       - name: Checkout repository
         # v7.0.0
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Checkout research-harness-template (pinned)
         # v7.0.0
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: modeled-information-format/research-harness-template
           # Pinned rht commit the parity suite runs against. Bump by PR
@@ -147,7 +147,7 @@ jobs:
 
       - name: Checkout ontologies registry (pinned)
         # v7.0.0
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: modeled-information-format/ontologies
           # The rht fixture catalog references one pack rht VENDORS rather
@@ -214,7 +214,7 @@ jobs:
     steps:
       - name: Checkout repository
         # v7.0.0
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install Rust toolchain
         # master
@@ -246,12 +246,12 @@ jobs:
     steps:
       - name: Checkout repository
         # v7.0.0
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install cargo-deny
         # v2.67.25
         uses: >-
-          taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853
+          taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1
         with:
           tool: cargo-deny
 
@@ -264,7 +264,7 @@ jobs:
     steps:
       - name: Checkout repository
         # v7.0.0
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install Rust toolchain
         # master
