@@ -1,6 +1,6 @@
 {
-  "mifSpecVersion": "1.4.1",
-  "source": "https://mif-spec.dev/schema/1.4.1/",
+  "mifSpecVersion": "1.4.2",
+  "source": "https://mif-spec.dev/schema/1.4.2/",
   "files": {
     "mif.schema.json": {
       "upstream": "mif.schema.json",

@@ -7,20 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Aligns mif-rs with MIF specification **1.4.1** (which carries the 1.4.0 schema and id rules unchanged).
+## [0.10.0] - 2026-10-08
+
+Aligns mif-rs with MIF specification **1.4.2** (which carries the 1.4.0 schema and id rules unchanged; its schemas are byte-identical to 1.4.1's and 1.4.0's).
 
 ### Added
 
 - **`mif-core`**: concept-URN helpers for MIF 1.4.0's `urn:mif:<uuid>` id form (spec §6.1). `concept_urn`/`concept_uuid` derive a deterministic UUIDv5 from a stable name in the namespace `uuid5(NAMESPACE_URL, "https://mif-spec.dev")`, the one the MIF repo's `scripts/migrate_0_1_to_1_0.py` uses, so other MIF tools derive the same id from the same name. `is_concept_urn` checks the form.
-- **`mif-schema`**: `MIF_SPEC_VERSION` (`"1.4.1"`) names the MIF release the vendored schemas come from. `src/schemas/VENDOR.json` records that release's mirror URL (`https://mif-spec.dev/schema/1.4.1/`) and each file's sha256, and a unit test keeps the lock, the constant, and the embedded files in step.
+- **`mif-schema`**: `MIF_SPEC_VERSION` (`"1.4.2"`) names the MIF release the vendored schemas come from. `src/schemas/VENDOR.json` records that release's mirror URL (`https://mif-spec.dev/schema/1.4.2/`) and each file's sha256, and a unit test keeps the lock, the constant, and the embedded files in step.
 - **CI**: a `schema-drift` job in `ci-checks.yml` (`just schema-drift` locally) compares the vendored schemas with the immutable `https://mif-spec.dev/schema/<version>/` mirror, and notes when mif-spec.dev's `latest` is newer than the pin.
 
 - **`mif-rh`**/**`mif-rh-cli`**: `harness_falsify`'s one-round rule gains an explicit `regate` override — `falsify`/`falsify_with_now` take a new `regate: bool` parameter, and `mif-rh-cli harness falsify` gains a `--regate` flag — that bypasses `already_graded()`'s short-circuit for a single invocation and force-regrades a finding that already carries a verdict, logging a distinct `falsification-gate: regated (...)` line (parallel to the existing `run`/`skipped` lines) rather than silently skipping. A finding that was never graded behaves identically whether or not `regate` is set. **Breaking** for direct callers of `mif_rh::falsify`/`falsify_with_now`: pass `false` to keep prior behavior (#119).
 
 ### Changed
 
-- **`mif-schema`**: the vendored schemas are MIF 1.4.1's (was 1.3.0; only `mif.schema.json` changed, in 1.4.0). **Breaking**: a concept `@id` must be `urn:mif:<uuid>`, so slug or structured ids such as `urn:mif:my-note` or `urn:mif:memory:test-001` no longer validate. A document carrying only the deprecated `memoryType` now satisfies the type requirement.
+- **`mif-schema`**: the vendored schemas are MIF 1.4.2's (was 1.3.0; only `mif.schema.json` changed, in 1.4.0). **Breaking**: a concept `@id` must be `urn:mif:<uuid>`, so slug or structured ids such as `urn:mif:my-note` or `urn:mif:memory:test-001` no longer validate. A document carrying only the deprecated `memoryType` now satisfies the type requirement.
 - **`mif-rh`**/**`mif-rh-cli`**: `wrap_source` and the report, blog and book renderers mint `urn:mif:<uuid>` ids, a UUIDv5 of `source:<namespace>:<slug>` or `<channel>:<namespace>:<slug>` (new public `source_concept_urn`/`rendered_concept_urn`). **Breaking**: these replace the structured `urn:mif:source:…`, `urn:mif:report:…`, `urn:mif:blog:…` and `urn:mif:book:…` ids, which MIF 1.4.0 rejects. Consumers that parsed the namespace or slug out of a source id should read `extensions.harness.source.namespace`/`.slug`, which the envelope now carries; rendered artifacts already carry `slug`.
+- **`mif-schema`**: the MIF pin targets the coordinated MIF **1.4.2** release (`MIF_SPEC_VERSION`, `VENDOR.json` `mifSpecVersion`/`source` → `https://mif-spec.dev/schema/1.4.2/`). MIF 1.4.1 shipped without release artifacts; 1.4.2's schemas are byte-identical to 1.4.1's, so every vendored file's sha256 is unchanged.
 - **`mif-schema`**/**`mif-cli`**/**`mif-mcp`**: `Level` and the `--level`/`level` docs state that per-document validation is necessary but not sufficient for MIF 1.4.0 Level 1, which also requires an OKF bundle (spec §13.1).
 
 ### Fixed
