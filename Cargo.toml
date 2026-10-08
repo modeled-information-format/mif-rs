@@ -43,7 +43,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 # Already present transitively (tokenizers' "fancy-regex" feature); used
 # directly by mif-rh for markdown-render lookaround (autolink/deglob), which
 # Rust's standard `regex` crate deliberately doesn't support.
-fancy-regex = "0.18.0"
+fancy-regex = "0.19.2"
 # Stale-PID liveness check for mif-rh's review lock, without raw signal calls
 # (this workspace forbids unsafe_code workspace-wide). Previously exact-pinned
 # on the belief that sysinfo >=0.38 required a newer Rust than this
