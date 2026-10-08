@@ -179,7 +179,11 @@ schema-drift:
     #!/usr/bin/env bash
     set -euo pipefail
     lock=crates/mif-schema/src/schemas/VENDOR.json
-    base=$(jq -r .source "$lock")
+    base=$(jq -er .source "$lock")
+    files=$(jq -er '.files | to_entries[] | [.key, .value.upstream] | @tsv' "$lock")
+    if [ "$(wc -l <<<"$files")" -ne 4 ]; then
+        echo "  DRIFT: expected 4 vendored files in $lock"; exit 1
+    fi
     status=0
     while IFS=$'\t' read -r local upstream; do
         if curl -fsSL "$base$upstream" | cmp -s - "crates/mif-schema/src/schemas/$local"; then
@@ -187,10 +191,10 @@ schema-drift:
         else
             echo "  DRIFT: $local differs from $base$upstream"; status=1
         fi
-    done < <(jq -r '.files | to_entries[] | [.key, .value.upstream] | @tsv' "$lock")
-    pinned=$(jq -r .mifSpecVersion "$lock")
-    latest=$(curl -fsSL https://mif-spec.dev/schema/index.json | jq -r .aliases.latest)
-    if [ "$pinned" != "$latest" ]; then
+    done <<<"$files"
+    pinned=$(jq -er .mifSpecVersion "$lock")
+    latest=$(curl -fsSL https://mif-spec.dev/schema/index.json | jq -r .aliases.latest || true)
+    if [ -n "$latest" ] && [ "$pinned" != "$latest" ]; then
         echo "  note: pinned MIF $pinned, mif-spec.dev latest is $latest"
     fi
     exit "$status"

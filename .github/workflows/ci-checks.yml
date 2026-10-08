@@ -49,7 +49,11 @@ jobs:
       - name: Compare vendored schemas with the pinned MIF release
         run: |
           lock=crates/mif-schema/src/schemas/VENDOR.json
-          base=$(jq -r .source "$lock")
+          base=$(jq -er .source "$lock")
+          files=$(jq -er '.files | to_entries[] | [.key, .value.upstream] | @tsv' "$lock")
+          if [ "$(wc -l <<<"$files")" -ne 4 ]; then
+            echo "::error file=$lock::expected 4 vendored files"; exit 1
+          fi
           status=0
           while IFS=$'\t' read -r local upstream; do
             if curl -fsSL "$base$upstream" | cmp -s - "crates/mif-schema/src/schemas/$local"; then
@@ -57,10 +61,10 @@ jobs:
             else
               echo "::error file=$lock::$local differs from $base$upstream"; status=1
             fi
-          done < <(jq -r '.files | to_entries[] | [.key, .value.upstream] | @tsv' "$lock")
-          pinned=$(jq -r .mifSpecVersion "$lock")
-          latest=$(curl -fsSL https://mif-spec.dev/schema/index.json | jq -r .aliases.latest)
-          if [ "$pinned" != "$latest" ]; then
+          done <<<"$files"
+          pinned=$(jq -er .mifSpecVersion "$lock")
+          latest=$(curl -fsSL https://mif-spec.dev/schema/index.json | jq -r .aliases.latest || true)
+          if [ -n "$latest" ] && [ "$pinned" != "$latest" ]; then
             echo "::notice file=$lock::pinned MIF $pinned; mif-spec.dev latest is $latest"
           fi
           exit "$status"
@@ -323,11 +327,12 @@ jobs:
   all-checks-pass:
     name: All Checks Pass
     if: always()
-    needs: [fmt, clippy, test, parity, doc, deny, msrv]
+    needs: [schema-drift, fmt, clippy, test, parity, doc, deny, msrv]
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs passed
         env:
+          SCHEMA_DRIFT_RESULT: ${{ needs.schema-drift.result }}
           FMT_RESULT: ${{ needs.fmt.result }}
           CLIPPY_RESULT: ${{ needs.clippy.result }}
           TEST_RESULT: ${{ needs.test.result }}
@@ -336,7 +341,8 @@ jobs:
           DENY_RESULT: ${{ needs.deny.result }}
           MSRV_RESULT: ${{ needs.msrv.result }}
         run: |
-          if [[ "$FMT_RESULT" != "success" ]] || \
+          if [[ "$SCHEMA_DRIFT_RESULT" != "success" ]] || \
+             [[ "$FMT_RESULT" != "success" ]] || \
              [[ "$CLIPPY_RESULT" != "success" ]] || \
              [[ "$TEST_RESULT" != "success" ]] || \
              [[ "$PARITY_RESULT" != "success" ]] || \

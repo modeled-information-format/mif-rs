@@ -74,6 +74,8 @@ pub fn wrap_source(
         "extensions": {
             "harness": {
                 "source": {
+                    "namespace": inputs.namespace,
+                    "slug": inputs.slug,
                     "url": inputs.url,
                     "fetchedAt": inputs.created,
                     "contentType": inputs.content_type,
@@ -82,7 +84,8 @@ pub fn wrap_source(
         },
     });
 
-    let envelope_path = PathBuf::from(&id);
+    // Name the failing source by its readable key, not its opaque UUID.
+    let envelope_path = PathBuf::from(format!("source:{}:{}", inputs.namespace, inputs.slug));
     validate_against_schema(&envelope, &envelope_path, schema_path, ref_paths)?;
     Ok(envelope)
 }
@@ -181,6 +184,14 @@ mod tests {
             source_concept_urn("physics", "example-paper")
         );
         assert!(mif_core::is_concept_urn(envelope["@id"].as_str().unwrap()));
+        assert_eq!(
+            envelope["extensions"]["harness"]["source"]["namespace"],
+            "physics"
+        );
+        assert_eq!(
+            envelope["extensions"]["harness"]["source"]["slug"],
+            "example-paper"
+        );
         assert_eq!(envelope["content"], "the paper's full text");
     }
 

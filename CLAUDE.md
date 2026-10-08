@@ -111,7 +111,7 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 ### Move to a New MIF Specification Release
 
 1. Copy each file listed in `crates/mif-schema/src/schemas/VENDOR.json` from `https://mif-spec.dev/schema/<version>/<upstream>` over its vendored path.
-2. Set `mifSpecVersion`, `source`, and every `sha256` (`shasum -a 256 <file>`) in `VENDOR.json`, and `MIF_SPEC_VERSION` in `crates/mif-schema/src/lib.rs`.
+2. Set `mifSpecVersion`, `source`, and every `sha256` (`shasum -a 256 <file>`) in `VENDOR.json`, and `MIF_SPEC_VERSION` in `crates/mif-schema/src/lib.rs`. If the target release has no published mirror yet but ships no schema changes, keep `source` on the newest byte-identical mirror and say so in `sourceNote`.
 3. Read the MIF release's CHANGELOG for rule changes the schemas alone don't carry (id forms, conformance levels), and update code, fixtures, and the README compatibility table to match.
 4. Add a CHANGELOG entry naming the new MIF version.
 5. Verify: `just schema-drift && just check`.
@@ -228,6 +228,8 @@ Set in the workspace root `Cargo.toml`'s `[workspace.lints]` (not per-crate); ev
 | `redundant_pub_crate` | Allow `pub(crate)` for clarity |
 | `multiple_crate_versions` | Inherent to a dependency graph pulling in `jsonschema`/`rmcp`/`tokio`; not a code-quality signal about this workspace's own code |
 | `assert_is_empty` | New in clippy 1.99; its `assert_eq!(v, [] as [T; 0])` rewrite reads worse in tests than `assert!(v.is_empty())` |
+
+The lint gate (`just check`, lefthook pre-push, CI Clippy) needs clippy 1.99 or newer: older clippy rejects `assert_is_empty` and `unused_async_trait_impl` as unknown lints under `-D warnings`. The 1.95 MSRV covers building (`cargo check`), not linting.
 
 **Framework-imposed exceptions** (documented inline where used, not workspace-wide): `mif-mcp`'s `#[tool]`-annotated methods require an `&self` receiver for `rmcp`'s dispatch mechanism even when unused — `#[allow(clippy::unused_self)]` on that `impl` block, with a comment explaining why. The `#[tool_handler]` impls in `mif-mcp` and `mif-rh-mcp` expand to `async` trait methods with no `.await` — `#[allow(clippy::unused_async_trait_impl)]` on each.
 
