@@ -1,1 +1,3 @@
 .github/workflows/*.lock.yml linguist-generated=true merge=ours
+# Byte-exact vendored MIF schemas: VENDOR.json pins their sha256.
+crates/mif-schema/src/schemas/** -text

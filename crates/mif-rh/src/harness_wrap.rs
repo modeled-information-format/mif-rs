@@ -55,10 +55,11 @@ pub fn wrap_source(
     } else {
         inputs.source_type
     };
+    let id = source_concept_urn(inputs.namespace, inputs.slug);
     let envelope = json!({
         "@context": "https://mif-spec.dev/schema/context.jsonld",
         "@type": "Concept",
-        "@id": format!("urn:mif:source:{}:{}", inputs.namespace, inputs.slug),
+        "@id": id,
         "conceptType": "episodic",
         "namespace": format!("{}/sources", inputs.namespace),
         "title": title,
@@ -73,6 +74,8 @@ pub fn wrap_source(
         "extensions": {
             "harness": {
                 "source": {
+                    "namespace": inputs.namespace,
+                    "slug": inputs.slug,
                     "url": inputs.url,
                     "fetchedAt": inputs.created,
                     "contentType": inputs.content_type,
@@ -81,12 +84,21 @@ pub fn wrap_source(
         },
     });
 
-    let envelope_path = PathBuf::from(format!(
-        "urn:mif:source:{}:{}",
-        inputs.namespace, inputs.slug
-    ));
+    // Name the failing source by its readable key, not its opaque UUID.
+    let envelope_path = PathBuf::from(format!("source:{}:{}", inputs.namespace, inputs.slug));
     validate_against_schema(&envelope, &envelope_path, schema_path, ref_paths)?;
     Ok(envelope)
+}
+
+/// The concept URN of the source envelope for `namespace`/`slug`.
+///
+/// A version-5 UUID ([`mif_core::concept_urn`]) of the name `source:<namespace>:<slug>`,
+/// so re-wrapping the same source yields the same `@id`. MIF 1.4.0 requires a
+/// concept `@id` of the form `urn:mif:<uuid>` (spec §6.1); this replaces the
+/// earlier structured `urn:mif:source:<namespace>:<slug>`.
+#[must_use]
+pub fn source_concept_urn(namespace: &str, slug: &str) -> String {
+    mif_core::concept_urn(&format!("source:{namespace}:{slug}"))
 }
 
 /// Reads source content from `content_file` if given, else `content` if
@@ -133,7 +145,7 @@ pub fn read_source_content(
 
 #[cfg(test)]
 mod tests {
-    use super::{WrapSourceInputs, wrap_source};
+    use super::{WrapSourceInputs, source_concept_urn, wrap_source};
     use std::fs;
 
     const SOURCE_ENVELOPE_SCHEMA: &str = r#"{
@@ -167,7 +179,19 @@ mod tests {
         fs::write(&schema_path, SOURCE_ENVELOPE_SCHEMA).unwrap();
 
         let envelope = wrap_source(&inputs(), &schema_path, &[]).unwrap();
-        assert_eq!(envelope["@id"], "urn:mif:source:physics:example-paper");
+        assert_eq!(
+            envelope["@id"],
+            source_concept_urn("physics", "example-paper")
+        );
+        assert!(mif_core::is_concept_urn(envelope["@id"].as_str().unwrap()));
+        assert_eq!(
+            envelope["extensions"]["harness"]["source"]["namespace"],
+            "physics"
+        );
+        assert_eq!(
+            envelope["extensions"]["harness"]["source"]["slug"],
+            "example-paper"
+        );
         assert_eq!(envelope["content"], "the paper's full text");
     }
 

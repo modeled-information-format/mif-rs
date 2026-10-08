@@ -101,6 +101,19 @@ fn blockquote_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The concept URN of an artifact rendered to `channel` (`report`, `blog`,
+/// `book`) for `namespace`/`slug`.
+///
+/// A version-5 UUID ([`mif_core::concept_urn`]) of the name
+/// `<channel>:<namespace>:<slug>`, so re-rendering an artifact keeps its
+/// `@id`. MIF 1.4.0 requires a concept `@id` of the form `urn:mif:<uuid>`
+/// (spec §6.1); this replaces the earlier structured
+/// `urn:mif:<channel>:<namespace>:<slug>`.
+#[must_use]
+pub fn rendered_concept_urn(channel: &str, namespace: &str, slug: &str) -> String {
+    mif_core::concept_urn(&format!("{channel}:{namespace}:{slug}"))
+}
+
 fn render_report(inputs: &RenderInputs<'_>) -> Result<String, MifRhError> {
     let artifact = inputs.artifact;
     let namespace = namespace_of(artifact);
@@ -142,7 +155,7 @@ fn render_report(inputs: &RenderInputs<'_>) -> Result<String, MifRhError> {
     let mut concept = json!({
         "@context": "https://mif-spec.dev/schema/context.jsonld",
         "@type": "Concept",
-        "@id": format!("urn:mif:report:{namespace}:{}", inputs.slug),
+        "@id": rendered_concept_urn("report", namespace, inputs.slug),
         "slug": inputs.slugpath,
         "version": inputs.version,
         "conceptType": "semantic",
@@ -187,7 +200,10 @@ fn render_blog(inputs: &RenderInputs<'_>) -> String {
         "---".to_string(),
         "\"@context\": https://mif-spec.dev/schema/context.jsonld".to_string(),
         "\"@type\": Concept".to_string(),
-        format!("\"@id\": urn:mif:blog:{namespace}:{}", inputs.slug),
+        format!(
+            "\"@id\": {}",
+            rendered_concept_urn("blog", namespace, inputs.slug)
+        ),
         format!("slug: {}", inputs.slugpath),
         format!("version: {}", inputs.version),
         "conceptType: semantic".to_string(),
@@ -229,7 +245,10 @@ fn render_book(inputs: &RenderInputs<'_>) -> String {
         "---".to_string(),
         "\"@context\": https://mif-spec.dev/schema/context.jsonld".to_string(),
         "\"@type\": Concept".to_string(),
-        format!("\"@id\": urn:mif:book:{namespace}:{}", inputs.slug),
+        format!(
+            "\"@id\": {}",
+            rendered_concept_urn("book", namespace, inputs.slug)
+        ),
         format!("slug: {}", inputs.slugpath),
         format!("version: {}", inputs.version),
         "conceptType: semantic".to_string(),
@@ -268,7 +287,7 @@ fn render_book(inputs: &RenderInputs<'_>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderInputs, render_artifact};
+    use super::{RenderInputs, render_artifact, rendered_concept_urn};
     use serde_json::json;
 
     fn artifact() -> serde_json::Value {
@@ -307,7 +326,8 @@ mod tests {
         let art = artifact();
         let rendered = render_artifact(&inputs(&art), "report").unwrap();
         assert!(rendered.starts_with("---\n"));
-        assert!(rendered.contains("'@id': urn:mif:report:harness/widgets:widget-report"));
+        let id = rendered_concept_urn("report", "harness/widgets", "widget-report");
+        assert!(rendered.contains(&format!("'@id': {id}")));
         assert!(rendered.contains("conceptType: semantic"));
         assert!(rendered.contains("## First finding"));
         assert!(rendered.contains("## Sources"));
@@ -315,6 +335,17 @@ mod tests {
         assert!(!rendered.contains("\n# Widget Synthesis"));
         // No `subtitle` in the fixture — `description` is omitted, not null.
         assert!(!rendered.contains("description:"));
+    }
+
+    #[test]
+    fn every_channel_emits_a_uuid_concept_urn() {
+        let art = artifact();
+        for channel in ["report", "blog", "book"] {
+            let rendered = render_artifact(&inputs(&art), channel).unwrap();
+            let id = rendered_concept_urn(channel, "harness/widgets", "widget-report");
+            assert!(mif_core::is_concept_urn(&id));
+            assert!(rendered.contains(&id), "{channel} lacks {id}");
+        }
     }
 
     #[test]

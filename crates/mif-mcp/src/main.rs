@@ -32,8 +32,9 @@ struct ValidateParams {
     /// projection) to validate.
     file: PathBuf,
     /// MIF level floor to additionally require (1, 2, or 3). Level 1's
-    /// fields are already covered by the canonical schema, so the default
-    /// is a plain schema validation.
+    /// per-document fields are already covered by the canonical schema, so
+    /// the default is a plain schema validation. MIF 1.4.0 Level 1 also
+    /// requires an OKF bundle, which this per-file check does not cover.
     level: Option<u8>,
 }
 
@@ -989,6 +990,9 @@ impl Mif {
     }
 }
 
+// `rmcp`'s `#[tool_handler]` expands to `async` trait methods with no
+// `.await`; the generated code isn't ours to change.
+#[allow(clippy::unused_async_trait_impl)]
 #[tool_handler(
     name = "mif-mcp",
     instructions = "Validate, ingest, and semantically search MIF documents, and resolve MIF \
@@ -1040,7 +1044,7 @@ mod tests {
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:test-001",
+                "@id": "urn:mif:89886348-4773-5732-88b5-84366da76468",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "created": "2026-07-02T00:00:00Z"
@@ -1102,7 +1106,7 @@ mod tests {
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:test-001",
+                "@id": "urn:mif:89886348-4773-5732-88b5-84366da76468",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "created": "2026-07-02T00:00:00Z"
@@ -1126,7 +1130,7 @@ mod tests {
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:test-001",
+                "@id": "urn:mif:89886348-4773-5732-88b5-84366da76468",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "created": "2026-07-02T00:00:00Z",
@@ -1255,7 +1259,7 @@ mod tests {
     }
 
     const VALID_MARKDOWN_FIXTURE: &str = "---
-id: memory:mcp-test-001
+id: b5fa5261-dc51-526b-94bd-4e0a90575a23
 type: semantic
 created: 2026-07-02T00:00:00Z
 ---
@@ -1264,8 +1268,7 @@ Test content via MCP.
 ";
 
     // See the identical fixture and its rationale in mif-cli's test module.
-    const DRIFTING_MARKDOWN_FIXTURE: &str =
-        "---\nid: x\ntype: semantic\n123: orphaned-value\n---\n\nBody.\n";
+    const DRIFTING_MARKDOWN_FIXTURE: &str = "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ntype: semantic\n123: orphaned-value\n---\n\nBody.\n";
 
     #[test]
     fn roundtrip_tool_accepts_a_conformant_document() {
@@ -1301,7 +1304,7 @@ Test content via MCP.
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:mcp-timestamp-loss-test",
+                "@id": "urn:mif:59926f1a-b15c-507b-9892-102bdb68ea12",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "timestamp": "2026-01-01T00:00:00Z"
@@ -1326,7 +1329,7 @@ Test content via MCP.
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:mcp-timestamp-consistent-test",
+                "@id": "urn:mif:c4659898-f80c-5ed8-b51a-346fe7761464",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "created": "2026-01-01T00:00:00Z",
@@ -1367,7 +1370,7 @@ Test content via MCP.
             shape: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(value["@id"], "urn:mif:memory:mcp-test-001");
+        assert_eq!(value["@id"], "urn:mif:b5fa5261-dc51-526b-94bd-4e0a90575a23");
     }
 
     #[test]
@@ -1383,7 +1386,7 @@ Test content via MCP.
         assert!(result.contains("wrote JSON-LD to"));
         let written = fs::read_to_string(&out_path).unwrap();
         let value: serde_json::Value = serde_json::from_str(&written).unwrap();
-        assert_eq!(value["@id"], "urn:mif:memory:mcp-test-001");
+        assert_eq!(value["@id"], "urn:mif:b5fa5261-dc51-526b-94bd-4e0a90575a23");
     }
 
     #[test]
@@ -1392,7 +1395,7 @@ Test content via MCP.
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:mcp-emit-md-test",
+                "@id": "urn:mif:fc18fc75-8739-57c7-b477-cb29aeeae77c",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "created": "2026-07-02T00:00:00Z"
@@ -1414,7 +1417,7 @@ Test content via MCP.
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:mcp-bom-test",
+                "@id": "urn:mif:1e4ccfc8-08d1-5265-8d79-f5c1741d2eb1",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "created": "2026-07-02T00:00:00Z"
@@ -1451,7 +1454,7 @@ Test content via MCP.
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:mcp-emit-md-timestamp-loss-test",
+                "@id": "urn:mif:a2e0bc13-4f55-5f5f-8af8-3614942752c8",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "timestamp": "2026-01-01T00:00:00Z"
@@ -1510,7 +1513,7 @@ Test content via MCP.
         let db_path = db_dir.path().join("vectors.db");
         let invalid_file = write_temp_file(
             "---
-id: memory:mcp-test-002
+id: 718131aa-848a-597c-9fda-ba9420e771a8
 created: 2026-07-02T00:00:00Z
 ---
 
@@ -1622,11 +1625,11 @@ No type field.
     fn to_search_result_clamps_a_non_finite_score_to_zero() {
         let result = to_search_result(vec![
             mif_store::SimilarityMatch {
-                id: "urn:mif:memory:a".to_string(),
+                id: "urn:mif:85c307af-aa7c-5f4f-9568-0ec847cf2b06".to_string(),
                 score: f32::NAN,
             },
             mif_store::SimilarityMatch {
-                id: "urn:mif:memory:b".to_string(),
+                id: "urn:mif:2ee433d5-2bf0-51ad-9944-a4927e39dbd9".to_string(),
                 score: f32::INFINITY,
             },
         ]);
@@ -1639,7 +1642,8 @@ No type field.
     fn ingest_fixture(db_path: &std::path::Path, id: &str, content: &str) {
         warm_embedding_model_cache();
         let file = write_temp_file(&format!(
-            "---\nid: {id}\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\n---\n\n{content}\n"
+            "---\nid: {}\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\n---\n\n{content}\n",
+            mif_core::concept_uuid(id)
         ));
         Mif.ingest_mif_document(Parameters(IngestParams {
             file: file.path().to_path_buf(),
@@ -1665,7 +1669,10 @@ No type field.
             limit: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(value["matches"][0]["id"], "urn:mif:mcp:cats");
+        assert_eq!(
+            value["matches"][0]["id"],
+            "urn:mif:c834ffc1-2cb2-5816-9640-7f814edc143a"
+        );
         // `.is_null()` on indexed access can't distinguish a missing key
         // from a key present with a JSON `null` value -- `skip_serializing_if`
         // is supposed to omit `root` entirely for single-root queries, so
@@ -1698,12 +1705,15 @@ No type field.
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         let matches = value["matches"].as_array().unwrap();
-        assert_eq!(matches[0]["id"], "urn:mif:mcp:cats");
+        assert_eq!(
+            matches[0]["id"],
+            "urn:mif:c834ffc1-2cb2-5816-9640-7f814edc143a"
+        );
         assert_eq!(matches[0]["root"], db_path_a.display().to_string());
         assert!(
-            matches
-                .iter()
-                .any(|m| m["id"].as_str().unwrap() == "urn:mif:mcp:finance")
+            matches.iter().any(
+                |m| m["id"].as_str().unwrap() == "urn:mif:5c9448eb-cc78-5a87-b5ff-4436a8e08eca"
+            )
         );
     }
 
@@ -1715,7 +1725,7 @@ No type field.
         ingest_fixture(&db_path, "mcp:b", "Dogs are loyal domesticated canines.");
 
         let result = Mif.find_similar_documents(Parameters(FindSimilarParams {
-            id: "urn:mif:mcp:a".to_string(),
+            id: "urn:mif:e9102de6-c15d-5144-a51d-f2d60dcb1edf".to_string(),
             db_path: Some(db_path),
             extra_db_paths: Vec::new(),
             limit: None,
@@ -1727,8 +1737,8 @@ No type field.
             .iter()
             .map(|m| m["id"].as_str().unwrap())
             .collect();
-        assert!(!ids.contains(&"urn:mif:mcp:a"));
-        assert!(ids.contains(&"urn:mif:mcp:b"));
+        assert!(!ids.contains(&"urn:mif:e9102de6-c15d-5144-a51d-f2d60dcb1edf"));
+        assert!(ids.contains(&"urn:mif:e1a0fca4-f6b3-5599-89c2-c8a60ef9cb39"));
     }
 
     #[test]
@@ -1741,7 +1751,7 @@ No type field.
         ingest_fixture(&db_path_b, "mcp:b", "Dogs are loyal domesticated canines.");
 
         let result = Mif.find_similar_documents(Parameters(FindSimilarParams {
-            id: "urn:mif:mcp:a".to_string(),
+            id: "urn:mif:e9102de6-c15d-5144-a51d-f2d60dcb1edf".to_string(),
             db_path: Some(db_path_a),
             extra_db_paths: vec![db_path_b],
             limit: None,
@@ -1753,8 +1763,8 @@ No type field.
             .iter()
             .map(|m| m["id"].as_str().unwrap())
             .collect();
-        assert!(!ids.contains(&"urn:mif:mcp:a"));
-        assert!(ids.contains(&"urn:mif:mcp:b"));
+        assert!(!ids.contains(&"urn:mif:e9102de6-c15d-5144-a51d-f2d60dcb1edf"));
+        assert!(ids.contains(&"urn:mif:e1a0fca4-f6b3-5599-89c2-c8a60ef9cb39"));
     }
 
     #[test]
@@ -1818,7 +1828,7 @@ No type field.
         ingest_fixture(&db_path_b, "mcp:b", "Dogs are loyal domesticated canines.");
 
         let result = Mif.find_similar_documents(Parameters(FindSimilarParams {
-            id: "urn:mif:mcp:a".to_string(),
+            id: "urn:mif:e9102de6-c15d-5144-a51d-f2d60dcb1edf".to_string(),
             db_path: Some(db_path_a),
             extra_db_paths: vec![db_path_b],
             limit: None,
@@ -1830,8 +1840,8 @@ No type field.
             .iter()
             .map(|m| m["id"].as_str().unwrap())
             .collect();
-        assert!(!ids.contains(&"urn:mif:mcp:a"));
-        assert!(ids.contains(&"urn:mif:mcp:b"));
+        assert!(!ids.contains(&"urn:mif:e9102de6-c15d-5144-a51d-f2d60dcb1edf"));
+        assert!(ids.contains(&"urn:mif:e1a0fca4-f6b3-5599-89c2-c8a60ef9cb39"));
     }
 
     #[test]
@@ -1861,7 +1871,7 @@ No type field.
         );
 
         let result = Mif.find_similar_documents(Parameters(FindSimilarParams {
-            id: "urn:mif:mcp:shared".to_string(),
+            id: "urn:mif:4451f08f-6dde-5fa9-a2a1-e379ddca4327".to_string(),
             db_path: Some(db_path_a),
             extra_db_paths: vec![db_path_b],
             limit: None,
@@ -1874,10 +1884,10 @@ No type field.
             .map(|m| m["id"].as_str().unwrap())
             .collect();
         assert!(
-            !ids.contains(&"urn:mif:mcp:shared"),
+            !ids.contains(&"urn:mif:4451f08f-6dde-5fa9-a2a1-e379ddca4327"),
             "the anchor id must be excluded from every root's copy, not just one: {ids:?}"
         );
-        assert!(ids.contains(&"urn:mif:mcp:other"));
+        assert!(ids.contains(&"urn:mif:4bf8b8c8-e381-50d4-ad8d-57cdf255387c"));
     }
 
     #[test]
@@ -1887,7 +1897,7 @@ No type field.
         mif_store::VectorStore::open(&db_path).unwrap();
 
         let result = Mif.find_similar_documents(Parameters(FindSimilarParams {
-            id: "urn:mif:mcp:missing".to_string(),
+            id: "urn:mif:ae263eb9-85ea-582a-bf6e-8bc35f949c5e".to_string(),
             db_path: Some(db_path),
             extra_db_paths: Vec::new(),
             limit: None,

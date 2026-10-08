@@ -120,7 +120,7 @@ mod tests {
     #[test]
     fn discovery_text_excludes_at_prefixed_top_level_fields() {
         let file = write_temp(
-            r#"{"@id":"f-context","@context":"https://mif-spec.dev/context.jsonld","content":"has an ISBN"}"#,
+            r#"{"@id":"f-context","@context":"https://mif-spec.dev/schema/context.jsonld","content":"has an ISBN"}"#,
         );
         let finding = Finding::load(file.path()).unwrap();
         assert_eq!(finding.discovery_text(), "has an ISBN");

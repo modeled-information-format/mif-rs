@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 
 /// MIF's three-way knowledge taxonomy.
 ///
-/// Shared by the `conceptType` field (current, required on a MIF document)
-/// and the `memoryType` field (deprecated v0.1 alias, retained on the
-/// document for backward compatibility). See the MIF schema
+/// Shared by the `conceptType` field (current) and the `memoryType` field
+/// (deprecated v0.1 alias, retained for backward compatibility). A MIF
+/// document must carry one of the two; since MIF 1.4.0 a document with only
+/// `memoryType` satisfies the schema's type requirement. See the MIF schema
 /// (`mif.schema.json`) for the authoritative definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

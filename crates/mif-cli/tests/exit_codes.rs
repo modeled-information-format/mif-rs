@@ -37,7 +37,7 @@ fn a_conformant_document_exits_zero() {
         r#"{
             "@context": "https://mif-spec.dev/schema/context.jsonld",
             "@type": "Concept",
-            "@id": "urn:mif:memory:exit-code-test",
+            "@id": "urn:mif:2f44adca-c71e-5f55-b2e8-76092d14c770",
             "conceptType": "semantic",
             "content": "Content.",
             "created": "2026-07-02T00:00:00Z"
@@ -57,7 +57,7 @@ fn roundtrip_on_a_lossless_document_exits_zero() {
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(
         file.path(),
-        "---\nid: memory:roundtrip-cmd-test\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\n---\n\nBody.\n",
+        "---\nid: a632b776-4af0-5067-ac73-6ca5cf7d4b91\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\n---\n\nBody.\n",
     )
     .unwrap();
 
@@ -78,7 +78,7 @@ fn roundtrip_on_a_drifting_document_exits_with_the_mapped_error_code() {
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(
         file.path(),
-        "---\nid: x\ntype: semantic\n123: orphaned-value\n---\n\nBody.\n",
+        "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ntype: semantic\n123: orphaned-value\n---\n\nBody.\n",
     )
     .unwrap();
 
@@ -94,7 +94,7 @@ fn emit_jsonld_prints_the_projection_and_exits_zero() {
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(
         file.path(),
-        "---\nid: memory:emit-jsonld-cmd-test\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\n---\n\nBody.\n",
+        "---\nid: d1e832d4-b6f7-549f-80b1-0f0680c2db6c\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\n---\n\nBody.\n",
     )
     .unwrap();
 
@@ -104,7 +104,7 @@ fn emit_jsonld_prints_the_projection_and_exits_zero() {
         .unwrap();
     assert_eq!(output.status.code(), Some(0));
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["@id"], "urn:mif:memory:emit-jsonld-cmd-test");
+    assert_eq!(value["@id"], "urn:mif:d1e832d4-b6f7-549f-80b1-0f0680c2db6c");
 }
 
 #[test]
@@ -112,7 +112,7 @@ fn emit_jsonld_with_out_writes_the_file_and_exits_zero() {
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(
         file.path(),
-        "---\nid: memory:emit-jsonld-out-test\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\n---\n\nBody.\n",
+        "---\nid: a38d3194-18f9-5e95-bb51-b2f4dd8179de\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\n---\n\nBody.\n",
     )
     .unwrap();
     let out_dir = tempfile::tempdir().unwrap();
@@ -130,7 +130,7 @@ fn emit_jsonld_with_out_writes_the_file_and_exits_zero() {
     assert_eq!(output.status.code(), Some(0));
     let written = std::fs::read_to_string(&out_path).unwrap();
     let value: serde_json::Value = serde_json::from_str(&written).unwrap();
-    assert_eq!(value["@id"], "urn:mif:memory:emit-jsonld-out-test");
+    assert_eq!(value["@id"], "urn:mif:a38d3194-18f9-5e95-bb51-b2f4dd8179de");
 }
 
 #[test]
@@ -141,7 +141,7 @@ fn emit_markdown_prints_the_projection_and_exits_zero() {
         r#"{
             "@context": "https://mif-spec.dev/schema/context.jsonld",
             "@type": "Concept",
-            "@id": "urn:mif:memory:emit-markdown-cmd-test",
+            "@id": "urn:mif:3511e0ad-61f0-5c23-934b-0f47921d8b30",
             "conceptType": "semantic",
             "content": "Content.",
             "created": "2026-07-02T00:00:00Z"
@@ -177,7 +177,7 @@ fn a_document_missing_a_level_floor_field_exits_with_the_mapped_error_code() {
         r#"{
             "@context": "https://mif-spec.dev/schema/context.jsonld",
             "@type": "Concept",
-            "@id": "urn:mif:memory:exit-code-level-test",
+            "@id": "urn:mif:b07fd412-2fab-556b-bce1-c937e5bbc5d6",
             "conceptType": "semantic",
             "content": "Content.",
             "created": "2026-07-02T00:00:00Z"
@@ -200,7 +200,7 @@ fn an_out_of_range_level_exits_with_the_mapped_error_code() {
         r#"{
             "@context": "https://mif-spec.dev/schema/context.jsonld",
             "@type": "Concept",
-            "@id": "urn:mif:memory:exit-code-level-range-test",
+            "@id": "urn:mif:76bb9a07-2280-5f2c-8fca-1a935f7910e4",
             "conceptType": "semantic",
             "content": "Content.",
             "created": "2026-07-02T00:00:00Z"

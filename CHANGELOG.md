@@ -7,12 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Aligns mif-rs with MIF specification **1.4.1** (which carries the 1.4.0 schema and id rules unchanged).
+
 ### Added
+
+- **`mif-core`**: concept-URN helpers for MIF 1.4.0's `urn:mif:<uuid>` id form (spec §6.1). `concept_urn`/`concept_uuid` derive a deterministic UUIDv5 from a stable name in the namespace `uuid5(NAMESPACE_URL, "https://mif-spec.dev")`, the one the MIF repo's `scripts/migrate_0_1_to_1_0.py` uses, so other MIF tools derive the same id from the same name. `is_concept_urn` checks the form.
+- **`mif-schema`**: `MIF_SPEC_VERSION` (`"1.4.1"`) names the MIF release the vendored schemas come from. `src/schemas/VENDOR.json` records that release's mirror URL (`https://mif-spec.dev/schema/1.4.1/`) and each file's sha256, and a unit test keeps the lock, the constant, and the embedded files in step.
+- **CI**: a `schema-drift` job in `ci-checks.yml` (`just schema-drift` locally) compares the vendored schemas with the immutable `https://mif-spec.dev/schema/<version>/` mirror, and notes when mif-spec.dev's `latest` is newer than the pin.
 
 - **`mif-rh`**/**`mif-rh-cli`**: `harness_falsify`'s one-round rule gains an explicit `regate` override — `falsify`/`falsify_with_now` take a new `regate: bool` parameter, and `mif-rh-cli harness falsify` gains a `--regate` flag — that bypasses `already_graded()`'s short-circuit for a single invocation and force-regrades a finding that already carries a verdict, logging a distinct `falsification-gate: regated (...)` line (parallel to the existing `run`/`skipped` lines) rather than silently skipping. A finding that was never graded behaves identically whether or not `regate` is set. **Breaking** for direct callers of `mif_rh::falsify`/`falsify_with_now`: pass `false` to keep prior behavior (#119).
 
+### Changed
+
+- **`mif-schema`**: the vendored schemas are MIF 1.4.1's (was 1.3.0; only `mif.schema.json` changed, in 1.4.0). **Breaking**: a concept `@id` must be `urn:mif:<uuid>`, so slug or structured ids such as `urn:mif:my-note` or `urn:mif:memory:test-001` no longer validate. A document carrying only the deprecated `memoryType` now satisfies the type requirement.
+- **`mif-rh`**/**`mif-rh-cli`**: `wrap_source` and the report, blog and book renderers mint `urn:mif:<uuid>` ids, a UUIDv5 of `source:<namespace>:<slug>` or `<channel>:<namespace>:<slug>` (new public `source_concept_urn`/`rendered_concept_urn`). **Breaking**: these replace the structured `urn:mif:source:…`, `urn:mif:report:…`, `urn:mif:blog:…` and `urn:mif:book:…` ids, which MIF 1.4.0 rejects. Consumers that parsed the namespace or slug out of a source id should read `extensions.harness.source.namespace`/`.slug`, which the envelope now carries; rendered artifacts already carry `slug`.
+- **`mif-schema`**/**`mif-cli`**/**`mif-mcp`**: `Level` and the `--level`/`level` docs state that per-document validation is necessary but not sufficient for MIF 1.4.0 Level 1, which also requires an OKF bundle (spec §13.1).
+
 ### Fixed
 
+- **Deps**: `rustls` 0.23.41 → 0.23.45 (and `rustls-webpki` 0.103.15) for RUSTSEC-2026-0285, TLS 1.3 handshake messages accepted across encryption-level boundaries.
 - **`mif-rh`**: `resolve_finding` now honors a finding's `ontology.id` against the topic's `extends` chain instead of exact-matching only the type-declaring pack's own id. Previously, naming a correctly topic-bound descendant pack (e.g. `ontology.id: software-engineering`) failed to resolve an entity type it only inherits from a shared base layer (`engineering-base`) via `extends`, while naming the un-bound base layer directly (`ontology.id: engineering-base`) resolved successfully even though that base layer is outside the topic's bound set. **Breaking behavior change**: any finding relying on the latter workaround (pinning an un-bound `*-base` id directly) now reports `unresolved` instead of validating — this was always out of contract per `resolve-ontology.sh`'s own documented rule ("an ontology.id outside the topic's bound set -> non-zero"), but code previously accepted it anyway. `resolved_ontology` continues to name the schema-declaring pack (e.g. `engineering-base@0.1.0`), never the pinned `ontology.id`, matching this crate's existing convention for implicit resolution (#135).
 - **`mif-rh`**: `topic_metadata` (backing `mif-rh-cli harness topic-metadata`) no longer emits a `TITLE` with leading/trailing whitespace — a registered title carrying an upstream 80-character cutoff's trailing space (which landed in the generated README's H1 and failed markdownlint MD009) is trimmed on read, and a title over the 80-character budget is now truncated on a word boundary with a `…` marker so truncated titles stay distinguishable. A title that is absent or sanitizes to nothing (e.g. a whitespace-only value) falls back to the topic id rather than blanking the README H1 (#86).
 

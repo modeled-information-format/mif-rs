@@ -5,6 +5,11 @@
 //! are vendored at compile time (`src/schemas/`, synced from the canonical
 //! `MIF` repo) and resolved entirely offline — no network access happens at
 //! validation time.
+//!
+//! The vendored set is pinned to one MIF specification release,
+//! [`MIF_SPEC_VERSION`]; `src/schemas/VENDOR.json` records each file's
+//! immutable upstream mirror (`https://mif-spec.dev/schema/<version>/`) and
+//! sha256, and `just schema-drift` checks the files against that mirror.
 
 use std::sync::OnceLock;
 
@@ -13,6 +18,11 @@ use mif_problem::{
     Applicability, CodeAction, ProblemDetails, ProblemMeta, SuggestedFix, ToProblem,
 };
 use serde_json::Value;
+
+/// The MIF specification release the vendored schemas are taken from.
+///
+/// Matches `mifSpecVersion` in `src/schemas/VENDOR.json`.
+pub const MIF_SPEC_VERSION: &str = "1.4.1";
 
 const MIF_SCHEMA: &str = include_str!("schemas/mif.schema.json");
 const CITATION_SCHEMA: &str = include_str!("schemas/citation.schema.json");
@@ -47,13 +57,20 @@ impl std::error::Error for SchemaCompilationSource {}
 ///
 /// Level floors are additive: L2 requires everything L1 requires plus its
 /// own fields, and L3 requires everything L2 requires plus its own. L1's
-/// fields (`id`/`@id`, `type`/`conceptType`, `created`) are already enforced
-/// by the canonical core schema's `required` list, so [`validate_level`]
-/// with [`Level::L1`] is equivalent to [`validate_document`]; L2 and L3 add
+/// per-document fields (a `urn:mif:<uuid>` `@id`, `conceptType` or the
+/// deprecated `memoryType`, `created`, non-empty `content`) are already
+/// enforced by the canonical core schema, so [`validate_level`] with
+/// [`Level::L1`] is equivalent to [`validate_document`]; L2 and L3 add
 /// genuinely new checks beyond the core schema.
+///
+/// Per-document validation is necessary but not sufficient for MIF 1.4.0
+/// Level 1 (spec §13.1): L1 also requires the concept to live in a valid OKF
+/// bundle (a directory of `.md` concept files, each frontmatter relationship
+/// mirrored by a body link). This crate validates one projected document at
+/// a time and does not check bundle shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Level {
-    /// `id`, `type`, `created` — already enforced by the core schema.
+    /// UUID `id`, `type`, `created` — already enforced by the core schema.
     L1,
     /// Adds `namespace`, `modified`, `temporal`.
     L2,
@@ -376,15 +393,16 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        Level, MifSchemaError, SchemaCompilationSource, validate_citation, validate_document,
-        validate_level, validate_ontology_definition,
+        CITATION_SCHEMA, ENTITY_REFERENCE_SCHEMA, Level, MIF_SCHEMA, MIF_SPEC_VERSION,
+        MifSchemaError, ONTOLOGY_SCHEMA, SchemaCompilationSource, validate_citation,
+        validate_document, validate_level, validate_ontology_definition,
     };
 
     fn minimal_valid_document() -> serde_json::Value {
         json!({
             "@context": "https://mif-spec.dev/schema/context.jsonld",
             "@type": "Concept",
-            "@id": "urn:mif:memory:test-001",
+            "@id": "urn:mif:89886348-4773-5732-88b5-84366da76468",
             "conceptType": "semantic",
             "content": "Test content.",
             "created": "2026-07-02T00:00:00Z",
@@ -394,6 +412,81 @@ mod tests {
     #[test]
     fn valid_document_passes() {
         assert!(validate_document(&minimal_valid_document()).is_ok());
+    }
+
+    #[test]
+    fn slug_id_is_rejected() {
+        // MIF 1.4.0 §6.1: a concept @id is urn:mif:<uuid>.
+        for id in [
+            "urn:mif:my-note",
+            "urn:mif:memory:test-001",
+            "urn:mif:550e8400",
+            "urn:mif:entity:550e8400-e29b-41d4-a716-446655440000",
+        ] {
+            let mut instance = minimal_valid_document();
+            instance["@id"] = json!(id);
+            assert!(validate_document(&instance).is_err(), "{id} should fail");
+        }
+    }
+
+    #[test]
+    fn derived_concept_urn_is_accepted() {
+        let mut instance = minimal_valid_document();
+        instance["@id"] = json!(mif_core::concept_urn("source:topic:paper"));
+        assert!(validate_document(&instance).is_ok());
+    }
+
+    #[test]
+    fn deprecated_memory_type_alone_satisfies_the_type_requirement() {
+        let mut instance = minimal_valid_document();
+        let object = instance.as_object_mut().unwrap();
+        object.remove("conceptType");
+        object.insert("memoryType".into(), json!("semantic"));
+        assert!(validate_document(&instance).is_ok());
+    }
+
+    #[test]
+    fn document_with_neither_concept_type_nor_memory_type_fails() {
+        let mut instance = minimal_valid_document();
+        instance.as_object_mut().unwrap().remove("conceptType");
+        assert!(validate_document(&instance).is_err());
+    }
+
+    #[test]
+    fn vendor_lock_matches_the_embedded_schemas_and_spec_version() {
+        use std::fmt::Write;
+
+        use sha2::{Digest, Sha256};
+
+        let lock: serde_json::Value =
+            serde_json::from_str(include_str!("schemas/VENDOR.json")).unwrap();
+        assert_eq!(lock["mifSpecVersion"], MIF_SPEC_VERSION);
+        assert_eq!(
+            lock["source"],
+            format!("https://mif-spec.dev/schema/{MIF_SPEC_VERSION}/")
+        );
+        let embedded = [
+            ("mif.schema.json", MIF_SCHEMA),
+            ("citation.schema.json", CITATION_SCHEMA),
+            ("ontology.schema.json", ONTOLOGY_SCHEMA),
+            (
+                "definitions/entity-reference.schema.json",
+                ENTITY_REFERENCE_SCHEMA,
+            ),
+        ];
+        let files = lock["files"].as_object().unwrap();
+        assert_eq!(files.len(), embedded.len());
+        for (name, text) in embedded {
+            let digest = Sha256::digest(text.as_bytes());
+            let hex = digest.iter().fold(String::new(), |mut hex, byte| {
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            });
+            assert_eq!(
+                files[name]["sha256"], hex,
+                "{name} drifted from VENDOR.json"
+            );
+        }
     }
 
     #[test]

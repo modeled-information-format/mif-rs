@@ -483,6 +483,9 @@ impl MifRh {
     }
 }
 
+// `rmcp`'s `#[tool_handler]` expands to `async` trait methods with no
+// `.await`; the generated code isn't ours to change.
+#[allow(clippy::unused_async_trait_impl)]
 #[tool_handler(
     name = "mif-rh-mcp",
     instructions = "Search, suggest entity types for, and find similar research-harness-template \

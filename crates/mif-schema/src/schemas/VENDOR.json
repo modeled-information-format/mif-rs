@@ -1,0 +1,22 @@
+{
+  "mifSpecVersion": "1.4.1",
+  "source": "https://mif-spec.dev/schema/1.4.1/",
+  "files": {
+    "mif.schema.json": {
+      "upstream": "mif.schema.json",
+      "sha256": "71063262aa5fb3b46ff1cb09c5371b87edcfa97c278aa5ff41f862478b130547"
+    },
+    "citation.schema.json": {
+      "upstream": "citation.schema.json",
+      "sha256": "eb4cf77f64b249d0ef9a4c8c5c5286119c0204a9815598ac95ff715cc7d21968"
+    },
+    "ontology.schema.json": {
+      "upstream": "ontology/ontology.schema.json",
+      "sha256": "75bda329b2e673806b8ccbfb48349b06b64b69521954b4f5de175c1525dad59c"
+    },
+    "definitions/entity-reference.schema.json": {
+      "upstream": "definitions/entity-reference.schema.json",
+      "sha256": "59906a7fde4268153d4ad45a2f0bf311e66a246f3eb19053b03fdd07b854400f"
+    }
+  }
+}

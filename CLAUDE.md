@@ -108,6 +108,14 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 5. Add a unit test in the `#[cfg(test)] mod tests` block within the same file.
 6. Run `just check` before committing.
 
+### Move to a New MIF Specification Release
+
+1. Copy each file listed in `crates/mif-schema/src/schemas/VENDOR.json` from `https://mif-spec.dev/schema/<version>/<upstream>` over its vendored path.
+2. Set `mifSpecVersion`, `source`, and every `sha256` (`shasum -a 256 <file>`) in `VENDOR.json`, and `MIF_SPEC_VERSION` in `crates/mif-schema/src/lib.rs`.
+3. Read the MIF release's CHANGELOG for rule changes the schemas alone don't carry (id forms, conformance levels), and update code, fixtures, and the README compatibility table to match.
+4. Add a CHANGELOG entry naming the new MIF version.
+5. Verify: `just schema-drift && just check`.
+
 ### Add a New Error Variant
 
 1. Add the variant to the relevant crate's error enum (`mif_schema::MifSchemaError`, `mif_ontology::OntologyError`), derived with `thiserror::Error`.
@@ -128,7 +136,8 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 |---|---|
 | `crates/mif-core/src/{concept,entity,ontology}.rs` | `ConceptType`; `EntityReference`/`EntityId`/`EntityType`/`KnownEntityType`; `OntologyReference` |
 | `crates/mif-schema/src/lib.rs` | Vendored-schema validators (`validate_document`, `validate_citation`, `validate_ontology_definition`) |
-| `crates/mif-schema/src/schemas/` | Vendored copies of `mif.schema.json`, `citation.schema.json`, `ontology.schema.json`, `definitions/entity-reference.schema.json`, synced from the `MIF` repo's `schema/` |
+| `crates/mif-schema/src/schemas/` | Vendored copies of `mif.schema.json`, `citation.schema.json`, `ontology.schema.json`, `definitions/entity-reference.schema.json`, taken from one MIF release's `https://mif-spec.dev/schema/<version>/` mirror; `VENDOR.json` pins the version (`mif_schema::MIF_SPEC_VERSION`) and each file's sha256 |
+| `crates/mif-core/src/urn.rs` | Concept URNs: `concept_urn`/`concept_uuid` (deterministic UUIDv5 in the MIF namespace, matching the MIF repo's `scripts/migrate_0_1_to_1_0.py`) and `is_concept_urn` |
 | `crates/mif-ontology/src/lib.rs` | `OntologyMetadata`, `parse_definition`, `load_corpus_from_dir`, `resolve_chain` |
 | `crates/mif-problem/src/lib.rs` | `ProblemDetails`, `Applicability`, `SuggestedFix`, `CodeAction`, `ProblemMeta`, `OutputFormat`, the `ToProblem` trait |
 | `crates/mif-frontmatter/src/lib.rs` | `parse_markdown`, `serialize_markdown`, `md_to_jsonld`, `jsonld_to_md`, `roundtrip_lossless` |
@@ -218,8 +227,11 @@ Set in the workspace root `Cargo.toml`'s `[workspace.lints]` (not per-crate); ev
 | `must_use_candidate` | Applied manually where meaningful |
 | `redundant_pub_crate` | Allow `pub(crate)` for clarity |
 | `multiple_crate_versions` | Inherent to a dependency graph pulling in `jsonschema`/`rmcp`/`tokio`; not a code-quality signal about this workspace's own code |
+| `assert_is_empty` | New in clippy 1.99; its `assert_eq!(v, [] as [T; 0])` rewrite reads worse in tests than `assert!(v.is_empty())` |
 
-**Framework-imposed exceptions** (documented inline where used, not workspace-wide): `mif-mcp`'s `#[tool]`-annotated methods require an `&self` receiver for `rmcp`'s dispatch mechanism even when unused — `#[allow(clippy::unused_self)]` on that `impl` block, with a comment explaining why.
+The lint gate (`just check`, lefthook pre-push, CI Clippy) needs clippy 1.99 or newer: older clippy rejects `assert_is_empty` and `unused_async_trait_impl` as unknown lints under `-D warnings`. The 1.95 MSRV covers building (`cargo check`), not linting.
+
+**Framework-imposed exceptions** (documented inline where used, not workspace-wide): `mif-mcp`'s `#[tool]`-annotated methods require an `&self` receiver for `rmcp`'s dispatch mechanism even when unused — `#[allow(clippy::unused_self)]` on that `impl` block, with a comment explaining why. The `#[tool_handler]` impls in `mif-mcp` and `mif-rh-mcp` expand to `async` trait methods with no `.await` — `#[allow(clippy::unused_async_trait_impl)]` on each.
 
 **Clippy thresholds** (from `clippy.toml`, workspace-root, applies to every member):
 

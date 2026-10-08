@@ -96,13 +96,13 @@ pub use harness_release::{
     VersionGateReport, bump_version, check_version_bump, goal_version_id,
     reconcile_changelog_links,
 };
-pub use harness_render::{RenderInputs, render_artifact};
+pub use harness_render::{RenderInputs, render_artifact, rendered_concept_urn};
 pub use harness_shippable_typing::{ShippableTypingReport, check_shippable_typing};
 pub use harness_synthesize::synthesize_artifact;
 pub use harness_toggle::{SITE_PLUGINS, pack_toggle, site_toggle_plugin, site_toggle_primary};
 pub use harness_topic_metadata::{TopicMetadata, topic_metadata};
 pub use harness_validate_concordance::{ConcordanceValidation, validate_concordance};
-pub use harness_wrap::{WrapSourceInputs, read_source_content, wrap_source};
+pub use harness_wrap::{WrapSourceInputs, read_source_content, source_concept_urn, wrap_source};
 pub use index::{FindingIndex, IndexStats, IndexedFinding, Miss, SearchMatch, SimilarFinding};
 pub use lock::ReviewLock;
 pub use ontology_pack::{EntityType, OntologyPack};
