@@ -33,6 +33,20 @@ Rust implementation of the [MIF (Modeled Information Format)](https://mif-spec.d
 | [`mif-cli`](crates/mif-cli) | binary | Command-line interface (`validate`, `ontology resolve`, `ingest`, `search`, `find-similar`, `corpus-stats`) |
 | [`mif-mcp`](crates/mif-mcp) | binary | MCP server exposing the same six operations as tools |
 
+## MIF specification compatibility
+
+`mif-schema` vendors the canonical MIF JSON Schemas from one MIF release,
+exposed as `mif_schema::MIF_SPEC_VERSION` and recorded with sha256s in
+[`crates/mif-schema/src/schemas/VENDOR.json`](crates/mif-schema/src/schemas/VENDOR.json).
+CI's `schema-drift` job (`just schema-drift` locally) checks the vendored
+files against that release's immutable mirror at
+`https://mif-spec.dev/schema/<version>/`.
+
+| mif-rs | MIF specification | Notes |
+|---|---|---|
+| Unreleased | 1.4.0 | Concept `@id` must be `urn:mif:<uuid>`; `memoryType` alone satisfies the type check |
+| 0.6.0 – 0.9.0 | 1.2.0 – 1.3.0 | Vendored schemas are byte-identical across these MIF releases |
+
 ## Installation
 
 ```bash

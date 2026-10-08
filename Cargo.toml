@@ -62,6 +62,10 @@ sha2 = "0.11.0"
 # hf-hub's own "ureq" feature, so this is not a new transitive dependency,
 # only a new direct one.
 ureq = "3.3.0"
+# Deterministic UUIDv5 concept URNs (`mif_core::concept_urn`), matching the
+# MIF repo's `scripts/migrate_0_1_to_1_0.py` namespace. `v5` only (pulls
+# `sha1_smol`, BSD-3-Clause); no `std`-only RNG features.
+uuid = { version = "1.27.0", default-features = false, features = ["v5"] }
 
 [workspace.dependencies.mif-core]
 path = "crates/mif-core"
@@ -144,3 +148,7 @@ redundant_pub_crate = "allow"
 # crates (jsonschema, rmcp, tokio); not a code-quality signal about this
 # workspace's own code.
 multiple_crate_versions = "allow"
+# New in clippy 1.99 (pedantic). Its suggested rewrite of
+# `assert!(v.is_empty())` is `assert_eq!(v, [] as [T; 0])`, which reads worse
+# in tests than the assertion it replaces.
+assert_is_empty = "allow"

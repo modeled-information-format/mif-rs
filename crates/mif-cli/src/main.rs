@@ -45,8 +45,10 @@ enum Command {
         /// JSON-LD projection) to validate.
         file: PathBuf,
         /// MIF level floor to additionally require (1, 2, or 3). Level 1's
-        /// fields are already covered by the canonical schema, so the
-        /// default is a plain schema validation.
+        /// per-document fields are already covered by the canonical schema,
+        /// so the default is a plain schema validation. MIF 1.4.0 Level 1
+        /// also requires an OKF bundle, which this per-file check does not
+        /// cover.
         #[arg(long, default_value_t = 1)]
         level: u8,
     },
@@ -835,7 +837,7 @@ mod tests {
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:test-001",
+                "@id": "urn:mif:89886348-4773-5732-88b5-84366da76468",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "created": "2026-07-02T00:00:00Z"
@@ -900,7 +902,7 @@ mod tests {
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:test-001",
+                "@id": "urn:mif:89886348-4773-5732-88b5-84366da76468",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "created": "2026-07-02T00:00:00Z"
@@ -917,7 +919,7 @@ mod tests {
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:test-001",
+                "@id": "urn:mif:89886348-4773-5732-88b5-84366da76468",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "created": "2026-07-02T00:00:00Z",
@@ -1054,7 +1056,7 @@ mod tests {
     }
 
     const VALID_MARKDOWN_FIXTURE: &str = "---
-id: memory:test-001
+id: 89886348-4773-5732-88b5-84366da76468
 type: semantic
 created: 2026-07-02T00:00:00Z
 ---
@@ -1067,8 +1069,7 @@ Test content.
     // pass-through loop, so the recovered markdown differs from the
     // original. See mif-frontmatter's own
     // `non_string_top_level_frontmatter_key_is_dropped_and_causes_roundtrip_drift`.
-    const DRIFTING_MARKDOWN_FIXTURE: &str =
-        "---\nid: x\ntype: semantic\n123: orphaned-value\n---\n\nBody.\n";
+    const DRIFTING_MARKDOWN_FIXTURE: &str = "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ntype: semantic\n123: orphaned-value\n---\n\nBody.\n";
 
     #[test]
     fn roundtrip_accepts_a_conformant_markdown_document() {
@@ -1085,7 +1086,7 @@ Test content.
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:test-001",
+                "@id": "urn:mif:89886348-4773-5732-88b5-84366da76468",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "created": "2026-07-02T00:00:00Z"
@@ -1118,7 +1119,7 @@ Test content.
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:timestamp-loss-test",
+                "@id": "urn:mif:86444d37-f6ca-5b8e-a594-378fcb9d3e7e",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "timestamp": "2026-01-01T00:00:00Z"
@@ -1138,7 +1139,7 @@ Test content.
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:timestamp-consistent-test",
+                "@id": "urn:mif:33be700f-6122-5746-a35e-59205992dbf9",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "created": "2026-01-01T00:00:00Z",
@@ -1157,7 +1158,7 @@ Test content.
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:timestamp-loss-test-2",
+                "@id": "urn:mif:eee2ea61-690e-51ca-924e-868bbf304c12",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "timestamp": "2026-01-01T00:00:00Z"
@@ -1172,7 +1173,7 @@ Test content.
         let file = write_temp_file(VALID_MARKDOWN_FIXTURE);
         let output = emit_jsonld(file.path(), None, FrontmatterShape::V1Canonical).unwrap();
         let value: serde_json::Value = serde_json::from_str(&output).unwrap();
-        assert_eq!(value["@id"], "urn:mif:memory:test-001");
+        assert_eq!(value["@id"], "urn:mif:89886348-4773-5732-88b5-84366da76468");
         assert_eq!(value["conceptType"], "semantic");
     }
 
@@ -1186,7 +1187,7 @@ Test content.
         assert!(message.contains("wrote JSON-LD to"));
         let written = fs::read_to_string(&out_path).unwrap();
         let value: serde_json::Value = serde_json::from_str(&written).unwrap();
-        assert_eq!(value["@id"], "urn:mif:memory:test-001");
+        assert_eq!(value["@id"], "urn:mif:89886348-4773-5732-88b5-84366da76468");
     }
 
     #[test]
@@ -1202,7 +1203,7 @@ Test content.
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:test-001",
+                "@id": "urn:mif:89886348-4773-5732-88b5-84366da76468",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "created": "2026-07-02T00:00:00Z"
@@ -1229,7 +1230,7 @@ Test content.
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:bom-test",
+                "@id": "urn:mif:24b316e1-6c73-5df2-af96-15bf0c95da4b",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "created": "2026-07-02T00:00:00Z"
@@ -1251,7 +1252,7 @@ Test content.
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:test-001",
+                "@id": "urn:mif:89886348-4773-5732-88b5-84366da76468",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "created": "2026-07-02T00:00:00Z"
@@ -1293,7 +1294,7 @@ Test content.
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:emit-md-timestamp-loss-test",
+                "@id": "urn:mif:ee4a4a1e-9424-5575-b1be-8b1f80e13172",
                 "conceptType": "semantic",
                 "content": "Test content.",
                 "timestamp": "2026-01-01T00:00:00Z"
@@ -1346,7 +1347,10 @@ Test content.
 
         let store = mif_store::VectorStore::open(&db_path).unwrap();
         assert_eq!(store.count().unwrap(), 1);
-        let stored = store.get("urn:mif:memory:test-001").unwrap().unwrap();
+        let stored = store
+            .get("urn:mif:89886348-4773-5732-88b5-84366da76468")
+            .unwrap()
+            .unwrap();
         assert_eq!(stored.dim, 384);
     }
 
@@ -1357,7 +1361,7 @@ Test content.
             r#"{
                 "@context": "https://mif-spec.dev/schema/context.jsonld",
                 "@type": "Concept",
-                "@id": "urn:mif:memory:test-002",
+                "@id": "urn:mif:992e1654-6276-56a1-b993-3e529112a8ac",
                 "conceptType": "semantic",
                 "content": "Other content.",
                 "created": "2026-07-02T00:00:00Z"
@@ -1370,7 +1374,12 @@ Test content.
         assert!(message.contains("embedding_dim=384"));
 
         let store = mif_store::VectorStore::open(&db_path).unwrap();
-        assert!(store.get("urn:mif:memory:test-002").unwrap().is_some());
+        assert!(
+            store
+                .get("urn:mif:992e1654-6276-56a1-b993-3e529112a8ac")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
@@ -1389,7 +1398,7 @@ Test content.
         // fail before ever touching the store.
         let invalid_file = write_temp_file(
             "---
-id: memory:test-003
+id: 9c2bd382-34e9-52cf-b952-7fe33b0069ad
 created: 2026-07-02T00:00:00Z
 ---
 
@@ -1409,7 +1418,7 @@ No type field.
         let db_path = db_dir.path().join("vectors.db");
         let invalid_file = write_temp_file(
             "---
-id: memory:test-004
+id: bf762c6d-debd-5113-9d65-73ddb163b89f
 created: 2026-07-02T00:00:00Z
 ---
 
@@ -1493,7 +1502,8 @@ No type field.
         };
         assert_eq!(json_error.to_problem().exit_code, Some(2));
 
-        let not_found = CliError::DocumentNotFound("urn:mif:memory:missing".to_string());
+        let not_found =
+            CliError::DocumentNotFound("urn:mif:eb333609-17f6-53ad-88bb-2faf7e0bcef8".to_string());
         assert_eq!(not_found.to_problem().exit_code, Some(3));
     }
 
@@ -1563,7 +1573,7 @@ No type field.
         assert!(search_result.is_ok());
 
         let find_similar_result = run(&Command::FindSimilar {
-            id: "urn:mif:memory:test-001".to_string(),
+            id: "urn:mif:89886348-4773-5732-88b5-84366da76468".to_string(),
             db_path: Some(db_path.clone()),
             extra_db_path: Vec::new(),
             limit: 5,
@@ -1580,7 +1590,8 @@ No type field.
     fn ingest_fixture(db_path: &std::path::Path, id: &str, content: &str) {
         warm_embedding_model_cache();
         let file = write_temp_file(&format!(
-            "---\nid: {id}\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\n---\n\n{content}\n"
+            "---\nid: {}\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\n---\n\n{content}\n",
+            mif_core::concept_uuid(id)
         ));
         ingest(file.path(), Some(db_path)).unwrap();
     }
@@ -1602,7 +1613,7 @@ No type field.
 
         let result = search("A furry pet cat", Some(&db_path), &[], 10).unwrap();
         let first_line = result.lines().next().unwrap();
-        assert!(first_line.ends_with("urn:mif:memory:cats"));
+        assert!(first_line.ends_with("urn:mif:25b66725-81a9-5064-8d02-01eba8cb8cf6"));
     }
 
     #[test]
@@ -1623,9 +1634,15 @@ No type field.
         ingest_fixture(&db_path, "memory:a", "Cats are small domesticated felines.");
         ingest_fixture(&db_path, "memory:b", "Dogs are loyal domesticated canines.");
 
-        let result = find_similar("urn:mif:memory:a", Some(&db_path), &[], 10).unwrap();
-        assert!(!result.contains("memory:a"));
-        assert!(result.contains("memory:b"));
+        let result = find_similar(
+            "urn:mif:85c307af-aa7c-5f4f-9568-0ec847cf2b06",
+            Some(&db_path),
+            &[],
+            10,
+        )
+        .unwrap();
+        assert!(!result.contains(&mif_core::concept_urn("memory:a")));
+        assert!(result.contains(&mif_core::concept_urn("memory:b")));
     }
 
     #[test]
@@ -1634,7 +1651,13 @@ No type field.
         let db_path = db_dir.path().join("vectors.db");
         mif_store::VectorStore::open(&db_path).unwrap();
 
-        let error = find_similar("urn:mif:memory:missing", Some(&db_path), &[], 10).unwrap_err();
+        let error = find_similar(
+            "urn:mif:eb333609-17f6-53ad-88bb-2faf7e0bcef8",
+            Some(&db_path),
+            &[],
+            10,
+        )
+        .unwrap_err();
         let problem = error.to_problem();
         assert_eq!(
             problem.problem_type,
@@ -1683,9 +1706,9 @@ No type field.
         )
         .unwrap();
         let first_line = result.lines().next().unwrap();
-        assert!(first_line.contains("urn:mif:memory:cats"));
+        assert!(first_line.contains("urn:mif:25b66725-81a9-5064-8d02-01eba8cb8cf6"));
         assert!(first_line.contains(&format!("root={}", db_path_a.display())));
-        assert!(result.contains("urn:mif:memory:finance"));
+        assert!(result.contains("urn:mif:0cca8466-0a4a-5535-b5c0-f683edf1bfb1"));
     }
 
     #[test]
@@ -1706,14 +1729,14 @@ No type field.
         );
 
         let result = find_similar(
-            "urn:mif:memory:a",
+            "urn:mif:85c307af-aa7c-5f4f-9568-0ec847cf2b06",
             Some(&db_path_a),
             std::slice::from_ref(&db_path_b),
             10,
         )
         .unwrap();
-        assert!(!result.contains("memory:a"));
-        assert!(result.contains("memory:b"));
+        assert!(!result.contains(&mif_core::concept_urn("memory:a")));
+        assert!(result.contains(&mif_core::concept_urn("memory:b")));
     }
 
     #[test]
@@ -1785,14 +1808,14 @@ No type field.
         );
 
         let result = find_similar(
-            "urn:mif:memory:a",
+            "urn:mif:85c307af-aa7c-5f4f-9568-0ec847cf2b06",
             Some(&db_path_a),
             std::slice::from_ref(&db_path_b),
             10,
         )
         .unwrap();
-        assert!(!result.contains("memory:a"));
-        assert!(result.contains("memory:b"));
+        assert!(!result.contains(&mif_core::concept_urn("memory:a")));
+        assert!(result.contains(&mif_core::concept_urn("memory:b")));
     }
 
     #[test]

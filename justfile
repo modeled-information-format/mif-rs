@@ -172,6 +172,29 @@ template-sync:
     done
     echo "Done. Review changes with: git diff"
 
+# === MIF spec alignment ===
+
+# Check the vendored schemas against their pinned mif-spec.dev release mirror
+schema-drift:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    lock=crates/mif-schema/src/schemas/VENDOR.json
+    base=$(jq -r .source "$lock")
+    status=0
+    while IFS=$'\t' read -r local upstream; do
+        if curl -fsSL "$base$upstream" | cmp -s - "crates/mif-schema/src/schemas/$local"; then
+            echo "  ok: $local"
+        else
+            echo "  DRIFT: $local differs from $base$upstream"; status=1
+        fi
+    done < <(jq -r '.files | to_entries[] | [.key, .value.upstream] | @tsv' "$lock")
+    pinned=$(jq -r .mifSpecVersion "$lock")
+    latest=$(curl -fsSL https://mif-spec.dev/schema/index.json | jq -r .aliases.latest)
+    if [ "$pinned" != "$latest" ]; then
+        echo "  note: pinned MIF $pinned, mif-spec.dev latest is $latest"
+    fi
+    exit "$status"
+
 # === Release ===
 
 # Dry-run a crates.io publish

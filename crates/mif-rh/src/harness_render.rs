@@ -101,6 +101,17 @@ fn blockquote_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The concept URN of a rendered report for `namespace`/`slug`.
+///
+/// A version-5 UUID ([`mif_core::concept_urn`]) of the name `report:<namespace>:<slug>`,
+/// so re-rendering a report keeps its `@id`. MIF 1.4.0 requires a concept
+/// `@id` of the form `urn:mif:<uuid>` (spec §6.1); this replaces the earlier
+/// structured `urn:mif:report:<namespace>:<slug>`.
+#[must_use]
+pub fn report_concept_urn(namespace: &str, slug: &str) -> String {
+    mif_core::concept_urn(&format!("report:{namespace}:{slug}"))
+}
+
 fn render_report(inputs: &RenderInputs<'_>) -> Result<String, MifRhError> {
     let artifact = inputs.artifact;
     let namespace = namespace_of(artifact);
@@ -142,7 +153,7 @@ fn render_report(inputs: &RenderInputs<'_>) -> Result<String, MifRhError> {
     let mut concept = json!({
         "@context": "https://mif-spec.dev/schema/context.jsonld",
         "@type": "Concept",
-        "@id": format!("urn:mif:report:{namespace}:{}", inputs.slug),
+        "@id": report_concept_urn(namespace, inputs.slug),
         "slug": inputs.slugpath,
         "version": inputs.version,
         "conceptType": "semantic",
@@ -268,7 +279,7 @@ fn render_book(inputs: &RenderInputs<'_>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderInputs, render_artifact};
+    use super::{RenderInputs, render_artifact, report_concept_urn};
     use serde_json::json;
 
     fn artifact() -> serde_json::Value {
@@ -307,7 +318,8 @@ mod tests {
         let art = artifact();
         let rendered = render_artifact(&inputs(&art), "report").unwrap();
         assert!(rendered.starts_with("---\n"));
-        assert!(rendered.contains("'@id': urn:mif:report:harness/widgets:widget-report"));
+        let id = report_concept_urn("harness/widgets", "widget-report");
+        assert!(rendered.contains(&format!("'@id': {id}")));
         assert!(rendered.contains("conceptType: semantic"));
         assert!(rendered.contains("## First finding"));
         assert!(rendered.contains("## Sources"));

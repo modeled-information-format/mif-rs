@@ -8,7 +8,7 @@ mif-cli validate document.json
 mif-cli ontology resolve grazing-plan --ontologies-dir ./ontologies
 mif-cli ingest document.md --db-path .mif/vectors.db
 mif-cli search "a furry pet cat" --limit 5
-mif-cli find-similar urn:mif:memory:cats --limit 5
+mif-cli find-similar urn:mif:9f2c4e1a-7b3d-4c8e-a1f0-5d6b7c8e9a0b --limit 5
 mif-cli corpus-stats --db-path .mif/vectors.db
 mif-cli search "a furry pet cat" --extra-db-path ~/.mif/central-vectors.db
 mif-cli --format json validate document.json

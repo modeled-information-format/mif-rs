@@ -308,9 +308,9 @@ impl ToProblem for FrontmatterError {
 /// # Examples
 ///
 /// ```
-/// let md = "---\nid: x\ntype: semantic\n---\n\nBody text.\n";
+/// let md = "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ntype: semantic\n---\n\nBody text.\n";
 /// let (frontmatter, body) = mif_frontmatter::parse_markdown(md).unwrap();
-/// assert_eq!(frontmatter.get("id").and_then(|v| v.as_str()), Some("x"));
+/// assert_eq!(frontmatter.get("id").and_then(|v| v.as_str()), Some("b9ec008c-8581-5ffd-b826-fc0ae7569661"));
 /// assert_eq!(body, "\nBody text.\n");
 /// ```
 pub fn parse_markdown(md_text: &str) -> Result<(Frontmatter, String), FrontmatterError> {
@@ -368,9 +368,9 @@ fn ordered_frontmatter(frontmatter: &Frontmatter) -> Mapping {
 ///
 /// ```
 /// let (frontmatter, body) =
-///     mif_frontmatter::parse_markdown("---\nid: x\n---\n\nBody.\n").unwrap();
+///     mif_frontmatter::parse_markdown("---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\n---\n\nBody.\n").unwrap();
 /// let text = mif_frontmatter::serialize_markdown(&frontmatter, &body).unwrap();
-/// assert_eq!(text, "---\nid: x\n---\n\nBody.\n");
+/// assert_eq!(text, "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\n---\n\nBody.\n");
 /// ```
 pub fn serialize_markdown(
     frontmatter: &Frontmatter,
@@ -491,10 +491,10 @@ fn detect_shape(frontmatter: &Frontmatter) -> FrontmatterShape {
 /// use serde_norway::Mapping;
 ///
 /// let mut frontmatter = Mapping::new();
-/// frontmatter.insert("id".into(), "x".into());
+/// frontmatter.insert("id".into(), "b9ec008c-8581-5ffd-b826-fc0ae7569661".into());
 /// frontmatter.insert("type".into(), "semantic".into());
 /// let jsonld = mif_frontmatter::md_to_jsonld(&frontmatter, "Body.").unwrap();
-/// assert_eq!(jsonld["@id"], "urn:mif:x");
+/// assert_eq!(jsonld["@id"], "urn:mif:b9ec008c-8581-5ffd-b826-fc0ae7569661");
 /// assert_eq!(jsonld["content"], "Body.");
 /// ```
 pub fn md_to_jsonld(
@@ -590,13 +590,13 @@ pub fn md_to_jsonld(
 /// use mif_frontmatter::FrontmatterShape;
 ///
 /// let jsonld = serde_json::json!({
-///     "@id": "urn:mif:x",
+///     "@id": "urn:mif:b9ec008c-8581-5ffd-b826-fc0ae7569661",
 ///     "conceptType": "semantic",
 ///     "content": "Body.",
 /// });
 /// let (frontmatter, body) =
 ///     mif_frontmatter::jsonld_to_md(&jsonld, FrontmatterShape::V1Canonical).unwrap();
-/// assert_eq!(frontmatter.get("id").and_then(|v| v.as_str()), Some("x"));
+/// assert_eq!(frontmatter.get("id").and_then(|v| v.as_str()), Some("b9ec008c-8581-5ffd-b826-fc0ae7569661"));
 /// assert_eq!(body, "Body.");
 /// ```
 pub fn jsonld_to_md(
@@ -675,7 +675,7 @@ pub fn jsonld_to_md(
 /// # Examples
 ///
 /// ```
-/// let md = "---\nid: x\ntype: semantic\ncreated: 2026-01-01T00:00:00Z\n---\n\nBody.\n";
+/// let md = "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ntype: semantic\ncreated: 2026-01-01T00:00:00Z\n---\n\nBody.\n";
 /// mif_frontmatter::roundtrip_lossless(md).unwrap();
 /// ```
 pub fn roundtrip_lossless(md_text: &str) -> Result<(), FrontmatterError> {
@@ -736,7 +736,7 @@ pub fn roundtrip_lossless(md_text: &str) -> Result<(), FrontmatterError> {
 /// use mif_frontmatter::FrontmatterShape;
 ///
 /// let jsonld = serde_json::json!({
-///     "@id": "urn:mif:x",
+///     "@id": "urn:mif:b9ec008c-8581-5ffd-b826-fc0ae7569661",
 ///     "conceptType": "semantic",
 ///     "content": "Body.",
 /// });
@@ -864,20 +864,20 @@ legitimate batch consumers against gateway saturation.
 
     #[test]
     fn parse_markdown_rejects_unclosed_frontmatter() {
-        let err = parse_markdown("---\nid: x\n").unwrap_err();
+        let err = parse_markdown("---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\n").unwrap_err();
         assert!(matches!(err, FrontmatterError::MissingFrontmatter));
     }
 
     #[test]
     fn serialize_markdown_reorders_extra_keys_after_canonical_order() {
         let (frontmatter, body) = parse_markdown(
-            "---\nzeta_extra: last\nid: x\ntype: semantic\nalpha_extra: also-extra\n---\n\nBody.\n",
+            "---\nzeta_extra: last\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ntype: semantic\nalpha_extra: also-extra\n---\n\nBody.\n",
         )
         .unwrap();
         let text = serialize_markdown(&frontmatter, &body).unwrap();
         assert_eq!(
             text,
-            "---\nid: x\ntype: semantic\nzeta_extra: last\nalpha_extra: also-extra\n---\n\nBody.\n"
+            "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ntype: semantic\nzeta_extra: last\nalpha_extra: also-extra\n---\n\nBody.\n"
         );
     }
 
@@ -888,7 +888,7 @@ legitimate batch consumers against gateway saturation.
         // FRONTMATTER_ORDER, not part of the canonical MIF schema) must
         // survive the full markdown -> json-ld -> markdown pipeline, not
         // just serialize_markdown alone.
-        let md = "---\nid: x\ntype: semantic\ncustom_unknown_field: hello\n---\n\nBody.\n";
+        let md = "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ntype: semantic\ncustom_unknown_field: hello\n---\n\nBody.\n";
         roundtrip_lossless(md).unwrap();
 
         let (frontmatter, body) = parse_markdown(md).unwrap();
@@ -905,14 +905,14 @@ legitimate batch consumers against gateway saturation.
 
     #[test]
     fn full_roundtrip_preserves_keys_within_frontmatter_order() {
-        let md = "---\nid: x\ntype: semantic\naliases:\n  - old-name\n---\n\nBody.\n";
+        let md = "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ntype: semantic\naliases:\n  - old-name\n---\n\nBody.\n";
         roundtrip_lossless(md).unwrap();
     }
 
     #[test]
     fn timestamp_falls_back_from_modified_to_created() {
         let (frontmatter, body) =
-            parse_markdown("---\nid: x\ncreated: 2026-01-01T00:00:00Z\n---\n\nBody.\n").unwrap();
+            parse_markdown("---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ncreated: 2026-01-01T00:00:00Z\n---\n\nBody.\n").unwrap();
         let jsonld = md_to_jsonld(&frontmatter, &body).unwrap();
         assert_eq!(jsonld["timestamp"], "2026-01-01T00:00:00Z");
     }
@@ -920,7 +920,7 @@ legitimate batch consumers against gateway saturation.
     #[test]
     fn timestamp_prefers_modified_over_created() {
         let (frontmatter, body) = parse_markdown(
-            "---\nid: x\ncreated: 2026-01-01T00:00:00Z\nmodified: 2026-02-02T00:00:00Z\n---\n\nBody.\n",
+            "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ncreated: 2026-01-01T00:00:00Z\nmodified: 2026-02-02T00:00:00Z\n---\n\nBody.\n",
         )
         .unwrap();
         let jsonld = md_to_jsonld(&frontmatter, &body).unwrap();
@@ -933,7 +933,7 @@ legitimate batch consumers against gateway saturation.
         // PyYAML), so unquoted timestamps already deserialize as strings
         // with no extra stringification step required.
         let (frontmatter, _) =
-            parse_markdown("---\nid: x\ncreated: 2026-01-15T10:30:00Z\n---\n\nBody.\n").unwrap();
+            parse_markdown("---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ncreated: 2026-01-15T10:30:00Z\n---\n\nBody.\n").unwrap();
         let created = frontmatter.get("created").unwrap();
         assert_eq!(created.as_str(), Some("2026-01-15T10:30:00Z"));
     }
@@ -947,11 +947,11 @@ legitimate batch consumers against gateway saturation.
 
     #[test]
     fn jsonld_to_md_strips_urn_prefix_from_id() {
-        let jsonld = serde_json::json!({"@id": "urn:mif:abc-123", "content": ""});
+        let jsonld = serde_json::json!({"@id": "urn:mif:4a175bd8-b7cd-5dcb-a332-a8236a4de383", "content": ""});
         let (frontmatter, _) = jsonld_to_md(&jsonld, FrontmatterShape::V1Canonical).unwrap();
         assert_eq!(
             frontmatter.get("id").and_then(|v| v.as_str()),
-            Some("abc-123")
+            Some("4a175bd8-b7cd-5dcb-a332-a8236a4de383")
         );
     }
 
@@ -1038,7 +1038,7 @@ legitimate batch consumers against gateway saturation.
         let jsonld = serde_json::json!({
             "@context": "https://mif-spec.dev/schema/context.jsonld",
             "@type": "Concept",
-            "@id": "urn:mif:memory:test-001",
+            "@id": "urn:mif:89886348-4773-5732-88b5-84366da76468",
             "conceptType": "semantic",
             "content": "Test content.",
             "created": "2026-01-01T00:00:00Z",
@@ -1056,7 +1056,7 @@ legitimate batch consumers against gateway saturation.
         let jsonld = serde_json::json!({
             "@context": "https://mif-spec.dev/schema/context.jsonld",
             "@type": "Concept",
-            "@id": "urn:mif:memory:timestamp-loss-test",
+            "@id": "urn:mif:86444d37-f6ca-5b8e-a594-378fcb9d3e7e",
             "conceptType": "semantic",
             "content": "Test content.",
             "timestamp": "2026-01-01T00:00:00Z",
@@ -1073,7 +1073,7 @@ legitimate batch consumers against gateway saturation.
         let jsonld = serde_json::json!({
             "@context": "https://mif-spec.dev/schema/context.jsonld",
             "@type": "Concept",
-            "@id": "urn:mif:memory:test-002",
+            "@id": "urn:mif:992e1654-6276-56a1-b993-3e529112a8ac",
             "conceptType": "semantic",
             "content": "Test content.",
             "created": "2026-01-01T00:00:00Z",
@@ -1086,7 +1086,7 @@ legitimate batch consumers against gateway saturation.
     /// the full spec surface, not just a sample of it, survives the round
     /// trip losslessly.
     const FULL_SPEC_FIXTURE: &str = r"---
-id: memory:full-spec-001
+id: 823357c1-7445-562a-97fa-7d26b4016f69
 type: semantic
 memoryType: semantic
 created: 2026-01-15T10:30:00Z
@@ -1169,7 +1169,10 @@ Body content exercising every root-level MIF field.
         let (frontmatter, body) = parse_markdown(FULL_SPEC_FIXTURE).unwrap();
         let jsonld = md_to_jsonld(&frontmatter, &body).unwrap();
 
-        assert_eq!(jsonld["@id"], "urn:mif:memory:full-spec-001");
+        assert_eq!(
+            jsonld["@id"],
+            "urn:mif:823357c1-7445-562a-97fa-7d26b4016f69"
+        );
         assert_eq!(jsonld["conceptType"], "semantic");
         assert_eq!(jsonld["memoryType"], "semantic");
         assert_eq!(jsonld["namespace"], "_semantic/full-spec-demo");
@@ -1204,7 +1207,7 @@ Body content exercising every root-level MIF field.
             "system_generated",
         ] {
             let md = format!(
-                "---\nid: x\ntype: semantic\ncreated: 2026-01-01T00:00:00Z\nprovenance:\n  '@type': Provenance\n  sourceType: {source_type}\n---\n\nBody.\n"
+                "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ntype: semantic\ncreated: 2026-01-01T00:00:00Z\nprovenance:\n  '@type': Provenance\n  sourceType: {source_type}\n---\n\nBody.\n"
             );
             let result = roundtrip_lossless(&md);
             assert!(
@@ -1223,7 +1226,7 @@ Body content exercising every root-level MIF field.
     fn document_reference_identified_by_id_instead_of_url_round_trips() {
         // DocumentReference's schema requires either `url` or `id` (anyOf),
         // not necessarily both — exercise the `id`-only branch too.
-        let md = "---\nid: x\ntype: semantic\ncreated: 2026-01-01T00:00:00Z\ndocuments:\n  - '@type': DocumentReference\n    id: urn:doc:internal-note-1\n    title: Internal note\n---\n\nBody.\n";
+        let md = "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ntype: semantic\ncreated: 2026-01-01T00:00:00Z\ndocuments:\n  - '@type': DocumentReference\n    id: urn:doc:internal-note-1\n    title: Internal note\n---\n\nBody.\n";
         roundtrip_lossless(md).unwrap();
 
         let (frontmatter, body) = parse_markdown(md).unwrap();
@@ -1247,7 +1250,7 @@ slug: reports/example-topic/report-exec-summary
 version: 1
 '@context': https://mif-spec.dev/schema/context.jsonld
 '@type': Concept
-'@id': urn:mif:report:harness/example-topic:report-exec-summary
+'@id': urn:mif:70045db9-2cd2-54b0-8f9c-7c7a69130d69
 conceptType: semantic
 namespace: harness/example-topic
 title: 'Executive Summary: An Example Report'
@@ -1269,7 +1272,7 @@ This exec-summary synthesis covers example findings.
         // Regression test: md_to_jsonld must not unconditionally overwrite
         // `timestamp`/`description` for PreProjected documents just because
         // it does for V1Canonical ones.
-        let md = "---\n'@id': urn:mif:x\nconceptType: semantic\ncreated: 2026-01-01T00:00:00Z\n---\n\nBody.\n";
+        let md = "---\n'@id': urn:mif:b9ec008c-8581-5ffd-b826-fc0ae7569661\nconceptType: semantic\ncreated: 2026-01-01T00:00:00Z\n---\n\nBody.\n";
         let (frontmatter, body) = parse_markdown(md).unwrap();
         let jsonld = md_to_jsonld(&frontmatter, &body).unwrap();
         assert!(jsonld.get("timestamp").is_none());
@@ -1282,7 +1285,7 @@ This exec-summary synthesis covers example findings.
         // document with its own literal `timestamp` field (not a
         // created/modified mirror) must not have that value clobbered or
         // dropped on round trip.
-        let md = "---\n'@id': urn:mif:x\nconceptType: semantic\ncreated: 2026-01-01T00:00:00Z\ntimestamp: a-custom-literal-value\ndescription: a custom literal description\n---\n\nBody.\n";
+        let md = "---\n'@id': urn:mif:b9ec008c-8581-5ffd-b826-fc0ae7569661\nconceptType: semantic\ncreated: 2026-01-01T00:00:00Z\ntimestamp: a-custom-literal-value\ndescription: a custom literal description\n---\n\nBody.\n";
         roundtrip_lossless(md).unwrap();
 
         let (frontmatter, body) = parse_markdown(md).unwrap();
@@ -1295,7 +1298,7 @@ This exec-summary synthesis covers example findings.
     fn v1_canonical_shape_still_synthesizes_timestamp_and_description() {
         // Confirms the fix above didn't regress V1Canonical's existing,
         // intentional derived-mirror behavior.
-        let md = "---\nid: x\ntype: semantic\ncreated: 2026-01-01T00:00:00Z\nsummary: A summary.\n---\n\nBody.\n";
+        let md = "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ntype: semantic\ncreated: 2026-01-01T00:00:00Z\nsummary: A summary.\n---\n\nBody.\n";
         let (frontmatter, body) = parse_markdown(md).unwrap();
         let jsonld = md_to_jsonld(&frontmatter, &body).unwrap();
         assert_eq!(jsonld["timestamp"], "2026-01-01T00:00:00Z");
@@ -1309,7 +1312,7 @@ This exec-summary synthesis covers example findings.
         // `summary` field to derive it from) failed roundtrip_lossless
         // because jsonld_to_md unconditionally treated `description` as a
         // derived-only mirror and dropped it.
-        let md = "---\nid: memory:drift-a\ntype: semantic\ncreated: 2026-07-05T00:00:00Z\ndescription: any description here\ntags:\n- x\n---\n\nBody A.\n";
+        let md = "---\nid: a3ba017d-91ea-5666-938f-2cf3715f769e\ntype: semantic\ncreated: 2026-07-05T00:00:00Z\ndescription: any description here\ntags:\n- x\n---\n\nBody A.\n";
         roundtrip_lossless(md).unwrap();
 
         let (frontmatter, body) = parse_markdown(md).unwrap();
@@ -1403,7 +1406,7 @@ This exec-summary synthesis covers example findings.
         // branch). That silent drop is exactly what turns a real
         // roundtrip_lossless call into genuine RoundTripDrift, not just a
         // hand-constructed FrontmatterError::RoundTripDrift value.
-        let md = "---\nid: x\ntype: semantic\n123: orphaned-value\n---\n\nBody.\n";
+        let md = "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ntype: semantic\n123: orphaned-value\n---\n\nBody.\n";
 
         let (frontmatter, body) = parse_markdown(md).unwrap();
         let jsonld = md_to_jsonld(&frontmatter, &body).unwrap();
@@ -1422,7 +1425,7 @@ This exec-summary synthesis covers example findings.
         // buried inside a field's *value*, so yaml_value_to_json actually
         // attempts — and fails — to convert it, hitting its JsonConversion
         // error path for real rather than by hand-constructing the variant.
-        let md = "---\nid: x\ntype: semantic\nproperties:\n  ? [1, 2]\n  : value\n---\n\nBody.\n";
+        let md = "---\nid: b9ec008c-8581-5ffd-b826-fc0ae7569661\ntype: semantic\nproperties:\n  ? [1, 2]\n  : value\n---\n\nBody.\n";
         let (frontmatter, body) = parse_markdown(md).unwrap();
         let err = md_to_jsonld(&frontmatter, &body).unwrap_err();
         assert!(

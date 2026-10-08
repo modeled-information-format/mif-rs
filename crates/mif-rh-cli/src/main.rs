@@ -1969,10 +1969,9 @@ fn harness_wrap_source_cmd(args: &WrapSourceArgs<'_>) -> Result<Outcome, CliErro
 
     Ok(Outcome {
         message: format!(
-            "wrap-source: wrote {} (urn:mif:source:{}:{}, {})",
+            "wrap-source: wrote {} ({}, {})",
             args.out.display(),
-            args.namespace,
-            args.slug,
+            mif_rh::source_concept_urn(args.namespace, args.slug),
             args.content_type
         ),
         exit_code: 0,
