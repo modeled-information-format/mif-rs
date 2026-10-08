@@ -22,7 +22,7 @@ use serde_json::Value;
 /// The MIF specification release the vendored schemas are taken from.
 ///
 /// Matches `mifSpecVersion` in `src/schemas/VENDOR.json`.
-pub const MIF_SPEC_VERSION: &str = "1.4.1";
+pub const MIF_SPEC_VERSION: &str = "1.4.2";
 
 const MIF_SCHEMA: &str = include_str!("schemas/mif.schema.json");
 const CITATION_SCHEMA: &str = include_str!("schemas/citation.schema.json");

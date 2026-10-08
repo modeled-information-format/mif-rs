@@ -44,7 +44,7 @@ files against that release's immutable mirror at
 
 | mif-rs | MIF specification | Notes |
 |---|---|---|
-| Unreleased | 1.4.1 | Concept `@id` must be `urn:mif:<uuid>`; `memoryType` alone satisfies the type check (rules introduced in MIF 1.4.0) |
+| 0.10.0 | 1.4.2 | Concept `@id` must be `urn:mif:<uuid>`; `memoryType` alone satisfies the type check (rules introduced in MIF 1.4.0) |
 | 0.6.0 – 0.9.0 | 1.2.0 – 1.3.0 | Vendored schemas are byte-identical across these MIF releases |
 
 ## Installation
