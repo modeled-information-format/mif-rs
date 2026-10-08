@@ -1,7 +1,6 @@
 {
   "mifSpecVersion": "1.4.1",
-  "source": "https://mif-spec.dev/schema/1.4.0/",
-  "sourceNote": "MIF 1.4.1 ships no schema changes; until its mirror is published, the byte-identical 1.4.0 mirror is the source. Point `source` at /schema/1.4.1/ once it exists.",
+  "source": "https://mif-spec.dev/schema/1.4.1/",
   "files": {
     "mif.schema.json": {
       "upstream": "mif.schema.json",

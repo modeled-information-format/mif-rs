@@ -6,11 +6,10 @@
 //! `MIF` repo) and resolved entirely offline — no network access happens at
 //! validation time.
 //!
-//! The vendored set targets one MIF specification release,
-//! [`MIF_SPEC_VERSION`]; `src/schemas/VENDOR.json` records the immutable
-//! upstream mirror (`https://mif-spec.dev/schema/<version>/`) the files come
-//! from and each file's sha256, and `just schema-drift` checks the files
-//! against that mirror.
+//! The vendored set is pinned to one MIF specification release,
+//! [`MIF_SPEC_VERSION`]; `src/schemas/VENDOR.json` records each file's
+//! immutable upstream mirror (`https://mif-spec.dev/schema/<version>/`) and
+//! sha256, and `just schema-drift` checks the files against that mirror.
 
 use std::sync::OnceLock;
 
@@ -20,11 +19,9 @@ use mif_problem::{
 };
 use serde_json::Value;
 
-/// The MIF specification release this crate targets.
+/// The MIF specification release the vendored schemas are taken from.
 ///
-/// Matches `mifSpecVersion` in `src/schemas/VENDOR.json`, whose `source`
-/// names the mif-spec.dev mirror the vendored files are taken from (a
-/// release whose schemas are byte-identical to this one's).
+/// Matches `mifSpecVersion` in `src/schemas/VENDOR.json`.
 pub const MIF_SPEC_VERSION: &str = "1.4.1";
 
 const MIF_SCHEMA: &str = include_str!("schemas/mif.schema.json");
@@ -464,11 +461,9 @@ mod tests {
         let lock: serde_json::Value =
             serde_json::from_str(include_str!("schemas/VENDOR.json")).unwrap();
         assert_eq!(lock["mifSpecVersion"], MIF_SPEC_VERSION);
-        assert!(
-            lock["source"]
-                .as_str()
-                .unwrap()
-                .starts_with("https://mif-spec.dev/schema/")
+        assert_eq!(
+            lock["source"],
+            format!("https://mif-spec.dev/schema/{MIF_SPEC_VERSION}/")
         );
         let embedded = [
             ("mif.schema.json", MIF_SCHEMA),

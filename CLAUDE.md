@@ -111,7 +111,7 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 ### Move to a New MIF Specification Release
 
 1. Copy each file listed in `crates/mif-schema/src/schemas/VENDOR.json` from `https://mif-spec.dev/schema/<version>/<upstream>` over its vendored path.
-2. Set `mifSpecVersion`, `source`, and every `sha256` (`shasum -a 256 <file>`) in `VENDOR.json`, and `MIF_SPEC_VERSION` in `crates/mif-schema/src/lib.rs`. If the target release has no published mirror yet but ships no schema changes, keep `source` on the newest byte-identical mirror and say so in `sourceNote`.
+2. Set `mifSpecVersion`, `source`, and every `sha256` (`shasum -a 256 <file>`) in `VENDOR.json`, and `MIF_SPEC_VERSION` in `crates/mif-schema/src/lib.rs`.
 3. Read the MIF release's CHANGELOG for rule changes the schemas alone don't carry (id forms, conformance levels), and update code, fixtures, and the README compatibility table to match.
 4. Add a CHANGELOG entry naming the new MIF version.
 5. Verify: `just schema-drift && just check`.
