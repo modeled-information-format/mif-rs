@@ -469,7 +469,7 @@ jobs:
       contents: read
     # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-vex.yml@e50b004cbdcf2b3258d223b1f6a4d98ff7938abf
+      modeled-information-format/.github/.github/workflows/reusable-vex.yml@667ee7b3bc93a8789c65cb9b4fedc6d827fcd36a
     with:
       subject-name: ${{ needs.source.outputs.subject-name }}
       subject-digest: ${{ needs.source.outputs.subject-digest }}
