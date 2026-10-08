@@ -129,7 +129,7 @@ jobs:
       contents: read
     # modeled-information-format/.github main @ 9de9adbf (2026-07-05)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-actionlint.yml@9de9adbfe2b8efed49cb7f666123d40ec6dd1970
+      modeled-information-format/.github/.github/workflows/reusable-actionlint.yml@667ee7b3bc93a8789c65cb9b4fedc6d827fcd36a
 
   # -----------------------------------------------------------
   # Docker — after CI; PR = build-only, push on main/tags
