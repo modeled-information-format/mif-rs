@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-09
+
 ### Added
 
 - **`mif-embed`**: `NORMALIZED` (the vectors are L2-normalized), `Embedder::model_id`, and `Embedder::model_revision` (the Hugging Face Hub snapshot commit the cached model files came from, when the cache recorded it), so a consumer can write a MIF `EmbeddingReference` from the source of truth instead of assuming the model.
