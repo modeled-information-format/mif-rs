@@ -555,10 +555,15 @@ fn ingest(file: &Path, db_path: Option<&Path>) -> Result<String, CliError> {
     let updated_at = chrono::Utc::now().to_rfc3339();
     store.upsert(&id, &vector, &hash, &updated_at)?;
 
+    let model_version = embedder
+        .model_revision()
+        .map_or_else(String::new, |revision| format!(" model_version={revision}"));
     Ok(format!(
-        "{}: lint=ok validate=ok roundtrip=lossless embedding_dim={} stored=true (id={id}, db={})",
+        "{}: lint=ok validate=ok roundtrip=lossless embedding_dim={} model={}{model_version} normalized={} stored=true (id={id}, db={})",
         file.display(),
         vector.len(),
+        embedder.model_id(),
+        mif_embed::NORMALIZED,
         db_path.display()
     ))
 }
@@ -1343,6 +1348,8 @@ Test content.
         assert!(message.contains("validate=ok"));
         assert!(message.contains("roundtrip=lossless"));
         assert!(message.contains("embedding_dim=384"));
+        assert!(message.contains("model=sentence-transformers/all-MiniLM-L6-v2"));
+        assert!(message.contains("normalized=true"));
         assert!(message.contains("stored=true"));
 
         let store = mif_store::VectorStore::open(&db_path).unwrap();

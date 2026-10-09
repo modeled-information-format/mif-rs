@@ -71,6 +71,14 @@ struct IngestReport {
     roundtrip: &'static str,
     /// Dimensionality of the stored embedding vector.
     embedding_dim: usize,
+    /// The embedding model's Hugging Face Hub id.
+    model: &'static str,
+    /// The hub commit the model files came from, when the local cache
+    /// recorded it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_version: Option<String>,
+    /// Whether the stored vector is L2-normalized.
+    normalized: bool,
     /// Always `true` on success.
     stored: bool,
     /// The document ID the embedding was stored under.
@@ -517,6 +525,9 @@ fn ingest_mif_document_inner(
         validate: "ok",
         roundtrip: "lossless",
         embedding_dim: vector.len(),
+        model: embedder.model_id(),
+        model_version: embedder.model_revision().map(str::to_owned),
+        normalized: mif_embed::NORMALIZED,
         stored: true,
         id,
         db: db_path.display().to_string(),
@@ -1501,6 +1512,8 @@ Test content via MCP.
         assert_eq!(value["validate"], "ok");
         assert_eq!(value["roundtrip"], "lossless");
         assert_eq!(value["embedding_dim"], 384);
+        assert_eq!(value["model"], mif_embed::MODEL_ID);
+        assert_eq!(value["normalized"], true);
         assert_eq!(value["stored"], true);
 
         let store = mif_store::VectorStore::open(&db_path).unwrap();
