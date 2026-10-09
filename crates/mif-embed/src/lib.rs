@@ -30,6 +30,13 @@ const MODEL_REPO: &str = MODEL_ID;
 /// Output embedding dimensionality of `sentence-transformers/all-MiniLM-L6-v2`.
 pub const EMBEDDING_DIM: usize = 384;
 
+/// Whether the vectors this crate produces are L2-normalized.
+///
+/// They are: [`Embedder::embed`] mean-pools and then normalizes to unit
+/// length. A consumer recording an `EmbeddingReference` states `normalized`
+/// from this constant instead of assuming it.
+pub const NORMALIZED: bool = true;
+
 /// Errors from loading the embedding model or running inference.
 #[derive(Debug, thiserror::Error)]
 pub enum EmbedError {
@@ -231,6 +238,10 @@ pub struct Embedder {
     model: BertModel,
     tokenizer: Tokenizer,
     device: Device,
+    /// The Hugging Face Hub commit the cached model files came from, read
+    /// from the hub cache's `snapshots/<commit>/` layout; `None` when the
+    /// files were not laid out that way.
+    model_revision: Option<String>,
 }
 
 impl std::fmt::Debug for Embedder {
@@ -282,12 +293,28 @@ impl Embedder {
         let vb = VarBuilder::from_buffered_safetensors(weights, DTYPE, &device)
             .map_err(EmbedError::Model)?;
         let model = BertModel::load(vb, &config).map_err(EmbedError::Model)?;
+        let model_revision = snapshot_revision(&weights_path);
 
         Ok(Self {
             model,
             tokenizer,
             device,
+            model_revision,
         })
+    }
+
+    /// The model identity this embedder runs: the Hugging Face Hub id in
+    /// [`MODEL_ID`].
+    #[must_use]
+    pub const fn model_id(&self) -> &'static str {
+        MODEL_ID
+    }
+
+    /// The Hugging Face Hub commit the loaded model files came from, when
+    /// the local cache recorded it.
+    #[must_use]
+    pub fn model_revision(&self) -> Option<&str> {
+        self.model_revision.as_deref()
     }
 
     /// Computes a 384-dimensional, mean-pooled, L2-normalized sentence
@@ -315,6 +342,16 @@ impl Embedder {
             .to_vec1::<f32>()
             .map_err(EmbedError::Inference)
     }
+}
+
+/// The commit a cached hub file belongs to: the hub cache stores files under
+/// `.../snapshots/<commit>/<file>`, so the parent directory's name is the
+/// revision when its own parent is `snapshots`.
+fn snapshot_revision(path: &std::path::Path) -> Option<String> {
+    let snapshot = path.parent()?;
+    (snapshot.parent()?.file_name()? == "snapshots")
+        .then(|| snapshot.file_name()?.to_str().map(str::to_owned))
+        .flatten()
 }
 
 /// Fetches `file` from `repo`, caching it locally.
