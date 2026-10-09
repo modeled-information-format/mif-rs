@@ -75,6 +75,11 @@ jobs:
     # modeled-information-format/.github main @ e50b004c (2026-07-01)
     uses: >-
       modeled-information-format/.github/.github/workflows/reusable-scorecard.yml@667ee7b3bc93a8789c65cb9b4fedc6d827fcd36a
+    with:
+      # The OpenSSF publish API rejects a scorecard job that sets env vars,
+      # which the reusable workflow does to gate the App-token mint. Same
+      # setting as gdlc and claude-code-plugins; SARIF still uploads.
+      publish-results: false
     secrets:
       app-private-key: ${{ secrets.CI_CLIENT_APP_PRIVATE_KEY }}
 
