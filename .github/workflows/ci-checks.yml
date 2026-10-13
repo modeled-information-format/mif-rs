@@ -41,7 +41,7 @@ jobs:
     steps:
       - name: Checkout repository
         # v7.0.0
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       # Same check as `just schema-drift`: the vendored schemas must equal
       # the immutable mif-spec.dev mirror of the MIF release pinned in
@@ -285,7 +285,7 @@ jobs:
       - name: Install cargo-deny
         # v2.67.25
         uses: >-
-          taiki-e/install-action@4076c08d76dba979c11a7285295b0716c1d67908
+          taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe
         with:
           tool: cargo-deny
 
