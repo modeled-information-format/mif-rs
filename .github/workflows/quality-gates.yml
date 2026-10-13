@@ -97,6 +97,6 @@ jobs:
       packages: read
     # modeled-information-format/.github main @ e9e93cd5 (2026-07-03)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-trivy.yml@e9e93cd50943a5ec3a9ad4ce8bb52f2fd29814fc
+      modeled-information-format/.github/.github/workflows/reusable-trivy.yml@68c404307acbd9a47335ef41b57ff45002243826
     with:
       scan-iac: true
