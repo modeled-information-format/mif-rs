@@ -34,7 +34,10 @@ jobs:
         uses: >-
           taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2
         with:
-          tool: cargo-llvm-cov@0.6.14
+          # 0.8.6+ is required from Rust 1.100: cargo's new build-dir layout
+          # hides most test binaries from older releases, which then report
+          # roughly half the real coverage (92% read as 44.66% on 0.6.14).
+          tool: cargo-llvm-cov@0.9.1
 
       - name: Cache cargo registry
         # v5.0.3

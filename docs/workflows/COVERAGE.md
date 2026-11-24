@@ -100,7 +100,7 @@ Via `pipeline.yml`, the `coverage` job runs unless the run is a
 | --- | --- | --- |
 | Checkout repository | `actions/checkout` | `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0` (v7.0.0) |
 | Install Rust toolchain | `dtolnay/rust-toolchain`, `toolchain: stable`, `components: llvm-tools-preview` | `fa04a1451ff1842e2626ccb99004d0195b455a88` |
-| Install cargo-llvm-cov | `taiki-e/install-action`, `tool: cargo-llvm-cov@0.6.14` | `16b05812d776ae1dfaabc8277e421fb6d2506419` |
+| Install cargo-llvm-cov | `taiki-e/install-action`, `tool: cargo-llvm-cov@0.9.1` | `3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2` |
 | Cache cargo registry | `actions/cache` | `55cc8345863c7cc4c66a329aec7e433d2d1c52a9` (v5.0.3) |
 | Generate coverage | `cargo llvm-cov --all-features --workspace --lcov/--html/--json` (three invocations) | — |
 | Parse coverage percentage | `jq '.data[0].totals.lines.percent * 100 \| round / 100' coverage.json` | — |
