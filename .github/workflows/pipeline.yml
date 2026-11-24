@@ -113,9 +113,9 @@ jobs:
       || inputs.stage == 'ci'
     permissions:
       contents: read
-    # modeled-information-format/.github main @ 9de9adbf (2026-07-05)
+    # modeled-information-format/.github main @ c72b3fae (2026-11-24)
     uses: >-
-      modeled-information-format/.github/.github/workflows/pin-check.yml@1b416b97ff3ded8a49ae6873cc350eb1efb389bf
+      modeled-information-format/.github/.github/workflows/pin-check.yml@c72b3fae829318990ba3da9b9d5ea0671ac5151f
 
   # Required check context: "validate-workflows / actionlint" — lints every
   # workflow file for syntax/semantic errors (separate concern from pin-check's
@@ -127,9 +127,9 @@ jobs:
       || inputs.stage == 'ci'
     permissions:
       contents: read
-    # modeled-information-format/.github main @ 9de9adbf (2026-07-05)
+    # modeled-information-format/.github main @ c72b3fae (2026-11-24)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-actionlint.yml@667ee7b3bc93a8789c65cb9b4fedc6d827fcd36a
+      modeled-information-format/.github/.github/workflows/reusable-actionlint.yml@c72b3fae829318990ba3da9b9d5ea0671ac5151f
 
   # -----------------------------------------------------------
   # Docker — after CI; PR = build-only, push on main/tags
@@ -186,9 +186,9 @@ jobs:
       attestations: write
       packages: write
       contents: read
-    # modeled-information-format/.github main @ 9de9adbf (2026-07-05)
+    # modeled-information-format/.github main @ c72b3fae (2026-11-24)
     uses: >-
-      modeled-information-format/.github/.github/workflows/sign-and-attest.yml@667ee7b3bc93a8789c65cb9b4fedc6d827fcd36a
+      modeled-information-format/.github/.github/workflows/sign-and-attest.yml@c72b3fae829318990ba3da9b9d5ea0671ac5151f
     with:
       image-name: ghcr.io/${{ github.repository }}/${{ matrix.bin }}
       image-digest: >-
@@ -211,9 +211,9 @@ jobs:
       attestations: read
       packages: read
       contents: read
-    # modeled-information-format/.github main @ 9de9adbf (2026-07-05)
+    # modeled-information-format/.github main @ c72b3fae (2026-11-24)
     uses: >-
-      modeled-information-format/.github/.github/workflows/verify-attestation.yml@9de9adbfe2b8efed49cb7f666123d40ec6dd1970
+      modeled-information-format/.github/.github/workflows/verify-attestation.yml@c72b3fae829318990ba3da9b9d5ea0671ac5151f
     with:
       image-ref: >-
         ghcr.io/${{ github.repository }}/${{ matrix.bin }}@${{
@@ -247,9 +247,9 @@ jobs:
       security-events: write
       actions: read
       packages: read
-    # modeled-information-format/.github main @ e9e93cd5 (2026-07-03)
+    # modeled-information-format/.github main @ c72b3fae (2026-11-24)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-trivy.yml@e9e93cd50943a5ec3a9ad4ce8bb52f2fd29814fc
+      modeled-information-format/.github/.github/workflows/reusable-trivy.yml@c72b3fae829318990ba3da9b9d5ea0671ac5151f
     with:
       image-ref: >-
         ghcr.io/${{ github.repository }}/${{
@@ -269,9 +269,9 @@ jobs:
       id-token: write
       attestations: write
       contents: read
-    # modeled-information-format/.github main @ 9de9adbf (2026-07-05)
+    # modeled-information-format/.github main @ c72b3fae (2026-11-24)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@05b13774259a17140419556a45a48ba6a3e36e0c
+      modeled-information-format/.github/.github/workflows/reusable-attest-scan.yml@c72b3fae829318990ba3da9b9d5ea0671ac5151f
     with:
       subject-name: >-
         ghcr.io/${{ github.repository }}/${{

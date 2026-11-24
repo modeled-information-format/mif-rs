@@ -32,7 +32,7 @@ jobs:
 
       - name: Install cargo-audit
         # v2.67.18
-        uses: taiki-e/install-action@4076c08d76dba979c11a7285295b0716c1d67908
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2
         with:
           tool: cargo-audit
 
@@ -41,4 +41,6 @@ jobs:
         # -> gemm, no upgrade path) is ignored the same as in deny.toml.
         # cargo-audit 0.22.x has no config-file auto-discovery (verified
         # empirically); --ignore is the only supported suppression mechanism.
-        run: cargo audit --deny warnings --ignore RUSTSEC-2024-0436
+        # RUSTSEC-2026-0543 (unmaintained `chrono`, no fixed release, also
+        # transitive via rmcp and schemars) is ignored for the same reason.
+        run: cargo audit --deny warnings --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0543

@@ -85,7 +85,7 @@ jobs:
 
 | Job ID | `uses` | Pin |
 | --- | --- | --- |
-| `secrets` | `modeled-information-format/.github/.github/workflows/reusable-secrets.yml` | `e50b004cbdcf2b3258d223b1f6a4d98ff7938abf` |
+| `secrets` | `modeled-information-format/.github/.github/workflows/reusable-secrets.yml` | `c72b3fae829318990ba3da9b9d5ea0671ac5151f` |
 
 ## Permissions (caller)
 

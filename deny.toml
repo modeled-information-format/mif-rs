@@ -27,6 +27,12 @@ ignore = [
     # backend); gemm 0.19.0 is its latest release and still depends on it, so
     # there is no upgrade path from within this workspace.
     "RUSTSEC-2024-0436",
+    # `chrono` is flagged unmaintained with no fixed release ("all versions
+    # are affected"); this is a maintenance notice, not a vulnerability. Its
+    # removal is not possible from within this workspace: beyond the direct
+    # use in mif-cli/mif-mcp/mif-rh/mif-rh-cli it is a transitive dependency
+    # of `rmcp` and `schemars`. Revisit when rmcp/schemars move off chrono.
+    "RUSTSEC-2026-0543",
 ]
 
 [licenses]
