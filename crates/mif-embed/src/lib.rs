@@ -46,6 +46,17 @@ pub const EMBEDDING_DIM: usize = 384;
 /// from this constant instead of assuming it.
 pub const NORMALIZED: bool = true;
 
+/// One passage of a document with its embedding, from
+/// [`Embedder::embed_document`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbeddedPassage {
+    /// The body heading the passage was taken from; see
+    /// [`passages::Passage::heading`].
+    pub heading: Option<String>,
+    /// The passage's embedding vector.
+    pub vector: Vec<f32>,
+}
+
 /// Errors from loading the embedding model or running inference.
 #[derive(Debug, thiserror::Error)]
 pub enum EmbedError {
@@ -381,6 +392,34 @@ impl Embedder {
         // never smaller than its token count, so it is split rather than
         // passed through oversized.
         passages::passages(jsonld, &|text| self.token_count(text).unwrap_or(text.len()))
+    }
+
+    /// Splits the JSON-LD projection of a MIF document into passages and
+    /// embeds each one: everything an ingest stores for the document.
+    ///
+    /// The result is never empty, and its first entry is the summary
+    /// passage, whose vector stands for the document as a whole. This is the
+    /// one place the text embedded for a document is decided, so every
+    /// caller that ingests documents embeds them the same way.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EmbedError`] if tokenization or model inference fails.
+    pub fn embed_document(
+        &self,
+        jsonld: &serde_json::Value,
+    ) -> Result<Vec<EmbeddedPassage>, EmbedError> {
+        let passages = self.passages(jsonld);
+        let texts: Vec<&str> = passages.iter().map(|p| p.text.as_str()).collect();
+        let vectors = self.embed_passages(&texts)?;
+        Ok(passages
+            .into_iter()
+            .zip(vectors)
+            .map(|(passage, vector)| EmbeddedPassage {
+                heading: passage.heading,
+                vector,
+            })
+            .collect())
     }
 
     /// Computes one embedding per entry of `texts`, in order, running the
@@ -775,5 +814,44 @@ mod tests {
                 "{tokens} tokens"
             );
         }
+    }
+
+    #[test]
+    fn embed_document_embeds_the_summary_first_and_every_section() {
+        warm_embedding_model_cache();
+        let embedder = match Embedder::load() {
+            Ok(embedder) => embedder,
+            Err(err) => {
+                eprintln!("skipping: could not load embedding model: {err}");
+                return;
+            },
+        };
+        let document = serde_json::json!({
+            "title": "Campaign Management",
+            "entity": { "definition": "The ability to plan and run campaigns" },
+            "content": "## Scope\n\nEmail and events.\n\n## Owner\n\nMarketing.",
+        });
+
+        let stored = embedder.embed_document(&document).unwrap();
+
+        let headings: Vec<_> = stored.iter().map(|p| p.heading.as_deref()).collect();
+        assert_eq!(headings, vec![None, Some("Scope"), Some("Owner")]);
+        let summary = embedder
+            .embed("Campaign Management\nThe ability to plan and run campaigns")
+            .unwrap();
+        let cosine: f32 = summary
+            .iter()
+            .zip(&stored[0].vector)
+            .map(|(a, b)| a * b)
+            .sum();
+        assert!(cosine > 0.9999, "summary vector drifted: {cosine}");
+        // A document with no text still yields its one summary passage.
+        assert_eq!(
+            embedder
+                .embed_document(&serde_json::json!({}))
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

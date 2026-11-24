@@ -10,6 +10,7 @@
 //! [`mif_problem::OutputFormat::select`]).
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
+use std::collections::HashSet;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -57,17 +58,27 @@ enum Command {
         #[command(subcommand)]
         command: OntologyCommand,
     },
-    /// Lint, validate, prove a lossless round trip, compute an embedding,
-    /// and store the embedding vector for one MIF document.
+    /// Lint, validate, prove a lossless round trip, embed, and store MIF
+    /// documents. Each document is embedded as a summary passage plus one or
+    /// more passages per body section. With one file, a failure is that
+    /// file's own error; with several files or a directory, every file is
+    /// attempted, each failure is reported on stderr, and the exit code is
+    /// non-zero if any failed.
     Ingest {
-        /// Path to the MIF document (markdown with frontmatter, or a
-        /// JSON-LD projection) to ingest.
-        file: PathBuf,
+        /// MIF documents (markdown with frontmatter, or JSON-LD
+        /// projections) to ingest. A directory stands for every `.md` file
+        /// with frontmatter beneath it, skipping hidden directories.
+        #[arg(required = true, num_args = 1.., value_name = "FILE")]
+        files: Vec<PathBuf>,
         /// Path to the `SQLite` vector store database. Defaults to
         /// `.mif/vectors.db`, created (along with its parent directory) if
         /// absent.
         #[arg(long)]
         db_path: Option<PathBuf>,
+        /// Skip a document the store already holds with the same content
+        /// and current passages.
+        #[arg(long)]
+        changed_only: bool,
     },
     /// Free-text semantic search over previously ingested documents.
     Search {
@@ -94,6 +105,45 @@ enum Command {
         /// Maximum number of ranked results to return.
         #[arg(long, default_value_t = 10)]
         limit: usize,
+        /// Only documents whose id starts with this.
+        #[arg(long)]
+        id_prefix: Option<String>,
+        /// Only documents whose source path, as recorded at ingest (relative
+        /// to the directory `ingest` ran in), starts with this. Documents
+        /// ingested before sources were recorded never match.
+        #[arg(long)]
+        source_prefix: Option<String>,
+        /// Only documents whose MIF namespace starts with this.
+        #[arg(long)]
+        namespace_prefix: Option<String>,
+        /// Append the heading of each document's best-matching passage to
+        /// its result line, as `[Heading]`.
+        #[arg(long)]
+        show_passage: bool,
+    },
+    /// Remove one document's vectors from the vector store.
+    Remove {
+        /// The id of the document to remove (as reported by `ingest`).
+        id: String,
+        /// Path to the `SQLite` vector store database. Defaults to
+        /// `.mif/vectors.db`.
+        #[arg(long)]
+        db_path: Option<PathBuf>,
+    },
+    /// Remove from the vector store every document that no longer exists
+    /// under a directory. A document exists if a `.md` file with
+    /// frontmatter, or a JSON-LD file, beneath the directory carries its id.
+    Prune {
+        /// The directory holding the documents to keep.
+        #[arg(long)]
+        root: PathBuf,
+        /// Path to the `SQLite` vector store database. Defaults to
+        /// `.mif/vectors.db`.
+        #[arg(long)]
+        db_path: Option<PathBuf>,
+        /// List what would be removed without removing it.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Find previously ingested documents similar to an already-ingested one.
     FindSimilar {
@@ -235,6 +285,21 @@ enum CliError {
         #[source]
         source: serde_json::Error,
     },
+    /// One or more documents of a multi-document `ingest` failed.
+    #[error("{failed} of {total} documents were not ingested")]
+    IngestBatch {
+        /// How many documents failed.
+        failed: usize,
+        /// How many documents were attempted.
+        total: usize,
+    },
+    /// `prune` found no document under its root, and so would have removed
+    /// every vector in the store.
+    #[error("no MIF document found under {root}; refusing to prune every vector in the store")]
+    PruneEmptyRoot {
+        /// The directory that was scanned.
+        root: String,
+    },
 }
 
 impl CliError {
@@ -267,6 +332,20 @@ impl CliError {
                 title: "Failed to serialize JSON-LD to text",
                 status: 500,
                 exit_code: 1,
+            },
+            Self::IngestBatch { .. } => ProblemMeta {
+                slug: "mif-cli-ingest-batch-failed",
+                version: "v1",
+                title: "Some documents were not ingested",
+                status: 422,
+                exit_code: 2,
+            },
+            Self::PruneEmptyRoot { .. } => ProblemMeta {
+                slug: "mif-cli-prune-empty-root",
+                version: "v1",
+                title: "No MIF document found under the prune root",
+                status: 400,
+                exit_code: 2,
             },
             // Schema/Ontology/Frontmatter/Embed/Store carry their own
             // `ProblemMeta` internally; these arms are only reached if
@@ -316,6 +395,21 @@ impl ToProblem for CliError {
                     "quickfix",
                     mif_problem::Applicability::MaybeIncorrect,
                 )),
+            Self::IngestBatch { .. } => self
+                .meta()
+                .into_details(env!("CARGO_PKG_NAME"), self.to_string())
+                .with_suggested_fix(mif_problem::SuggestedFix::new(
+                    "Fix each document named on stderr and ingest again; the documents that \
+                     succeeded are stored.",
+                    mif_problem::Applicability::MaybeIncorrect,
+                )),
+            Self::PruneEmptyRoot { .. } => self
+                .meta()
+                .into_details(env!("CARGO_PKG_NAME"), self.to_string())
+                .with_suggested_fix(mif_problem::SuggestedFix::new(
+                    "Check `--root` names the directory that holds the ingested documents.",
+                    mif_problem::Applicability::MaybeIncorrect,
+                )),
             Self::Json { .. } | Self::JsonSerialize { .. } => self
                 .meta()
                 .into_details(env!("CARGO_PKG_NAME"), self.to_string()),
@@ -344,13 +438,40 @@ fn run(command: &Command) -> Result<String, CliError> {
         Command::Ontology { command } => match command {
             OntologyCommand::Resolve { id, ontologies_dir } => resolve(id, ontologies_dir),
         },
-        Command::Ingest { file, db_path } => ingest(file, db_path.as_deref()),
+        Command::Ingest {
+            files,
+            db_path,
+            changed_only,
+        } => ingest_paths(files, db_path.as_deref(), *changed_only),
         Command::Search {
             query,
             db_path,
             extra_db_path,
             limit,
-        } => search(query, db_path.as_deref(), extra_db_path, *limit),
+            id_prefix,
+            source_prefix,
+            namespace_prefix,
+            show_passage,
+        } => search(
+            query,
+            db_path.as_deref(),
+            extra_db_path,
+            &SearchOptions {
+                limit: *limit,
+                filter: mif_store::SearchFilter {
+                    id_prefix: id_prefix.clone(),
+                    source_prefix: source_prefix.clone(),
+                    namespace_prefix: namespace_prefix.clone(),
+                },
+                show_passage: *show_passage,
+            },
+        ),
+        Command::Remove { id, db_path } => remove(id, db_path.as_deref()),
+        Command::Prune {
+            root,
+            db_path,
+            dry_run,
+        } => prune(root, db_path.as_deref(), *dry_run),
         Command::FindSimilar {
             id,
             db_path,
@@ -422,11 +543,70 @@ fn format_rooted_matches(matches: &[mif_store::RootedMatch]) -> String {
         .join("\n")
 }
 
+/// How `search` ranks and prints.
+#[derive(Debug, Clone, Default)]
+struct SearchOptions {
+    /// Maximum number of ranked results to return.
+    limit: usize,
+    /// Which stored documents to rank.
+    filter: mif_store::SearchFilter,
+    /// Whether to append each match's passage heading to its line.
+    show_passage: bool,
+}
+
+/// The ` [Heading]` suffix of a result line, when headings are asked for
+/// and the best-matching passage has one.
+fn passage_suffix(heading: Option<&str>, show_passage: bool) -> String {
+    heading
+        .filter(|_| show_passage)
+        .map_or_else(String::new, |heading| format!("  [{heading}]"))
+}
+
+/// Formats `search` results for display, one line per document, in the
+/// same `score  id` form as [`format_matches`].
+fn format_search_matches(matches: &[mif_store::SearchMatch], show_passage: bool) -> String {
+    if matches.is_empty() {
+        return "(no matches)".to_string();
+    }
+    matches
+        .iter()
+        .map(|m| {
+            let passage = passage_suffix(m.heading.as_deref(), show_passage);
+            format!("{:.4}  {}{passage}", m.score, m.id)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Formats multi-root `search` results for display, in the same form as
+/// [`format_rooted_matches`].
+fn format_rooted_search_matches(
+    matches: &[mif_store::RootedSearchMatch],
+    show_passage: bool,
+) -> String {
+    if matches.is_empty() {
+        return "(no matches)".to_string();
+    }
+    matches
+        .iter()
+        .map(|m| {
+            let passage = passage_suffix(m.heading.as_deref(), show_passage);
+            format!(
+                "{:.4}  {}  (root={}){passage}",
+                m.score,
+                m.id,
+                m.root.display()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Validates one MIF document: projects markdown-with-frontmatter or
 /// JSON-LD input to JSON-LD via [`project_to_jsonld`] (proving the
 /// markdown <-> JSON-LD round trip is lossless either way), then
 /// schema-checks the result against the canonical schema and the requested
-/// `level` floor (1, 2, or 3). Unlike [`ingest`], this has no side effects:
+/// `level` floor (1, 2, or 3). Unlike [`ingest_one`], this has no side effects:
 /// no embedding model load, no vector store write.
 ///
 /// # Errors
@@ -508,15 +688,143 @@ fn content_hash(contents: &str) -> String {
     format!("{hash:016x}")
 }
 
+/// What an ingest needs once a document has validated: the embedding model
+/// and the vector store, each set up on first use. A document that fails
+/// validation therefore costs neither, and a run over many documents loads
+/// the model once.
+struct IngestContext {
+    db_path: PathBuf,
+    embedder: Option<mif_embed::Embedder>,
+    store: Option<mif_store::VectorStore>,
+}
+
+impl IngestContext {
+    fn new(db_path: Option<&Path>) -> Self {
+        Self {
+            db_path: resolve_db_path(db_path),
+            embedder: None,
+            store: None,
+        }
+    }
+
+    fn embedder(&mut self) -> Result<&mif_embed::Embedder, CliError> {
+        let embedder = match self.embedder.take() {
+            Some(embedder) => embedder,
+            None => mif_embed::Embedder::load()?,
+        };
+        Ok(self.embedder.insert(embedder))
+    }
+
+    fn store(&mut self) -> Result<&mif_store::VectorStore, CliError> {
+        let store = if let Some(store) = self.store.take() {
+            store
+        } else {
+            if let Some(parent) = self.db_path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent).map_err(|source| CliError::Io {
+                    path: parent.display().to_string(),
+                    source,
+                })?;
+            }
+            mif_store::VectorStore::open(&self.db_path)?
+        };
+        Ok(self.store.insert(store))
+    }
+}
+
+/// The path recorded as a document's source: relative to the current
+/// directory when the file is beneath it, with `/` separators, so
+/// `search --source-prefix` means the same thing wherever the store is
+/// read from. A file elsewhere keeps its absolute path.
+fn source_of(file: &Path) -> String {
+    let absolute = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+    let relative = std::env::current_dir()
+        .and_then(std::fs::canonicalize)
+        .ok()
+        .and_then(|cwd| absolute.strip_prefix(cwd).ok().map(Path::to_path_buf));
+    let source = relative.unwrap_or(absolute).display().to_string();
+    if cfg!(windows) {
+        source.replace('\\', "/")
+    } else {
+        source
+    }
+}
+
+/// Ingests every document named by `paths` (see `ingest`'s `FILE`
+/// argument).
+///
+/// One file that is not a directory is ingested by [`ingest_one`], and its
+/// failure is the command's failure. Anything else is a batch: each result line is printed as it is produced, each
+/// failure is reported on stderr, and the batch goes on to the next file.
+///
+/// # Errors
+///
+/// For one file, that file's own [`CliError`]. For a batch,
+/// [`CliError::Io`] if a directory cannot be read, or
+/// [`CliError::IngestBatch`] if any document failed.
+fn ingest_paths(
+    paths: &[PathBuf],
+    db_path: Option<&Path>,
+    changed_only: bool,
+) -> Result<String, CliError> {
+    let mut context = IngestContext::new(db_path);
+    if let [file] = paths
+        && !file.is_dir()
+    {
+        return ingest_one(file, &mut context, changed_only);
+    }
+
+    let mut files = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            let mut found = Vec::new();
+            walk(path, true, &mut found)?;
+            files.extend(found.into_iter().filter(|file| is_markdown_document(file)));
+        } else {
+            files.push(path.clone());
+        }
+    }
+
+    let mut failed = 0;
+    for file in &files {
+        match ingest_one(file, &mut context, changed_only) {
+            Ok(line) => println!("{line}"),
+            Err(error) => {
+                failed += 1;
+                eprintln!("{}: error: {error}", file.display());
+            },
+        }
+    }
+    if failed > 0 {
+        return Err(CliError::IngestBatch {
+            failed,
+            total: files.len(),
+        });
+    }
+    Ok(format!(
+        "ingested {} documents (db={})",
+        files.len(),
+        context.db_path.display()
+    ))
+}
+
 /// Runs the full ingestion pipeline for one MIF document: validate (lint),
-/// prove a lossless round trip, compute an embedding, and store it.
+/// prove a lossless round trip, embed its passages, and store them, with
+/// the model and store taken from `context`. With `changed_only`, a
+/// document the store already holds with the same content and current
+/// passages is left alone.
 ///
 /// # Errors
 ///
 /// Returns [`CliError`] if the file cannot be read, does not conform to the
 /// canonical MIF schema, does not round-trip losslessly, the embedding model
 /// cannot be loaded or run, or the vector store cannot be opened or written.
-fn ingest(file: &Path, db_path: Option<&Path>) -> Result<String, CliError> {
+fn ingest_one(
+    file: &Path,
+    context: &mut IngestContext,
+    changed_only: bool,
+) -> Result<String, CliError> {
     let contents = std::fs::read_to_string(file).map_err(|source| CliError::Io {
         path: file.display().to_string(),
         source,
@@ -533,49 +841,204 @@ fn ingest(file: &Path, db_path: Option<&Path>) -> Result<String, CliError> {
         .get("@id")
         .and_then(serde_json::Value::as_str)
         .map_or_else(|| file.display().to_string(), ToString::to_string);
-    let content_text = jsonld
-        .get("content")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or(&contents);
-
-    let embedder = mif_embed::Embedder::load()?;
-    let vector = embedder.embed(content_text)?;
-
-    let db_path = db_path.map_or_else(|| PathBuf::from(DEFAULT_DB_PATH), Path::to_path_buf);
-    if let Some(parent) = db_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent).map_err(|source| CliError::Io {
-            path: parent.display().to_string(),
-            source,
-        })?;
-    }
-    let store = mif_store::VectorStore::open(&db_path)?;
     let hash = content_hash(&contents);
-    let updated_at = chrono::Utc::now().to_rfc3339();
-    store.upsert(&id, &vector, &hash, &updated_at)?;
+    let db = context.db_path.display().to_string();
+    if changed_only && context.db_path.exists() && context.store()?.is_current(&id, &hash)? {
+        return Ok(format!(
+            "{}: unchanged stored=false (id={id}, db={db})",
+            file.display()
+        ));
+    }
 
+    let embedder = context.embedder()?;
+    let stored = embedder.embed_document(&jsonld)?;
+    let model = embedder.model_id();
     let model_version = embedder
         .model_revision()
         .map_or_else(String::new, |revision| format!(" model_version={revision}"));
+
+    let summary = stored.first().map_or(&[][..], |p| p.vector.as_slice());
+    let passages: Vec<mif_store::PassageVector<'_>> = stored
+        .iter()
+        .map(|p| mif_store::PassageVector {
+            heading: p.heading.as_deref(),
+            vector: &p.vector,
+        })
+        .collect();
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    let source = source_of(file);
+    context
+        .store()?
+        .upsert_document(&mif_store::DocumentVectors {
+            id: &id,
+            vector: summary,
+            passages: &passages,
+            content_hash: &hash,
+            updated_at: &updated_at,
+            source: Some(&source),
+            namespace: jsonld.get("namespace").and_then(serde_json::Value::as_str),
+        })?;
+
     Ok(format!(
-        "{}: lint=ok validate=ok roundtrip=lossless embedding_dim={} model={}{model_version} normalized={} stored=true (id={id}, db={})",
+        "{}: lint=ok validate=ok roundtrip=lossless embedding_dim={} passages={} model={model}{model_version} normalized={} stored=true (id={id}, db={db})",
         file.display(),
-        vector.len(),
-        embedder.model_id(),
+        summary.len(),
+        passages.len(),
         mif_embed::NORMALIZED,
-        db_path.display()
     ))
 }
 
-/// Embeds `query` and ranks previously ingested documents by cosine
-/// similarity to it.
+/// Collects every file beneath `dir`, in path order. `.git` and
+/// `node_modules` are never entered, and with `skip_hidden` neither is any
+/// directory whose name starts with a dot. Symbolic links are not followed.
+fn walk(dir: &Path, skip_hidden: bool, out: &mut Vec<PathBuf>) -> Result<(), CliError> {
+    let io_error = |source| CliError::Io {
+        path: dir.display().to_string(),
+        source,
+    };
+    let mut entries = std::fs::read_dir(dir)
+        .map_err(io_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(io_error)?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let file_type = entry.file_type().map_err(io_error)?;
+        if file_type.is_file() {
+            out.push(entry.path());
+        } else if file_type.is_dir()
+            && name != ".git"
+            && name != "node_modules"
+            && !(skip_hidden && name.starts_with('.'))
+        {
+            walk(&entry.path(), skip_hidden, out)?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether `file` is a `.md` file that opens with frontmatter. A file that
+/// cannot be read is not one.
+fn is_markdown_document(file: &Path) -> bool {
+    file.extension().is_some_and(|ext| ext == "md")
+        && std::fs::read_to_string(file).is_ok_and(|contents| {
+            contents
+                .strip_prefix('\u{feff}')
+                .unwrap_or(&contents)
+                .starts_with("---")
+        })
+}
+
+/// The id `ingest` stores a document under, read from the file without
+/// validating it: `None` for a file that is not a MIF document.
+///
+/// # Errors
+///
+/// Returns [`CliError`] if the file cannot be read, or opens with
+/// frontmatter that cannot be parsed. Such a file may be a document whose
+/// id is simply unreadable right now, so it is an error rather than a
+/// reason to treat the document as gone.
+fn document_id(file: &Path) -> Result<Option<String>, CliError> {
+    let extension = file.extension().and_then(std::ffi::OsStr::to_str);
+    if !matches!(extension, Some("md" | "json" | "jsonld")) {
+        return Ok(None);
+    }
+    if extension != Some("md") {
+        // Any JSON file may sit under the root; only one that reads and
+        // parses as an object with an `@id` is a document.
+        return Ok(std::fs::read_to_string(file)
+            .ok()
+            .and_then(|contents| {
+                let contents = contents.strip_prefix('\u{feff}').unwrap_or(&contents);
+                serde_json::from_str::<serde_json::Value>(contents).ok()
+            })
+            .and_then(|value| value.get("@id")?.as_str().map(ToString::to_string)));
+    }
+    let contents = std::fs::read_to_string(file).map_err(|source| CliError::Io {
+        path: file.display().to_string(),
+        source,
+    })?;
+    let contents = contents.strip_prefix('\u{feff}').unwrap_or(&contents);
+    match mif_frontmatter::parse_markdown(contents) {
+        Ok((frontmatter, _body)) => {
+            let literal = frontmatter.get("@id").and_then(|id| id.as_str());
+            let short = frontmatter.get("id").and_then(|id| id.as_str());
+            Ok(literal
+                .map(ToString::to_string)
+                .or_else(|| short.map(|id| format!("urn:mif:{id}"))))
+        },
+        Err(mif_frontmatter::FrontmatterError::MissingFrontmatter) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Removes one document's vectors from the vector store.
+///
+/// # Errors
+///
+/// Returns [`CliError`] if the vector store cannot be opened or written.
+fn remove(id: &str, db_path: Option<&Path>) -> Result<String, CliError> {
+    let db_path = resolve_db_path(db_path);
+    let store = mif_store::VectorStore::open(&db_path)?;
+    let outcome = if store.remove(id)? {
+        "removed"
+    } else {
+        "not stored"
+    };
+    Ok(format!("{id}: {outcome} (db={})", db_path.display()))
+}
+
+/// Removes from the vector store every document whose id is carried by no
+/// file under `root`, or with `dry_run` only lists them.
+///
+/// # Errors
+///
+/// Returns [`CliError::PruneEmptyRoot`] if no document is found under
+/// `root`, or [`CliError`] if `root` cannot be read, a file's frontmatter
+/// cannot be parsed, or the vector store cannot be opened or written.
+fn prune(root: &Path, db_path: Option<&Path>, dry_run: bool) -> Result<String, CliError> {
+    let mut files = Vec::new();
+    walk(root, false, &mut files)?;
+    let mut keep = HashSet::new();
+    for file in &files {
+        keep.extend(document_id(file)?);
+    }
+    if keep.is_empty() {
+        return Err(CliError::PruneEmptyRoot {
+            root: root.display().to_string(),
+        });
+    }
+
+    let db_path = resolve_db_path(db_path);
+    let store = mif_store::VectorStore::open(&db_path)?;
+    let (removed, verb) = if dry_run {
+        let stale = store.ids()?;
+        let stale = stale.into_iter().filter(|id| !keep.contains(id)).collect();
+        (stale, "would prune")
+    } else {
+        (store.prune(&keep)?, "pruned")
+    };
+    let mut lines: Vec<String> = removed.iter().map(|id| format!("{verb} {id}")).collect();
+    lines.push(format!(
+        "{verb} {} documents, {} found under {} (db={})",
+        removed.len(),
+        keep.len(),
+        root.display(),
+        db_path.display()
+    ));
+    Ok(lines.join("\n"))
+}
+
+/// Embeds `query` and ranks previously ingested documents, each by the
+/// cosine similarity of its best-matching passage (a document ingested
+/// before passages existed is ranked by its one document vector).
 ///
 /// When `extra_db_path` is empty, this queries only the resolved `db_path`
 /// root, identically to single-root usage before multi-root support existed.
 /// Otherwise it queries `db_path` (or its default) together with every
 /// `extra_db_path` root, merge-ranked by cosine similarity via
-/// [`mif_store::multi_root_top_k_similar`].
+/// [`mif_store::multi_root_search`].
 ///
 /// # Errors
 ///
@@ -585,7 +1048,7 @@ fn search(
     query: &str,
     db_path: Option<&Path>,
     extra_db_path: &[PathBuf],
-    limit: usize,
+    options: &SearchOptions,
 ) -> Result<String, CliError> {
     let embedder = mif_embed::Embedder::load()?;
     let vector = embedder.embed(query)?;
@@ -593,13 +1056,13 @@ fn search(
     if extra_db_path.is_empty() {
         let db_path = resolve_db_path(db_path);
         let store = mif_store::VectorStore::open(&db_path)?;
-        let matches = store.top_k_similar(&vector, limit)?;
-        return Ok(format_matches(&matches));
+        let matches = store.search(&vector, options.limit, &options.filter)?;
+        return Ok(format_search_matches(&matches, options.show_passage));
     }
 
     let roots = resolve_db_paths(db_path, extra_db_path);
-    let matches = mif_store::multi_root_top_k_similar(&roots, &vector, limit)?;
-    Ok(format_rooted_matches(&matches))
+    let matches = mif_store::multi_root_search(&roots, &vector, options.limit, &options.filter)?;
+    Ok(format_rooted_search_matches(&matches, options.show_passage))
 }
 
 /// Finds documents similar to an already-ingested one, identified by `id`.
@@ -668,6 +1131,9 @@ fn find_similar(
 
 /// Summarizes the vector store's contents.
 ///
+/// A single root also reports how many passages it holds and how many of
+/// its documents have none (documents not ingested since passages existed).
+///
 /// Follows the same single-root-unless-`extra_db_path`-given behavior as
 /// [`search`]. With more than one root, the output leads with the summed
 /// `total_count` across every root, followed by one line per root showing
@@ -682,9 +1148,18 @@ fn corpus_stats(db_path: Option<&Path>, extra_db_path: &[PathBuf]) -> Result<Str
         let db_path = resolve_db_path(db_path);
         let store = mif_store::VectorStore::open(&db_path)?;
         let stats = store.stats()?;
+        let passages = store.passage_stats()?;
         return Ok(stats.dim.map_or_else(
             || format!("count=0 db={}", db_path.display()),
-            |dim| format!("count={} dim={dim} db={}", stats.count, db_path.display()),
+            |dim| {
+                format!(
+                    "count={} dim={dim} db={} passages={} documents_without_passages={}",
+                    stats.count,
+                    db_path.display(),
+                    passages.passage_count,
+                    passages.documents_without_passages
+                )
+            },
         ));
     }
 
@@ -805,15 +1280,41 @@ fn emit_markdown(
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::{Path, PathBuf};
 
     use mif_problem::{OutputFormat, ToProblem};
 
     use mif_frontmatter::FrontmatterShape;
 
     use super::{
-        CliError, Command, OntologyCommand, corpus_stats, emit_jsonld, emit_markdown, find_similar,
-        ingest, resolve, roundtrip, run, search, validate,
+        CliError, Command, IngestContext, OntologyCommand, SearchOptions, corpus_stats,
+        emit_jsonld, emit_markdown, find_similar, ingest_one, ingest_paths, passage_suffix, prune,
+        remove, resolve, roundtrip, run, search, validate,
     };
+
+    /// Ingests one document, as `mif-cli ingest FILE` does.
+    fn ingest(file: &Path, db_path: Option<&Path>) -> Result<String, CliError> {
+        ingest_one(file, &mut IngestContext::new(db_path), false)
+    }
+
+    /// Default search options with a result limit.
+    fn top(limit: usize) -> SearchOptions {
+        SearchOptions {
+            limit,
+            ..SearchOptions::default()
+        }
+    }
+
+    /// A conformant markdown document with a title, a definition, and two
+    /// body sections.
+    fn sectioned_document(name: &str, title: &str, scope: &str, owner: &str) -> String {
+        format!(
+            "---\nid: {}\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\nnamespace: records/{name}\n\
+             title: {title}\n---\n\n# {title}\n\n## Scope\n\n{scope}\n\n## Owner\n\n{owner}\n\n\
+             ## Relationships\n\n- relates-to [Other](other.md)\n",
+            mif_core::concept_uuid(name)
+        )
+    }
 
     fn write_temp_file(contents: &str) -> tempfile::NamedTempFile {
         let file = tempfile::NamedTempFile::new().unwrap();
@@ -1566,8 +2067,9 @@ No type field.
         warm_embedding_model_cache();
         let doc_file = write_temp_file(VALID_MARKDOWN_FIXTURE);
         let ingest_result = run(&Command::Ingest {
-            file: doc_file.path().to_path_buf(),
+            files: vec![doc_file.path().to_path_buf()],
             db_path: Some(db_path.clone()),
+            changed_only: false,
         });
         assert!(ingest_result.is_ok());
 
@@ -1576,6 +2078,10 @@ No type field.
             db_path: Some(db_path.clone()),
             extra_db_path: Vec::new(),
             limit: 5,
+            id_prefix: None,
+            source_prefix: None,
+            namespace_prefix: None,
+            show_passage: false,
         });
         assert!(search_result.is_ok());
 
@@ -1618,7 +2124,7 @@ No type field.
             "Quarterly revenue exceeded analyst expectations.",
         );
 
-        let result = search("A furry pet cat", Some(&db_path), &[], 10).unwrap();
+        let result = search("A furry pet cat", Some(&db_path), &[], &top(10)).unwrap();
         let first_line = result.lines().next().unwrap();
         assert!(first_line.ends_with("urn:mif:25b66725-81a9-5064-8d02-01eba8cb8cf6"));
     }
@@ -1630,7 +2136,7 @@ No type field.
         let db_path = db_dir.path().join("vectors.db");
         mif_store::VectorStore::open(&db_path).unwrap();
 
-        let result = search("anything", Some(&db_path), &[], 10).unwrap();
+        let result = search("anything", Some(&db_path), &[], &top(10)).unwrap();
         assert_eq!(result, "(no matches)");
     }
 
@@ -1709,7 +2215,7 @@ No type field.
             "A furry pet cat",
             Some(&db_path_a),
             std::slice::from_ref(&db_path_b),
-            10,
+            &top(10),
         )
         .unwrap();
         let first_line = result.lines().next().unwrap();
@@ -1856,5 +2362,340 @@ No type field.
         .unwrap();
         assert!(result.contains("total_count=1"));
         assert!(result.contains(&format!("count=0 db={}", not_yet_created_path.display())));
+    }
+
+    #[test]
+    fn ingest_stores_a_summary_and_one_passage_per_section() {
+        warm_embedding_model_cache();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("vectors.db");
+        let file = dir.path().join("cats.md");
+        fs::write(
+            &file,
+            sectioned_document(
+                "cats",
+                "Cats",
+                "Cats are small domesticated felines.",
+                "The veterinary team looks after them.",
+            ),
+        )
+        .unwrap();
+
+        let message = ingest(&file, Some(&db_path)).unwrap();
+
+        // Summary, the Scope section, and the Owner section; the
+        // Relationships section is not embedded.
+        assert!(message.contains("embedding_dim=384 passages=3 model="));
+        let store = mif_store::VectorStore::open(&db_path).unwrap();
+        assert_eq!(store.passage_stats().unwrap().passage_count, 3);
+        let stats = corpus_stats(Some(&db_path), &[]).unwrap();
+        assert!(stats.ends_with("passages=3 documents_without_passages=0"));
+    }
+
+    #[test]
+    fn search_shows_the_matching_passage_only_when_asked() {
+        warm_embedding_model_cache();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("vectors.db");
+        let file = dir.path().join("cats.md");
+        fs::write(
+            &file,
+            sectioned_document(
+                "cats",
+                "Cats",
+                "Cats are small domesticated felines.",
+                "Quarterly revenue exceeded analyst expectations.",
+            ),
+        )
+        .unwrap();
+        ingest(&file, Some(&db_path)).unwrap();
+        let id = format!("urn:mif:{}", mif_core::concept_uuid("cats"));
+        let query = "revenue beat what analysts expected this quarter";
+
+        let plain = search(query, Some(&db_path), &[], &top(10)).unwrap();
+        let shown = search(
+            query,
+            Some(&db_path),
+            &[],
+            &SearchOptions {
+                show_passage: true,
+                ..top(10)
+            },
+        )
+        .unwrap();
+
+        assert!(plain.ends_with(&id), "unexpected plain output: {plain}");
+        assert!(
+            shown.ends_with(&format!("{id}  [Owner]")),
+            "unexpected output: {shown}"
+        );
+    }
+
+    #[test]
+    fn search_filters_by_source_and_namespace_prefix() {
+        warm_embedding_model_cache();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("vectors.db");
+        for (folder, name) in [("capabilities", "cats"), ("notes", "dogs")] {
+            fs::create_dir(dir.path().join(folder)).unwrap();
+            let file = dir.path().join(folder).join(format!("{name}.md"));
+            fs::write(
+                &file,
+                sectioned_document(name, name, "Small domesticated animals.", "A team."),
+            )
+            .unwrap();
+            ingest(&file, Some(&db_path)).unwrap();
+        }
+        let cats = format!("urn:mif:{}", mif_core::concept_uuid("cats"));
+        let folder = fs::canonicalize(dir.path().join("capabilities")).unwrap();
+        let mut source_prefix = folder.display().to_string();
+        if cfg!(windows) {
+            source_prefix = source_prefix.replace('\\', "/");
+        }
+        let filtered = |filter: mif_store::SearchFilter| {
+            let options = SearchOptions { filter, ..top(10) };
+            search("domesticated animals", Some(&db_path), &[], &options).unwrap()
+        };
+
+        assert_eq!(
+            filtered(mif_store::SearchFilter::default()).lines().count(),
+            2
+        );
+        let by_source = filtered(mif_store::SearchFilter {
+            source_prefix: Some(source_prefix),
+            ..mif_store::SearchFilter::default()
+        });
+        assert_eq!(by_source.lines().count(), 1);
+        assert!(by_source.ends_with(&cats));
+        let by_namespace = filtered(mif_store::SearchFilter {
+            namespace_prefix: Some("records/cat".to_string()),
+            ..mif_store::SearchFilter::default()
+        });
+        assert_eq!(by_namespace.lines().count(), 1);
+        assert!(by_namespace.ends_with(&cats));
+    }
+
+    #[test]
+    fn ingest_of_a_directory_attempts_every_document_and_reports_failures() {
+        warm_embedding_model_cache();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("out").join("vectors.db");
+        let docs = dir.path().join("docs");
+        fs::create_dir_all(docs.join("nested")).unwrap();
+        fs::create_dir_all(docs.join(".hidden")).unwrap();
+        fs::write(
+            docs.join("a.md"),
+            sectioned_document("a", "A", "Alpha.", "Team."),
+        )
+        .unwrap();
+        fs::write(
+            docs.join("nested").join("b.md"),
+            sectioned_document("b", "B", "Beta.", "Team."),
+        )
+        .unwrap();
+        fs::write(
+            docs.join("broken.md"),
+            "---\nid: not-a-uuid\n---\n\nBody.\n",
+        )
+        .unwrap();
+        fs::write(docs.join("README.md"), "# No frontmatter\n").unwrap();
+        fs::write(docs.join("data.json"), "{}").unwrap();
+        fs::write(
+            docs.join(".hidden").join("c.md"),
+            sectioned_document("c", "C", "Gamma.", "Team."),
+        )
+        .unwrap();
+
+        let error = ingest_paths(&[docs], Some(&db_path), false).unwrap_err();
+
+        assert!(matches!(
+            error,
+            CliError::IngestBatch {
+                failed: 1,
+                total: 3
+            }
+        ));
+        assert_eq!(error.to_problem().exit_code, Some(2));
+        let store = mif_store::VectorStore::open(&db_path).unwrap();
+        assert_eq!(store.count().unwrap(), 2);
+    }
+
+    #[test]
+    fn ingest_with_changed_only_skips_what_the_store_already_holds() {
+        warm_embedding_model_cache();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("vectors.db");
+        let file = dir.path().join("a.md");
+        fs::write(&file, sectioned_document("a", "A", "Alpha.", "Team.")).unwrap();
+        let files = [file.clone()];
+
+        let first = ingest_paths(&files, Some(&db_path), true).unwrap();
+        let second = ingest_paths(&files, Some(&db_path), true).unwrap();
+        fs::write(
+            &file,
+            sectioned_document("a", "A", "Alpha, revised.", "Team."),
+        )
+        .unwrap();
+        let third = ingest_paths(&files, Some(&db_path), true).unwrap();
+        let unconditional = ingest_paths(&files, Some(&db_path), false).unwrap();
+
+        assert!(first.contains("stored=true"));
+        assert!(second.contains(": unchanged stored=false (id=urn:mif:"));
+        assert!(third.contains("stored=true"));
+        assert!(unconditional.contains("stored=true"));
+    }
+
+    #[test]
+    fn ingest_of_several_files_reports_a_total() {
+        warm_embedding_model_cache();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("vectors.db");
+        let files: Vec<PathBuf> = ["a", "b"]
+            .iter()
+            .map(|name| {
+                let file = dir.path().join(format!("{name}.md"));
+                fs::write(&file, sectioned_document(name, name, "Text.", "Team.")).unwrap();
+                file
+            })
+            .collect();
+
+        let message = ingest_paths(&files, Some(&db_path), false).unwrap();
+
+        assert_eq!(
+            message,
+            format!("ingested 2 documents (db={})", db_path.display())
+        );
+    }
+
+    /// A store holding three documents by id, with no model involved.
+    fn store_with(db_path: &Path, ids: &[&str]) {
+        let store = mif_store::VectorStore::open(db_path).unwrap();
+        for id in ids {
+            store.upsert(id, &[1.0, 0.0], "h", "t").unwrap();
+        }
+    }
+
+    #[test]
+    fn remove_deletes_one_document_and_says_when_there_was_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("vectors.db");
+        store_with(&db_path, &["urn:mif:a", "urn:mif:b"]);
+
+        assert_eq!(
+            remove("urn:mif:a", Some(&db_path)).unwrap(),
+            format!("urn:mif:a: removed (db={})", db_path.display())
+        );
+        assert_eq!(
+            remove("urn:mif:a", Some(&db_path)).unwrap(),
+            format!("urn:mif:a: not stored (db={})", db_path.display())
+        );
+        let store = mif_store::VectorStore::open(&db_path).unwrap();
+        assert_eq!(store.ids().unwrap(), vec!["urn:mif:b"]);
+    }
+
+    #[test]
+    fn prune_removes_documents_that_no_file_under_the_root_carries() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("vectors.db");
+        let root = dir.path().join("vault");
+        fs::create_dir_all(root.join(".hidden")).unwrap();
+        fs::write(root.join("short.md"), "---\nid: kept-short\n---\n\nBody.\n").unwrap();
+        fs::write(
+            root.join(".hidden").join("literal.md"),
+            "---\n'@id': urn:mif:kept-literal\n---\n\nBody.\n",
+        )
+        .unwrap();
+        fs::write(root.join("doc.json"), r#"{"@id": "urn:mif:kept-json"}"#).unwrap();
+        fs::write(root.join("plain.md"), "# No frontmatter\n").unwrap();
+        fs::write(root.join("other.json"), "not json").unwrap();
+        fs::write(root.join("binary.json"), [0xff_u8, 0xfe, 0x00]).unwrap();
+        store_with(
+            &db_path,
+            &[
+                "urn:mif:kept-short",
+                "urn:mif:kept-literal",
+                "urn:mif:kept-json",
+                "urn:mif:gone-b",
+                "urn:mif:gone-a",
+            ],
+        );
+
+        let dry = prune(&root, Some(&db_path), true).unwrap();
+        let store = mif_store::VectorStore::open(&db_path).unwrap();
+        assert_eq!(store.count().unwrap(), 5);
+        assert!(dry.starts_with("would prune urn:mif:gone-a\nwould prune urn:mif:gone-b\n"));
+        assert!(dry.contains("would prune 2 documents, 3 found under"));
+
+        let done = prune(&root, Some(&db_path), false).unwrap();
+        assert!(done.starts_with("pruned urn:mif:gone-a\npruned urn:mif:gone-b\n"));
+        assert_eq!(
+            store.ids().unwrap(),
+            vec![
+                "urn:mif:kept-json",
+                "urn:mif:kept-literal",
+                "urn:mif:kept-short"
+            ]
+        );
+    }
+
+    #[test]
+    fn prune_refuses_a_root_with_no_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("vectors.db");
+        let root = dir.path().join("empty");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("plain.md"), "# No frontmatter\n").unwrap();
+        store_with(&db_path, &["urn:mif:a"]);
+
+        let error = prune(&root, Some(&db_path), false).unwrap_err();
+
+        assert!(matches!(error, CliError::PruneEmptyRoot { .. }));
+        let problem = error.to_problem();
+        assert_eq!(
+            problem.problem_type,
+            "https://modeled-information-format.github.io/mif-rs/references/errors/mif-cli-prune-empty-root/v1"
+        );
+        assert_eq!(problem.status, 400);
+        let store = mif_store::VectorStore::open(&db_path).unwrap();
+        assert_eq!(store.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn prune_stops_on_frontmatter_it_cannot_read_and_removes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("vectors.db");
+        let root = dir.path().join("vault");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("ok.md"), "---\nid: kept\n---\n\nBody.\n").unwrap();
+        fs::write(root.join("bad.md"), "---\nid: [unclosed\n---\n\nBody.\n").unwrap();
+        store_with(&db_path, &["urn:mif:kept", "urn:mif:maybe-bad"]);
+
+        let error = prune(&root, Some(&db_path), false).unwrap_err();
+
+        assert!(matches!(error, CliError::Frontmatter(_)));
+        let store = mif_store::VectorStore::open(&db_path).unwrap();
+        assert_eq!(store.count().unwrap(), 2);
+    }
+
+    #[test]
+    fn ingest_batch_error_maps_to_its_own_problem_type() {
+        let problem = CliError::IngestBatch {
+            failed: 2,
+            total: 5,
+        }
+        .to_problem();
+        assert_eq!(
+            problem.problem_type,
+            "https://modeled-information-format.github.io/mif-rs/references/errors/mif-cli-ingest-batch-failed/v1"
+        );
+        assert_eq!(problem.status, 422);
+        assert_eq!(problem.detail, "2 of 5 documents were not ingested");
+    }
+
+    #[test]
+    fn passage_suffix_is_empty_unless_asked_for_and_present() {
+        assert_eq!(passage_suffix(Some("Scope"), true), "  [Scope]");
+        assert_eq!(passage_suffix(Some("Scope"), false), "");
+        assert_eq!(passage_suffix(None, true), "");
     }
 }

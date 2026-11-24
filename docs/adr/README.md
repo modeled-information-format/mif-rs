@@ -95,3 +95,4 @@ a new, superseding ADR instead.
 - [ADR-0018](https://modeled-information-format.github.io/mif-rs/adr/0018-rustdoc-and-starlight-unified-pages-deployment/) — Publish rustdoc Alongside the Starlight Site in One Pages Deployment
 - [ADR-0019](https://modeled-information-format.github.io/mif-rs/adr/0019-mif-rh-crates-in-mif-rs-workspace/) — Ship the Research-Harness Ontology Engine as mif-rh Crates Inside the mif-rs Workspace
 - [ADR-0020](https://modeled-information-format.github.io/mif-rs/adr/0020-mif-rh-mcp-stdio-only-transport/) — mif-rh-mcp Speaks stdio-Only MCP Transport
+- [ADR-0021](https://modeled-information-format.github.io/mif-rs/adr/0021-passage-level-embedding-and-search/) — Passage-Level Embedding and Best-Passage Search

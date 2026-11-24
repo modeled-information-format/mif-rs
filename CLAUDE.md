@@ -15,11 +15,11 @@ Format)](https://mif-spec.dev) specification in Rust (edition 2024, MSRV
 | `mif-schema` | library | JSON Schema validation of MIF documents/citations/ontology definitions |
 | `mif-ontology` | library | Three-tier ontology `extends` chain resolution, plus the MIF-level classification model (MIF ADR-020): the full `EntityType` shape with `embedding_doc()`, and the `confidence` module (tiers, recalibratable `CalibrationConfig`, `assign_tier` floor+margin gate, mutual-similarity clustering) |
 | `mif-frontmatter` | library | Markdown-frontmatter <-> JSON-LD projection and lossless round-trip proof, ported from the `MIF` repo's `mif_convert.py`, generalized beyond it (see "Why Generic Frontmatter Pass-Through" below) |
-| `mif-embed` | library | Local (offline-after-first-fetch) sentence embeddings via `candle`, `sentence-transformers/all-MiniLM-L6-v2` |
-| `mif-store` | library | `SQLite`-backed vector store for document embeddings (`rusqlite`, bundled), with brute-force cosine-similarity ranking (`top_k_similar`) |
+| `mif-embed` | library | Local (offline-after-first-fetch) sentence embeddings via `candle`, `sentence-transformers/all-MiniLM-L6-v2`, and the split of a document into the passages embedded for it |
+| `mif-store` | library | `SQLite`-backed vector store for document and passage embeddings (`rusqlite`, bundled), with brute-force cosine-similarity ranking: `search` by each document's best passage, `top_k_similar` by document vector |
 | `mif-rh` | library | Compiled research-harness ontology engine: deterministic `resolve()`/`review()` (rht bash parity), plus the hypothesis layer — `suggest_type()` (tier-annotated suggestions), the `FindingIndex` (FTS5 + vectors + tier-3 miss store), the suggestion queue, and `stamped-quantile-v1` calibration |
-| `mif-cli` | binary | CLI, nine subcommands: `validate`, `ontology resolve`, `ingest`, `search`, `find-similar`, `corpus-stats`, `roundtrip`, `emit-jsonld`, `emit-markdown` (the last three mirror the equivalent `mif-mcp` tools) |
-| `mif-mcp` | binary | MCP server exposing nine tools: `validate_mif_document`, `resolve_ontology_reference`, `ingest_mif_document`, `search_documents`, `find_similar_documents`, `corpus_stats`, `roundtrip_mif_document`, `emit_jsonld_document`, `emit_markdown_document` |
+| `mif-cli` | binary | CLI, eleven subcommands: `validate`, `ontology resolve`, `ingest`, `search`, `find-similar`, `corpus-stats`, `remove`, `prune`, `roundtrip`, `emit-jsonld`, `emit-markdown` (the last three mirror the equivalent `mif-mcp` tools) |
+| `mif-mcp` | binary | MCP server exposing ten tools: `validate_mif_document`, `resolve_ontology_reference`, `ingest_mif_document`, `search_documents`, `find_similar_documents`, `corpus_stats`, `remove_document`, `roundtrip_mif_document`, `emit_jsonld_document`, `emit_markdown_document` |
 | `mif-rh-cli` | binary | Research-harness CLI, seven subcommands: `resolve`, `review [--strict --followup --build-index --suggest]`, `suggest-type [--record]`, `calibrate`, `expansion-candidates`, `ontology`, and `harness` — which fans out to 27 subcommands, implemented across the 22 `crates/mif-rh/src/harness_*.rs` modules (mostly one module per subcommand, but some modules back several — e.g. `harness_release.rs` exports the four release/version functions). **`review` rewrites `reports/<topic>/ontology-map.json` and `reports/_meta/` in place** (a stale-PID review lock lives in `crates/mif-rh/src/lock.rs`) — point it at a disposable copy, never a pristine checkout |
 | `mif-rh-mcp` | binary | Read-only MCP server over the mif-rh index: `search`, `suggest_type`, `find_similar` (tier-annotated), `corpus_stats` |
 
@@ -141,9 +141,9 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 | `crates/mif-ontology/src/lib.rs` | `OntologyMetadata`, `parse_definition`, `load_corpus_from_dir`, `resolve_chain` |
 | `crates/mif-problem/src/lib.rs` | `ProblemDetails`, `Applicability`, `SuggestedFix`, `CodeAction`, `ProblemMeta`, `OutputFormat`, the `ToProblem` trait |
 | `crates/mif-frontmatter/src/lib.rs` | `parse_markdown`, `serialize_markdown`, `md_to_jsonld`, `jsonld_to_md`, `roundtrip_lossless` |
-| `crates/mif-embed/src/lib.rs` | `Embedder` (`load`, `embed`, `embed_passages`, `passages`, `token_count`), `EMBEDDING_DIM` |
+| `crates/mif-embed/src/lib.rs` | `Embedder` (`load`, `embed`, `embed_document`, `embed_passages`, `passages`, `token_count`), `EmbeddedPassage`, `EMBEDDING_DIM` |
 | `crates/mif-embed/src/passages.rs` | `passages` (a document's JSON-LD to the `Passage`s embedded for it), `PASSAGE_MAX_TOKENS` |
-| `crates/mif-store/src/lib.rs` | `VectorStore` (`open`, `upsert`, `upsert_document`, `get`, `count`, `stats`, `passage_stats`, `top_k_similar`, `search`, `remove`, `prune`), `StoredVector`, `DocumentVectors`/`PassageVector`, `SearchFilter`/`SearchMatch`, and the `multi_root_top_k_similar`/`multi_root_search`/`multi_root_get`/`multi_root_stats` cross-corpus functions |
+| `crates/mif-store/src/lib.rs` | `VectorStore` (`open`, `upsert`, `upsert_document`, `get`, `count`, `stats`, `passage_stats`, `ids`, `is_current`, `top_k_similar`, `search`, `remove`, `prune`), `StoredVector`, `DocumentVectors`/`PassageVector`, `SearchFilter`/`SearchMatch`, and the `multi_root_top_k_similar`/`multi_root_search`/`multi_root_get`/`multi_root_stats` cross-corpus functions |
 | `crates/mif-ontology/src/{confidence,entity_type}.rs` | The MIF-level classification model (ADR-020): `EntityType` with `embedding_doc()`, confidence tiers, `CalibrationConfig`, `assign_tier` |
 | `crates/mif-rh/src/` | The research-harness engine — 37 modules, including 22 `harness_*.rs` files (backing the 27 `mif-rh-cli harness` subcommands, some modules serving several), the `FindingIndex`, and `lock.rs` (the stale-PID review lock) |
 | `crates/mif-cli/src/main.rs`, `crates/mif-mcp/src/main.rs`, `crates/mif-rh-cli/src/main.rs`, `crates/mif-rh-mcp/src/main.rs` | Thin binaries calling straight into the library crates' public functions |
@@ -296,7 +296,7 @@ All public items require doc comments (`missing_docs = "warn"` workspace-wide). 
 |---|---|
 | Unit tests | `#[cfg(test)] mod tests` inside each crate's source files |
 | Doc tests | `///` examples on public items |
-| Integration tests | `crates/{mif-cli,mif-rh-cli,mif-rh}/tests/` — binary-level and cross-module behavior; prefer these over in-file `#[cfg(test)]` blocks for binary behavior |
+| Integration tests | `crates/{mif-cli,mif-rh-cli,mif-rh}/tests/` — binary-level and cross-module behavior; prefer these over in-file `#[cfg(test)]` blocks for binary behavior. `mif-cli`'s `retrieval.rs` is the search-ranking regression test: documents that share a long boilerplate opening must each be found by text past the model's input window |
 
 **Property test pattern** (if adding `proptest` to a crate that needs it — not currently a workspace dependency):
 

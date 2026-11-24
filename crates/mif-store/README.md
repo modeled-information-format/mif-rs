@@ -47,7 +47,9 @@ document vectors, which is what document-to-document similarity uses.
 `remove` deletes one document with its passages, `prune` deletes every
 document whose id is not in a keep set and returns the removed ids, and
 `passage_stats` returns a `PassageStats`: the passage count and the number
-of documents that have none.
+of documents that have none. `ids` lists every stored id, and `is_current`
+says whether a document is already stored with a given content hash and
+current passages, so an ingest can skip it.
 
 The schema version is recorded in `PRAGMA user_version`: 0 is the
 single-table layout of releases up to 0.11.0, and 1 adds the `passages`

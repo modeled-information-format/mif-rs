@@ -2,14 +2,15 @@
 
 MCP server for the [MIF (Modeled Information Format)](https://mif-spec.dev) ecosystem.
 
-Exposes nine tools over stdio, mirroring `mif-cli`:
+Exposes ten tools over stdio, mirroring `mif-cli`:
 
 - `validate_mif_document` — validate a MIF document (markdown with frontmatter, or JSON-LD) against the canonical schema, with no side effects (no embedding model load, no vector store write).
 - `resolve_ontology_reference` — resolve an ontology's three-tier `extends` chain.
-- `ingest_mif_document` — lint, validate, prove a lossless round trip, compute an embedding, and store the embedding vector for one MIF document (markdown with frontmatter, or JSON-LD). `db_path` defaults to `.mif/vectors.db`, created (with its parent directory) if absent.
-- `search_documents` — free-text semantic search over previously ingested documents. `limit` defaults to 10.
+- `ingest_mif_document` — lint, validate, prove a lossless round trip, embed, and store one MIF document (markdown with frontmatter, or JSON-LD). The document is embedded as a summary passage plus one or more passages per body section; the result's `passages` is the count. `db_path` defaults to `.mif/vectors.db`, created (with its parent directory) if absent.
+- `search_documents` — free-text semantic search over previously ingested documents, each ranked by its best-matching passage. Each match carries that passage's `heading` when it has one. `id_prefix`, `source_prefix`, and `namespace_prefix` limit which documents are ranked. `limit` defaults to 10.
+- `remove_document` — remove one document's vectors from the vector store by id; `removed` says whether anything was stored for it.
 - `find_similar_documents` — find previously ingested documents similar to an already-ingested one, identified by its id. `limit` defaults to 10 and excludes the anchor document itself.
-- `corpus_stats` — summary statistics (count, embedding dimensionality) over the vector store.
+- `corpus_stats` — summary statistics (count, embedding dimensionality) over the vector store. A single-root query also returns `passages` and `documents_without_passages`.
 - `roundtrip_mif_document` — prove a MIF document's markdown <-> JSON-LD round trip is lossless. Pure: no db, no embedder.
 - `emit_jsonld_document` — project a MIF document to its canonical JSON-LD form, proving the round trip is lossless in the process. Pure: no db, no embedder.
 - `emit_markdown_document` — project a JSON-LD MIF document to its canonical markdown-with-frontmatter form, proving the round trip is lossless in the process. Pure: no db, no embedder.

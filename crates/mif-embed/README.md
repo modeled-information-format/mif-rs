@@ -27,7 +27,10 @@ URLs, `**Related:**` lines, table rule rows, and the `Relationships` and
 `Navigation` sections are left out. `Embedder::passages(jsonld)` calls it
 with the model's own tokenizer (`Embedder::token_count`), and
 `Embedder::embed_passages(texts)` embeds the passage texts in batches,
-returning one vector per text.
+returning one vector per text. `Embedder::embed_document(jsonld)` does both:
+it returns one `EmbeddedPassage` (heading and vector) per passage, the
+summary first, and is what `mif-cli` and `mif-mcp` call to ingest a
+document.
 
 If the platform has no resolvable user cache directory,
 `Embedder::load()` fails with `EmbedError::NoCacheDir` rather than falling

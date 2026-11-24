@@ -707,6 +707,51 @@ impl VectorStore {
         Ok(stale)
     }
 
+    /// Every id the store holds anything for, in ascending order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Query`] if the underlying `SQLite` statement
+    /// fails.
+    pub fn ids(&self) -> Result<Vec<String>, StoreError> {
+        let sql = if self.has_passages {
+            "SELECT id FROM embeddings UNION SELECT doc_id FROM passages ORDER BY 1"
+        } else {
+            "SELECT id FROM embeddings ORDER BY 1"
+        };
+        let mut stmt = self.conn.prepare(sql).map_err(query_error)?;
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .map_err(query_error)?
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(query_error)
+    }
+
+    /// Whether the store already holds `id` exactly as an ingest of content
+    /// hashing to `content_hash` would leave it: the document row carries
+    /// that hash and has current passages. An ingest can skip such a
+    /// document.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Query`] if the underlying `SQLite` statement
+    /// fails.
+    pub fn is_current(&self, id: &str, content_hash: &str) -> Result<bool, StoreError> {
+        if !self.has_passages {
+            return Ok(false);
+        }
+        self.conn
+            .query_row(
+                "SELECT EXISTS (
+                     SELECT 1 FROM embeddings e
+                     JOIN passages p ON p.doc_id = e.id AND p.content_hash = e.content_hash
+                     WHERE e.id = ?1 AND e.content_hash = ?2
+                 )",
+                params![id, content_hash],
+                |row| row.get(0),
+            )
+            .map_err(query_error)
+    }
+
     /// How much of the store is stored as passages.
     ///
     /// # Errors
@@ -2554,5 +2599,42 @@ mod tests {
         let by_document = store.top_k_similar(&[1.0, 0.0], 10).unwrap();
         assert_eq!(by_document.len(), 1);
         assert_eq!(by_document[0].id, "partly");
+    }
+
+    #[test]
+    fn ids_lists_every_stored_id_in_order() {
+        let (_dir, store) = open_temp_store();
+        assert!(store.ids().unwrap().is_empty());
+        store.upsert("b", &[1.0, 0.0], "h", "t").unwrap();
+        store
+            .upsert_document(&document("a", &[1.0, 0.0], &[passage(None, &[1.0, 0.0])]))
+            .unwrap();
+
+        assert_eq!(store.ids().unwrap(), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn is_current_needs_the_same_hash_and_current_passages() {
+        let (_dir, store) = open_temp_store();
+        store
+            .upsert_document(&document("doc", &[1.0, 0.0], &[passage(None, &[1.0, 0.0])]))
+            .unwrap();
+        store.upsert("legacy", &[1.0, 0.0], "h", "t").unwrap();
+
+        assert!(store.is_current("doc", "h").unwrap());
+        assert!(!store.is_current("doc", "other-hash").unwrap());
+        assert!(!store.is_current("legacy", "h").unwrap());
+        assert!(!store.is_current("missing", "h").unwrap());
+
+        // A writer that predates passages rewrote the row with the same
+        // hash value the caller now asks about: the passages are stale.
+        store
+            .conn
+            .execute(
+                "UPDATE embeddings SET content_hash = 'h2' WHERE id = 'doc'",
+                [],
+            )
+            .unwrap();
+        assert!(!store.is_current("doc", "h2").unwrap());
     }
 }
