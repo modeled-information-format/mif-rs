@@ -141,7 +141,8 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --all-featu
 | `crates/mif-ontology/src/lib.rs` | `OntologyMetadata`, `parse_definition`, `load_corpus_from_dir`, `resolve_chain` |
 | `crates/mif-problem/src/lib.rs` | `ProblemDetails`, `Applicability`, `SuggestedFix`, `CodeAction`, `ProblemMeta`, `OutputFormat`, the `ToProblem` trait |
 | `crates/mif-frontmatter/src/lib.rs` | `parse_markdown`, `serialize_markdown`, `md_to_jsonld`, `jsonld_to_md`, `roundtrip_lossless` |
-| `crates/mif-embed/src/lib.rs` | `Embedder` (`load`, `embed`), `EMBEDDING_DIM` |
+| `crates/mif-embed/src/lib.rs` | `Embedder` (`load`, `embed`, `embed_passages`, `passages`, `token_count`), `EMBEDDING_DIM` |
+| `crates/mif-embed/src/passages.rs` | `passages` (a document's JSON-LD to the `Passage`s embedded for it), `PASSAGE_MAX_TOKENS` |
 | `crates/mif-store/src/lib.rs` | `VectorStore` (`open`, `upsert`, `get`, `count`, `stats`, `top_k_similar`), `StoredVector`, and the `multi_root_top_k_similar`/`multi_root_get`/`multi_root_stats` cross-corpus functions |
 | `crates/mif-ontology/src/{confidence,entity_type}.rs` | The MIF-level classification model (ADR-020): `EntityType` with `embedding_doc()`, confidence tiers, `CalibrationConfig`, `assign_tier` |
 | `crates/mif-rh/src/` | The research-harness engine — 37 modules, including 22 `harness_*.rs` files (backing the 27 `mif-rh-cli harness` subcommands, some modules serving several), the `FindingIndex`, and `lock.rs` (the stale-PID review lock) |
