@@ -237,7 +237,7 @@ remove the reference), or a doc example that doesn't compile.
 ## Coverage
 
 **Workflow:** `pipeline.yml` → `ci-coverage.yml` (`coverage` job)
-**Tool:** `cargo-llvm-cov` 0.6.14, workspace-wide, all features
+**Tool:** `cargo-llvm-cov` 0.9.1, workspace-wide, all features
 **Threshold:** the job's own "Check coverage threshold" step fails (`exit 1`)
 if line coverage drops below **90%** — the Codecov upload step's
 `fail_ci_if_error: false` only means the job won't fail if the external

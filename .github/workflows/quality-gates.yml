@@ -39,9 +39,9 @@ jobs:
       contents: read
       actions: read
       packages: read
-    # modeled-information-format/.github main @ e50b004c (2026-07-01)
+    # modeled-information-format/.github main @ c72b3fae (2026-11-24)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-sast-codeql.yml@05b13774259a17140419556a45a48ba6a3e36e0c
+      modeled-information-format/.github/.github/workflows/reusable-sast-codeql.yml@c72b3fae829318990ba3da9b9d5ea0671ac5151f
     with:
       languages: rust
       build-mode: none
@@ -54,9 +54,9 @@ jobs:
       contents: read
       security-events: write
       pull-requests: write
-    # modeled-information-format/.github main @ e50b004c (2026-07-01)
+    # modeled-information-format/.github main @ c72b3fae (2026-11-24)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-sca-osv.yml@05b13774259a17140419556a45a48ba6a3e36e0c
+      modeled-information-format/.github/.github/workflows/reusable-sca-osv.yml@c72b3fae829318990ba3da9b9d5ea0671ac5151f
     with:
       fail-on-severity: high
       # Scope OSV to the workspace's single Rust lockfile.
@@ -72,9 +72,9 @@ jobs:
       id-token: write
       contents: read
       actions: read
-    # modeled-information-format/.github main @ e50b004c (2026-07-01)
+    # modeled-information-format/.github main @ c72b3fae (2026-11-24)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-scorecard.yml@667ee7b3bc93a8789c65cb9b4fedc6d827fcd36a
+      modeled-information-format/.github/.github/workflows/reusable-scorecard.yml@c72b3fae829318990ba3da9b9d5ea0671ac5151f
     with:
       # The OpenSSF publish API rejects a scorecard job that sets env vars,
       # which the reusable workflow does to gate the App-token mint. Same
@@ -95,8 +95,8 @@ jobs:
       security-events: write
       actions: read
       packages: read
-    # modeled-information-format/.github main @ e9e93cd5 (2026-07-03)
+    # modeled-information-format/.github main @ c72b3fae (2026-11-24)
     uses: >-
-      modeled-information-format/.github/.github/workflows/reusable-trivy.yml@e9e93cd50943a5ec3a9ad4ce8bb52f2fd29814fc
+      modeled-information-format/.github/.github/workflows/reusable-trivy.yml@c72b3fae829318990ba3da9b9d5ea0671ac5151f
     with:
       scan-iac: true

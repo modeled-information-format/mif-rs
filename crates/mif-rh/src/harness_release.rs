@@ -1145,7 +1145,7 @@ fn rewrite_headings(
         }
         body.push_str(&render_heading(&heading, should_bracket));
         body.push('\n');
-        reconciled.push((heading.version.clone(), has_tag));
+        reconciled.push((heading.version, has_tag));
     }
     (body, reconciled)
 }
