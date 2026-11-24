@@ -391,7 +391,7 @@ impl Embedder {
     /// # Errors
     ///
     /// Returns [`EmbedError`] if tokenization or model inference fails.
-    pub fn embed_passages(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
+    pub fn embed_passages<S: AsRef<str>>(&self, texts: &[S]) -> Result<Vec<Vec<f32>>, EmbedError> {
         let mut out = Vec::with_capacity(texts.len());
         for batch in texts.chunks(PASSAGE_BATCH_SIZE) {
             out.extend(self.embed_batch(batch)?);
@@ -401,12 +401,12 @@ impl Embedder {
 
     /// Embeds one batch: every text padded to the longest in the batch, with
     /// the padding masked out of both attention and pooling.
-    fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
+    fn embed_batch<S: AsRef<str>>(&self, texts: &[S]) -> Result<Vec<Vec<f32>>, EmbedError> {
         let mut encodings = Vec::with_capacity(texts.len());
         for text in texts {
             encodings.push(
                 self.tokenizer
-                    .encode(text.as_str(), true)
+                    .encode(text.as_ref(), true)
                     .map_err(EmbedError::Tokenize)?,
             );
         }
@@ -727,7 +727,7 @@ mod tests {
                 "batched vector drifted for {text:?}: {cosine}"
             );
         }
-        assert!(embedder.embed_passages(&[]).unwrap().is_empty());
+        assert!(embedder.embed_passages::<&str>(&[]).unwrap().is_empty());
     }
 
     #[test]

@@ -31,6 +31,12 @@ pub const PASSAGE_TARGET_TOKENS: usize = 200;
 /// cut by the split is still read whole in one of them.
 pub const PASSAGE_OVERLAP_TOKENS: usize = 32;
 
+/// The most tokens of the title, and of the heading, a passage prefix holds.
+///
+/// A longer title or heading is cut to its first words, so the prefix can
+/// never crowd the section text out of the passage.
+const PREFIX_PART_MAX_TOKENS: usize = 32;
+
 /// The `[CLS]` and `[SEP]` tokens the tokenizer adds around every input.
 const SPECIAL_TOKENS: usize = 2;
 
@@ -40,6 +46,9 @@ const SPECIAL_TOKENS: usize = 2;
 /// mirrors the frontmatter `relationships`, and a `Navigation` section is a
 /// generated footer.
 const SKIPPED_SECTIONS: [&str; 2] = ["relationships", "navigation"];
+
+/// The markers that open and close a fenced code block.
+const FENCES: [&str; 2] = ["```", "~~~"];
 
 /// One unit of text to embed for a document.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,8 +80,9 @@ pub struct Passage {
 /// `count_tokens` returns the number of model tokens in a piece of text,
 /// without special tokens; [`crate::Embedder::token_count`] is the real one.
 /// Every passage returned holds at most [`PASSAGE_MAX_TOKENS`] by that
-/// count, provided the title and heading together stay under it. The result
-/// is never empty: a document with no usable text yields one summary
+/// count: a title or heading too long for the prefix is cut to its first
+/// words there, and kept whole in [`Passage::heading`]. The result is never
+/// empty: a document with no usable text yields one summary
 /// passage with empty text.
 ///
 /// # Examples
@@ -101,7 +111,7 @@ pub fn passages(jsonld: &Value, count_tokens: &dyn Fn(&str) -> usize) -> Vec<Pas
 
     let mut out = vec![summary(jsonld, title, &sections, count_tokens)];
     for section in &sections {
-        let prefix = prefix(title, section.heading.as_deref());
+        let prefix = prefix(title, section.heading.as_deref(), count_tokens);
         out.extend(
             pack(&prefix, &section.units, count_tokens)
                 .into_iter()
@@ -171,10 +181,17 @@ fn summary(
 
 /// The first line of a section passage: the title and heading that say
 /// what the text below is about.
-fn prefix(title: Option<&str>, heading: Option<&str>) -> String {
+fn prefix(
+    title: Option<&str>,
+    heading: Option<&str>,
+    count_tokens: &dyn Fn(&str) -> usize,
+) -> String {
+    let short = |text: &str| head(text, PREFIX_PART_MAX_TOKENS, count_tokens);
     match (title, heading) {
-        (Some(title), Some(heading)) if title != heading => format!("{title}: {heading}\n"),
-        (Some(line), _) | (None, Some(line)) => format!("{line}\n"),
+        (Some(title), Some(heading)) if title != heading => {
+            format!("{}: {}\n", short(title), short(heading))
+        },
+        (Some(line), _) | (None, Some(line)) => format!("{}\n", short(line)),
         (None, None) => String::new(),
     }
 }
@@ -192,7 +209,8 @@ struct Splitter {
     done: Vec<Section>,
     current: Section,
     paragraph: Vec<String>,
-    in_fence: bool,
+    /// The marker that opened the code fence being read, if any.
+    fence: Option<&'static str>,
     /// The level of the skipped section being passed over, if any.
     skipping: Option<usize>,
 }
@@ -222,7 +240,9 @@ impl Splitter {
             return;
         }
         let heading = clean_inline(text);
-        if SKIPPED_SECTIONS.contains(&heading.to_lowercase().as_str()) {
+        // A level-1 heading is the document's own title: a document titled
+        // "Relationships" is about relationships, and keeps its body.
+        if level > 1 && SKIPPED_SECTIONS.contains(&heading.to_lowercase().as_str()) {
             self.skipping = Some(level);
             return;
         }
@@ -231,14 +251,16 @@ impl Splitter {
 
     fn line(&mut self, line: &str) {
         let trimmed = line.trim();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            self.in_fence = !self.in_fence;
-            return;
-        }
-        if self.in_fence {
-            if self.skipping.is_none() && !trimmed.is_empty() {
+        if let Some(marker) = self.fence {
+            if trimmed.starts_with(marker) {
+                self.fence = None;
+            } else if self.skipping.is_none() && !trimmed.is_empty() {
                 self.paragraph.push(trimmed.to_string());
             }
+            return;
+        }
+        if let Some(marker) = opening_fence(trimmed) {
+            self.fence = Some(marker);
             return;
         }
         let text = match heading(trimmed) {
@@ -252,7 +274,11 @@ impl Splitter {
         if text.is_empty() || is_rule(text) {
             return self.end_paragraph();
         }
-        if text.starts_with("**Related:**") {
+        let unmarked = ["- ", "* ", "+ ", "> "]
+            .iter()
+            .find_map(|marker| text.strip_prefix(marker))
+            .unwrap_or(text);
+        if unmarked.trim_start().starts_with("**Related:**") {
             return;
         }
         let cleaned = clean_inline(text);
@@ -280,6 +306,15 @@ fn split_sections(content: &str) -> Vec<Section> {
     splitter.done
 }
 
+/// The marker of the code fence a line opens. A line that also closes its
+/// own fence (```` ```code``` ````) opens nothing and is read as text.
+fn opening_fence(line: &str) -> Option<&'static str> {
+    FENCES.into_iter().find(|marker| {
+        line.strip_prefix(marker)
+            .is_some_and(|rest| !rest.contains(marker))
+    })
+}
+
 /// The level and text of an ATX heading line (`## Text`).
 fn heading(line: &str) -> Option<(usize, &str)> {
     let level = line.chars().take_while(|c| *c == '#').count();
@@ -287,8 +322,15 @@ fn heading(line: &str) -> Option<(usize, &str)> {
         return None;
     }
     let rest = line.get(level..)?;
-    rest.starts_with(' ')
-        .then(|| (level, rest.trim().trim_end_matches('#').trim_end()))
+    if !rest.starts_with(' ') {
+        return None;
+    }
+    // A closing run of `#` counts only when a space sets it off, so the
+    // heading "C#" keeps its name.
+    let text = rest.trim();
+    let unclosed = text.trim_end_matches('#');
+    let closed = unclosed.is_empty() || unclosed.ends_with(' ');
+    Some((level, if closed { unclosed.trim_end() } else { text }))
 }
 
 /// Whether a line is a table rule row (`|---|:--|`) or a horizontal rule
@@ -347,7 +389,21 @@ fn link_text(link: &str) -> Option<(&str, &str)> {
         return None;
     }
     let target = link.get(close + 2..)?;
-    let end = target.find(')')?;
+    // The target ends at the `)` that matches the opening one, so a target
+    // with parentheses of its own (`Foo_(bar)`) is removed whole.
+    let mut depth = 0_usize;
+    let end = target.char_indices().find_map(|(index, c)| match c {
+        '(' => {
+            depth += 1;
+            None
+        },
+        ')' if depth == 0 => Some(index),
+        ')' => {
+            depth -= 1;
+            None
+        },
+        _ => None,
+    })?;
     Some((text, target.get(end + 1..)?))
 }
 
@@ -418,6 +474,20 @@ fn split_unit(
         out.push((words.join(" "), tokens));
     }
     out
+}
+
+/// The first whole words of `text` that together stay within `max` tokens.
+fn head(text: &str, max: usize, count_tokens: &dyn Fn(&str) -> usize) -> String {
+    let mut words = Vec::new();
+    let mut tokens = 0;
+    for word in text.split_whitespace() {
+        tokens += count_tokens(word);
+        if tokens > max {
+            break;
+        }
+        words.push(word);
+    }
+    words.join(" ")
 }
 
 /// The last whole words of `text` that together stay within `max` tokens.
@@ -708,5 +778,121 @@ mod tests {
 
         assert_eq!(words(&built[0].text), PASSAGE_TARGET_TOKENS);
         assert!(built[0].text.starts_with("Doc d0 d1 "));
+    }
+
+    #[test]
+    fn a_document_titled_like_a_skipped_section_keeps_its_body() {
+        let built = build(&json!({
+            "title": "Relationships",
+            "entity": { "definition": "d" },
+            "content": "# Relationships\n\nHow teams relate.\n\n## Detail\n\nMore.\n\n\
+                        ## Navigation\n\n[Home](../README.md)",
+        }));
+
+        let texts: Vec<_> = built.iter().skip(1).map(|p| p.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "Relationships\nHow teams relate.",
+                "Relationships: Detail\nMore."
+            ]
+        );
+    }
+
+    #[test]
+    fn a_long_title_and_heading_are_cut_in_the_prefix_and_text_still_fits() {
+        let title = numbered("t", 300);
+        let heading = numbered("h", 300);
+        let built = build(&json!({
+            "title": title,
+            "entity": { "definition": "d" },
+            "content": format!("## {heading}\n\n{}", numbered("w", 400)),
+        }));
+        let section: Vec<_> = built.iter().skip(1).collect();
+
+        // 400 words at a target of 157 (256 - 2 special - 65 prefix - 32 overlap).
+        assert_eq!(section.len(), 3);
+        for passage in &section {
+            assert!(words(&passage.text) <= PASSAGE_MAX_TOKENS);
+            assert!(passage.text.starts_with("t0 t1 "));
+            assert!(passage.text.contains(" t31: h0 "));
+            assert!(!passage.text.contains("t32"));
+            assert!(!passage.text.contains("h32"));
+        }
+        assert_eq!(section[0].heading.as_deref(), Some(heading.as_str()));
+    }
+
+    #[test]
+    fn a_fence_closed_on_its_own_line_does_not_swallow_the_rest() {
+        let built = build(&json!({
+            "title": "Doc",
+            "entity": { "definition": "d" },
+            "content": "## Run\n\n```cargo test```\n\n## Scope\n\nIn scope.\n\n\
+                        ## Relationships\n\n- relates-to [A](a.md)",
+        }));
+
+        let headings: Vec<_> = built.iter().filter_map(|p| p.heading.as_deref()).collect();
+        assert_eq!(headings, vec!["Run", "Scope"]);
+    }
+
+    #[test]
+    fn a_fence_closes_only_with_the_marker_that_opened_it() {
+        let built = build(&json!({
+            "title": "Doc",
+            "entity": { "definition": "d" },
+            "content": "## Run\n\n```text\n~~~\n## not a heading\n```\n\n## After\n\nDone.",
+        }));
+
+        let sections: Vec<_> = built
+            .iter()
+            .skip(1)
+            .map(|p| (p.heading.as_deref(), p.text.as_str()))
+            .collect();
+        assert_eq!(
+            sections,
+            vec![
+                (Some("Run"), "Doc: Run\n~~~\n## not a heading"),
+                (Some("After"), "Doc: After\nDone."),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_heading_keeps_a_trailing_hash_that_is_part_of_its_name() {
+        let built = build(&json!({
+            "title": "Doc",
+            "entity": { "definition": "d" },
+            "content": "## Migrating to C#\n\nA.\n\n## Closed ##\n\nB.",
+        }));
+
+        let headings: Vec<_> = built.iter().filter_map(|p| p.heading.as_deref()).collect();
+        assert_eq!(headings, vec!["Migrating to C#", "Closed"]);
+    }
+
+    #[test]
+    fn a_link_target_with_parentheses_is_removed_whole() {
+        let built = build(&json!({
+            "title": "Doc",
+            "entity": { "definition": "d" },
+            "content": "See [Foo](https://en.wikipedia.org/wiki/Foo_(bar)) and \
+                        [Plan](docs/Plan_(v2).md) now.",
+        }));
+
+        assert_eq!(built[1].text, "Doc\nSee Foo and Plan now.");
+    }
+
+    #[test]
+    fn related_lines_written_as_list_items_or_quotes_are_dropped() {
+        let built = build(&json!({
+            "title": "Doc",
+            "entity": { "definition": "d" },
+            "content": "Kept.\n- **Related:** [A](a.md), [B](b.md)\n> **Related:** [C](c.md)\n\
+                        - A list item about Related: things stays.",
+        }));
+
+        assert_eq!(
+            built[1].text,
+            "Doc\nKept.\n- A list item about Related: things stays."
+        );
     }
 }
