@@ -72,7 +72,16 @@ fn a_document_is_found_by_text_past_the_model_window() {
 
     let ingest = mif_cli(&["ingest", docs.to_str().unwrap(), "--db-path", db]);
     let stderr = String::from_utf8_lossy(&ingest.stderr);
-    if !ingest.status.success() && stderr.contains("failed to fetch") {
+    // The same conditions the unit tests skip on: the model could not be
+    // fetched or cached on this machine.
+    let model_unavailable = [
+        "failed to fetch",
+        "no user cache directory",
+        "Hugging Face Hub client",
+    ]
+    .iter()
+    .any(|reason| stderr.contains(reason));
+    if !ingest.status.success() && model_unavailable {
         eprintln!("skipping: could not load embedding model: {stderr}");
         return;
     }

@@ -112,8 +112,9 @@ struct SearchParams {
     limit: Option<usize>,
     /// Only documents whose id starts with this.
     id_prefix: Option<String>,
-    /// Only documents whose source path, as recorded at ingest (relative to
-    /// the directory the ingest ran in), starts with this. Documents
+    /// Only documents whose source path, as recorded at ingest, starts with
+    /// this. The path is relative to the directory that holds the store's
+    /// own directory (for `vault/.mif/vectors.db`, `vault`). Documents
     /// ingested before sources were recorded never match.
     source_prefix: Option<String>,
     /// Only documents whose MIF namespace starts with this.
@@ -569,7 +570,7 @@ fn ingest_mif_document_inner(
     let store = mif_store::VectorStore::open(&db_path)?;
     let hash = content_hash(&contents);
     let updated_at = chrono::Utc::now().to_rfc3339();
-    let source = source_of(file);
+    let source = mif_store::document_source(&db_path, file);
     store.upsert_document(&mif_store::DocumentVectors {
         id: &id,
         vector: summary,
@@ -593,24 +594,6 @@ fn ingest_mif_document_inner(
         id,
         db: db_path.display().to_string(),
     })
-}
-
-/// The path recorded as a document's source: relative to the current
-/// directory when the file is beneath it, with `/` separators, so a
-/// `source_prefix` filter means the same thing wherever the store is read
-/// from. A file elsewhere keeps its absolute path. Matches `mif-cli`.
-fn source_of(file: &Path) -> String {
-    let absolute = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
-    let relative = std::env::current_dir()
-        .and_then(std::fs::canonicalize)
-        .ok()
-        .and_then(|cwd| absolute.strip_prefix(cwd).ok().map(Path::to_path_buf));
-    let source = relative.unwrap_or(absolute).display().to_string();
-    if cfg!(windows) {
-        source.replace('\\', "/")
-    } else {
-        source
-    }
 }
 
 /// Removes one document's vectors from the vector store.

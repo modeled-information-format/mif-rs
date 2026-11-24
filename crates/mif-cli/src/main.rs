@@ -62,8 +62,9 @@ enum Command {
     /// documents. Each document is embedded as a summary passage plus one or
     /// more passages per body section. With one file, a failure is that
     /// file's own error; with several files or a directory, every file is
-    /// attempted, each failure is reported on stderr, and the exit code is
-    /// non-zero if any failed.
+    /// attempted, each failure is reported on stderr as one plain text line
+    /// (`FILE: error: ...`, whatever `--format` says, ahead of the final
+    /// error), and the exit code is non-zero if any failed.
     Ingest {
         /// MIF documents (markdown with frontmatter, or JSON-LD
         /// projections) to ingest. A directory stands for every `.md` file
@@ -108,9 +109,10 @@ enum Command {
         /// Only documents whose id starts with this.
         #[arg(long)]
         id_prefix: Option<String>,
-        /// Only documents whose source path, as recorded at ingest (relative
-        /// to the directory `ingest` ran in), starts with this. Documents
-        /// ingested before sources were recorded never match.
+        /// Only documents whose source path, as recorded at ingest, starts
+        /// with this. The path is relative to the directory that holds the
+        /// store's own directory (for `vault/.mif/vectors.db`, `vault`).
+        /// Documents ingested before sources were recorded never match.
         #[arg(long)]
         source_prefix: Option<String>,
         /// Only documents whose MIF namespace starts with this.
@@ -733,24 +735,6 @@ impl IngestContext {
     }
 }
 
-/// The path recorded as a document's source: relative to the current
-/// directory when the file is beneath it, with `/` separators, so
-/// `search --source-prefix` means the same thing wherever the store is
-/// read from. A file elsewhere keeps its absolute path.
-fn source_of(file: &Path) -> String {
-    let absolute = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
-    let relative = std::env::current_dir()
-        .and_then(std::fs::canonicalize)
-        .ok()
-        .and_then(|cwd| absolute.strip_prefix(cwd).ok().map(Path::to_path_buf));
-    let source = relative.unwrap_or(absolute).display().to_string();
-    if cfg!(windows) {
-        source.replace('\\', "/")
-    } else {
-        source
-    }
-}
-
 /// Ingests every document named by `paths` (see `ingest`'s `FILE`
 /// argument).
 ///
@@ -843,7 +827,11 @@ fn ingest_one(
         .map_or_else(|| file.display().to_string(), ToString::to_string);
     let hash = content_hash(&contents);
     let db = context.db_path.display().to_string();
-    if changed_only && context.db_path.exists() && context.store()?.is_current(&id, &hash)? {
+    let source = mif_store::document_source(&context.db_path, file);
+    if changed_only
+        && context.db_path.exists()
+        && context.store()?.is_current(&id, &hash, Some(&source))?
+    {
         return Ok(format!(
             "{}: unchanged stored=false (id={id}, db={db})",
             file.display()
@@ -866,7 +854,6 @@ fn ingest_one(
         })
         .collect();
     let updated_at = chrono::Utc::now().to_rfc3339();
-    let source = source_of(file);
     context
         .store()?
         .upsert_document(&mif_store::DocumentVectors {
@@ -888,9 +875,10 @@ fn ingest_one(
     ))
 }
 
-/// Collects every file beneath `dir`, in path order. `.git` and
-/// `node_modules` are never entered, and with `skip_hidden` neither is any
-/// directory whose name starts with a dot. Symbolic links are not followed.
+/// Collects every file beneath `dir`, in path order, including files
+/// reached through a symbolic link. `.git` and `node_modules` are never
+/// entered, and with `skip_hidden` neither is any directory whose name
+/// starts with a dot. Symbolic links to directories are not followed.
 fn walk(dir: &Path, skip_hidden: bool, out: &mut Vec<PathBuf>) -> Result<(), CliError> {
     let io_error = |source| CliError::Io {
         path: dir.display().to_string(),
@@ -905,7 +893,9 @@ fn walk(dir: &Path, skip_hidden: bool, out: &mut Vec<PathBuf>) -> Result<(), Cli
         let name = entry.file_name();
         let name = name.to_string_lossy();
         let file_type = entry.file_type().map_err(io_error)?;
-        if file_type.is_file() {
+        // A link to a file is that file; a link to a directory is not
+        // entered, since it may lead back into the tree being walked.
+        if file_type.is_file() || (file_type.is_symlink() && entry.path().is_file()) {
             out.push(entry.path());
         } else if file_type.is_dir()
             && name != ".git"
@@ -2435,7 +2425,8 @@ No type field.
     fn search_filters_by_source_and_namespace_prefix() {
         warm_embedding_model_cache();
         let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("vectors.db");
+        fs::create_dir(dir.path().join(".mif")).unwrap();
+        let db_path = dir.path().join(".mif").join("vectors.db");
         for (folder, name) in [("capabilities", "cats"), ("notes", "dogs")] {
             fs::create_dir(dir.path().join(folder)).unwrap();
             let file = dir.path().join(folder).join(format!("{name}.md"));
@@ -2447,11 +2438,7 @@ No type field.
             ingest(&file, Some(&db_path)).unwrap();
         }
         let cats = format!("urn:mif:{}", mif_core::concept_uuid("cats"));
-        let folder = fs::canonicalize(dir.path().join("capabilities")).unwrap();
-        let mut source_prefix = folder.display().to_string();
-        if cfg!(windows) {
-            source_prefix = source_prefix.replace('\\', "/");
-        }
+        let source_prefix = "capabilities/".to_string();
         let filtered = |filter: mif_store::SearchFilter| {
             let options = SearchOptions { filter, ..top(10) };
             search("domesticated animals", Some(&db_path), &[], &options).unwrap()
@@ -2697,5 +2684,65 @@ No type field.
         assert_eq!(passage_suffix(Some("Scope"), true), "  [Scope]");
         assert_eq!(passage_suffix(Some("Scope"), false), "");
         assert_eq!(passage_suffix(None, true), "");
+    }
+
+    #[test]
+    fn ingest_with_changed_only_stores_a_moved_document_under_its_new_source() {
+        warm_embedding_model_cache();
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".mif")).unwrap();
+        fs::create_dir_all(dir.path().join("active")).unwrap();
+        fs::create_dir_all(dir.path().join("retired")).unwrap();
+        let db_path = dir.path().join(".mif").join("vectors.db");
+        let before = dir.path().join("active").join("a.md");
+        let after = dir.path().join("retired").join("a.md");
+        fs::write(&before, sectioned_document("a", "A", "Alpha.", "Team.")).unwrap();
+        ingest_paths(std::slice::from_ref(&before), Some(&db_path), true).unwrap();
+
+        fs::rename(&before, &after).unwrap();
+        let moved = ingest_paths(std::slice::from_ref(&after), Some(&db_path), true).unwrap();
+
+        assert!(moved.contains("stored=true"), "unexpected output: {moved}");
+        let under = |prefix: &str| {
+            let options = SearchOptions {
+                filter: mif_store::SearchFilter {
+                    source_prefix: Some(prefix.to_string()),
+                    ..mif_store::SearchFilter::default()
+                },
+                ..top(10)
+            };
+            search("alpha", Some(&db_path), &[], &options).unwrap()
+        };
+        assert_eq!(under("active/"), "(no matches)");
+        assert_eq!(under("retired/").lines().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prune_keeps_a_document_that_is_a_symbolic_link_to_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("vectors.db");
+        let root = dir.path().join("vault");
+        let elsewhere = dir.path().join("elsewhere");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::write(root.join("plain.md"), "---\nid: plain\n---\n\nBody.\n").unwrap();
+        fs::write(elsewhere.join("real.md"), "---\nid: linked\n---\n\nBody.\n").unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("real.md"), root.join("link.md")).unwrap();
+        // A link back to the root must not send the walk round in circles.
+        std::os::unix::fs::symlink(&root, root.join("loop")).unwrap();
+        store_with(
+            &db_path,
+            &["urn:mif:plain", "urn:mif:linked", "urn:mif:gone"],
+        );
+
+        let done = prune(&root, Some(&db_path), false).unwrap();
+
+        assert!(done.starts_with("pruned urn:mif:gone\n"), "{done}");
+        let store = mif_store::VectorStore::open(&db_path).unwrap();
+        assert_eq!(
+            store.ids().unwrap(),
+            vec!["urn:mif:linked", "urn:mif:plain"]
+        );
     }
 }

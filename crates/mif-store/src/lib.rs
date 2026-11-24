@@ -727,15 +727,21 @@ impl VectorStore {
     }
 
     /// Whether the store already holds `id` exactly as an ingest of content
-    /// hashing to `content_hash` would leave it: the document row carries
-    /// that hash and has current passages. An ingest can skip such a
-    /// document.
+    /// hashing to `content_hash`, read from `source`, would leave it: the
+    /// document row carries that hash and that source and has current
+    /// passages. An ingest can skip such a document. A document that has
+    /// only moved is not current, since its stored source is the old path.
     ///
     /// # Errors
     ///
     /// Returns [`StoreError::Query`] if the underlying `SQLite` statement
     /// fails.
-    pub fn is_current(&self, id: &str, content_hash: &str) -> Result<bool, StoreError> {
+    pub fn is_current(
+        &self,
+        id: &str,
+        content_hash: &str,
+        source: Option<&str>,
+    ) -> Result<bool, StoreError> {
         if !self.has_passages {
             return Ok(false);
         }
@@ -744,9 +750,9 @@ impl VectorStore {
                 "SELECT EXISTS (
                      SELECT 1 FROM embeddings e
                      JOIN passages p ON p.doc_id = e.id AND p.content_hash = e.content_hash
-                     WHERE e.id = ?1 AND e.content_hash = ?2
+                     WHERE e.id = ?1 AND e.content_hash = ?2 AND e.source IS ?3
                  )",
-                params![id, content_hash],
+                params![id, content_hash, source],
                 |row| row.get(0),
             )
             .map_err(query_error)
@@ -1264,6 +1270,58 @@ fn wrap_root_error<T>(root: &Path, result: Result<T, StoreError>) -> Result<T, S
         root: root.display().to_string(),
         source: Box::new(source),
     })
+}
+
+/// The source to record for a document read from `file` and stored in the
+/// database at `db_path`, for [`DocumentVectors::source`].
+///
+/// The path is relative, with `/` separators, to the first of these the
+/// file is beneath: the directory that holds the database's own directory
+/// (for `vault/.mif/vectors.db`, that is `vault`), then the current
+/// directory. A file beneath neither keeps its absolute path. The same
+/// document therefore gets the same source whichever directory the process
+/// that ingests it runs in, as long as the store sits inside the tree it
+/// indexes, and [`SearchFilter::source_prefix`] can be written relative to
+/// that tree.
+///
+/// # Examples
+///
+/// ```rust
+/// use mif_store::document_source;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let vault = tempfile::tempdir()?;
+/// std::fs::create_dir_all(vault.path().join(".mif"))?;
+/// std::fs::create_dir_all(vault.path().join("records"))?;
+/// let file = vault.path().join("records").join("a.md");
+/// std::fs::write(&file, "text")?;
+///
+/// let db_path = vault.path().join(".mif").join("vectors.db");
+/// assert_eq!(document_source(&db_path, &file), "records/a.md");
+/// # Ok(())
+/// # }
+/// ```
+#[must_use]
+pub fn document_source(db_path: &Path, file: &Path) -> String {
+    let absolute = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+    let store_base = db_path.parent().and_then(Path::parent).map(|base| {
+        if base.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            base.to_path_buf()
+        }
+    });
+    let relative = store_base
+        .into_iter()
+        .chain(std::env::current_dir().ok())
+        .filter_map(|base| std::fs::canonicalize(base).ok())
+        .find_map(|base| absolute.strip_prefix(base).ok().map(Path::to_path_buf));
+    let source = relative.unwrap_or(absolute).display().to_string();
+    if cfg!(windows) {
+        source.replace('\\', "/")
+    } else {
+        source
+    }
 }
 
 /// Brings a database's schema up to [`SCHEMA_VERSION`].
@@ -2621,10 +2679,28 @@ mod tests {
             .unwrap();
         store.upsert("legacy", &[1.0, 0.0], "h", "t").unwrap();
 
-        assert!(store.is_current("doc", "h").unwrap());
-        assert!(!store.is_current("doc", "other-hash").unwrap());
-        assert!(!store.is_current("legacy", "h").unwrap());
-        assert!(!store.is_current("missing", "h").unwrap());
+        assert!(store.is_current("doc", "h", None).unwrap());
+        assert!(!store.is_current("doc", "other-hash", None).unwrap());
+        assert!(!store.is_current("doc", "h", Some("moved/doc.md")).unwrap());
+        assert!(!store.is_current("legacy", "h", None).unwrap());
+        assert!(!store.is_current("missing", "h", None).unwrap());
+        store
+            .upsert_document(&DocumentVectors {
+                source: Some("records/placed.md"),
+                ..document("placed", &[1.0, 0.0], &[passage(None, &[1.0, 0.0])])
+            })
+            .unwrap();
+        assert!(
+            store
+                .is_current("placed", "h", Some("records/placed.md"))
+                .unwrap()
+        );
+        assert!(
+            !store
+                .is_current("placed", "h", Some("elsewhere/placed.md"))
+                .unwrap()
+        );
+        assert!(!store.is_current("placed", "h", None).unwrap());
 
         // A writer that predates passages rewrote the row with the same
         // hash value the caller now asks about: the passages are stale.
@@ -2635,6 +2711,31 @@ mod tests {
                 [],
             )
             .unwrap();
-        assert!(!store.is_current("doc", "h2").unwrap());
+        assert!(!store.is_current("doc", "h2", None).unwrap());
+    }
+
+    #[test]
+    fn document_source_is_relative_to_the_tree_that_holds_the_store() {
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(vault.path().join(".mif")).unwrap();
+        std::fs::create_dir_all(vault.path().join("records")).unwrap();
+        let inside = vault.path().join("records").join("a.md");
+        std::fs::write(&inside, "text").unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let outside = elsewhere.path().join("b.md");
+        std::fs::write(&outside, "text").unwrap();
+        let db_path = vault.path().join(".mif").join("vectors.db");
+
+        // Not relative to this process's working directory, which is the
+        // crate directory under test, but to the vault around the store.
+        assert_eq!(document_source(&db_path, &inside), "records/a.md");
+        // A file beneath neither the vault nor the working directory keeps
+        // its absolute path.
+        let absolute = document_source(&db_path, &outside);
+        assert!(absolute.ends_with("/b.md"), "unexpected source: {absolute}");
+        assert!(Path::new(&absolute).is_absolute() || cfg!(windows));
+        // A file that does not exist yet is still given a source.
+        let missing = vault.path().join("records").join("missing.md");
+        assert!(document_source(&db_path, &missing).ends_with("missing.md"));
     }
 }

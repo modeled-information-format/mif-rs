@@ -48,8 +48,11 @@ document vectors, which is what document-to-document similarity uses.
 document whose id is not in a keep set and returns the removed ids, and
 `passage_stats` returns a `PassageStats`: the passage count and the number
 of documents that have none. `ids` lists every stored id, and `is_current`
-says whether a document is already stored with a given content hash and
-current passages, so an ingest can skip it.
+says whether a document is already stored with a given content hash, the
+same source, and current passages, so an ingest can skip it.
+`document_source(db_path, file)` gives the source to record for a file: its
+path relative to the directory that holds the store's own directory, so the
+same document gets the same source wherever the ingesting process runs.
 
 The schema version is recorded in `PRAGMA user_version`: 0 is the
 single-table layout of releases up to 0.11.0, and 1 adds the `passages`
