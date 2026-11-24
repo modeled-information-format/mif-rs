@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-24
+
+Semantic search ranks by passage. MIF specification pin unchanged (1.4.2).
+
 ### Added
 
 - **`mif-embed`**: `passages::passages` splits the JSON-LD projection of a MIF document into the passages to embed: a summary passage (title, entity name, description, and the entity definition or first statement), then the body split at headings of level 1 to 3, each passage prefixed with the title and heading and held to `PASSAGE_MAX_TOKENS` (256). Link targets, bare URLs, `**Related:**` lines, table rule rows, and the `Relationships` and `Navigation` sections are left out. `Embedder::passages` sizes them with the model's tokenizer, `Embedder::token_count` counts a text's tokens, and `Embedder::embed_passages` embeds a list of texts in batches. `Embedder::embed_document` does both for one document and is what `mif-cli` and `mif-mcp` ingest with. `Embedder::embed` and its truncation are untouched, so `mif-rh` embeddings and calibrations do not change.
