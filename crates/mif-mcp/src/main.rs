@@ -71,6 +71,9 @@ struct IngestReport {
     roundtrip: &'static str,
     /// Dimensionality of the stored embedding vector.
     embedding_dim: usize,
+    /// How many passages the document was embedded as: a summary passage
+    /// plus one or more per body section.
+    passages: usize,
     /// The embedding model's Hugging Face Hub id.
     model: &'static str,
     /// The hub commit the model files came from, when the local cache
@@ -107,6 +110,37 @@ struct SearchParams {
     extra_db_paths: Vec<PathBuf>,
     /// Maximum number of ranked results to return. Defaults to 10.
     limit: Option<usize>,
+    /// Only documents whose id starts with this.
+    id_prefix: Option<String>,
+    /// Only documents whose source path, as recorded at ingest, starts with
+    /// this. The path is relative to the directory that holds the store's
+    /// own directory (for `vault/.mif/vectors.db`, `vault`). Documents
+    /// ingested before sources were recorded never match.
+    source_prefix: Option<String>,
+    /// Only documents whose MIF namespace starts with this.
+    namespace_prefix: Option<String>,
+}
+
+/// Parameters for the `remove_document` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct RemoveParams {
+    /// The id of the document to remove (as returned by
+    /// `ingest_mif_document`).
+    id: String,
+    /// Path to the `SQLite` vector store database. Defaults to
+    /// `.mif/vectors.db`.
+    db_path: Option<PathBuf>,
+}
+
+/// The result of a `remove_document` call.
+#[derive(Debug, serde::Serialize)]
+struct RemoveReport {
+    /// The id that was asked for.
+    id: String,
+    /// Whether anything was stored for the id, and so removed.
+    removed: bool,
+    /// The vector store database path used.
+    db: String,
 }
 
 /// Parameters for the `find_similar_documents` tool.
@@ -201,6 +235,12 @@ struct MatchEntry {
     id: String,
     /// Cosine similarity to the query, in `-1.0..=1.0`.
     score: f32,
+    /// The heading of the document's best-matching passage, from
+    /// `search_documents`. Omitted when that passage has no heading (the
+    /// summary, or text before the first heading), for a document ingested
+    /// before passages existed, and always by `find_similar_documents`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    heading: Option<String>,
     /// The store root this match came from, when more than one root was
     /// queried (`extra_db_paths` was non-empty). Omitted entirely for
     /// single-root queries, so the JSON shape single-root callers already
@@ -245,6 +285,15 @@ struct CorpusStatsResult {
     dim: Option<usize>,
     /// The primary vector store database path used.
     db: String,
+    /// How many passage vectors the primary root holds. Only present for a
+    /// single-root query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    passages: Option<u64>,
+    /// How many of the primary root's documents have no passages, because
+    /// they have not been ingested since passages existed. Only present for
+    /// a single-root query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    documents_without_passages: Option<u64>,
     /// The summed count across the primary root and every `extra_db_paths`
     /// root. Only present when `extra_db_paths` was non-empty.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -477,7 +526,7 @@ fn content_hash(contents: &str) -> String {
 }
 
 /// Runs the full ingestion pipeline for one MIF document: validate (lint),
-/// prove a lossless round trip, compute an embedding, and store it.
+/// prove a lossless round trip, embed its passages, and store them.
 fn ingest_mif_document_inner(
     file: &Path,
     db_path: Option<&Path>,
@@ -498,13 +547,16 @@ fn ingest_mif_document_inner(
         .get("@id")
         .and_then(serde_json::Value::as_str)
         .map_or_else(|| file.display().to_string(), ToString::to_string);
-    let content_text = jsonld
-        .get("content")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or(&contents);
-
     let embedder = mif_embed::Embedder::load()?;
-    let vector = embedder.embed(content_text)?;
+    let stored = embedder.embed_document(&jsonld)?;
+    let summary = stored.first().map_or(&[][..], |p| p.vector.as_slice());
+    let passages: Vec<mif_store::PassageVector<'_>> = stored
+        .iter()
+        .map(|p| mif_store::PassageVector {
+            heading: p.heading.as_deref(),
+            vector: &p.vector,
+        })
+        .collect();
 
     let db_path = db_path.map_or_else(|| PathBuf::from(DEFAULT_DB_PATH), Path::to_path_buf);
     if let Some(parent) = db_path.parent()
@@ -518,18 +570,39 @@ fn ingest_mif_document_inner(
     let store = mif_store::VectorStore::open(&db_path)?;
     let hash = content_hash(&contents);
     let updated_at = chrono::Utc::now().to_rfc3339();
-    store.upsert(&id, &vector, &hash, &updated_at)?;
+    let source = mif_store::document_source(&db_path, file);
+    store.upsert_document(&mif_store::DocumentVectors {
+        id: &id,
+        vector: summary,
+        passages: &passages,
+        content_hash: &hash,
+        updated_at: &updated_at,
+        source: Some(&source),
+        namespace: jsonld.get("namespace").and_then(serde_json::Value::as_str),
+    })?;
 
     Ok(IngestReport {
         lint: "ok",
         validate: "ok",
         roundtrip: "lossless",
-        embedding_dim: vector.len(),
+        embedding_dim: summary.len(),
+        passages: passages.len(),
         model: embedder.model_id(),
         model_version: embedder.model_revision().map(str::to_owned),
         normalized: mif_embed::NORMALIZED,
         stored: true,
         id,
+        db: db_path.display().to_string(),
+    })
+}
+
+/// Removes one document's vectors from the vector store.
+fn remove_document_inner(id: &str, db_path: Option<&Path>) -> Result<RemoveReport, McpError> {
+    let db_path = resolve_db_path(db_path);
+    let store = mif_store::VectorStore::open(&db_path)?;
+    Ok(RemoveReport {
+        id: id.to_string(),
+        removed: store.remove(id)?,
         db: db_path.display().to_string(),
     })
 }
@@ -565,6 +638,7 @@ fn to_search_result(matches: Vec<mif_store::SimilarityMatch>) -> SearchResult {
             .map(|m| MatchEntry {
                 id: m.id,
                 score: if m.score.is_finite() { m.score } else { 0.0 },
+                heading: None,
                 root: None,
             })
             .collect(),
@@ -581,25 +655,28 @@ fn to_rooted_search_result(matches: Vec<mif_store::RootedMatch>) -> SearchResult
             .map(|m| MatchEntry {
                 id: m.id,
                 score: if m.score.is_finite() { m.score } else { 0.0 },
+                heading: None,
                 root: Some(m.root.display().to_string()),
             })
             .collect(),
     }
 }
 
-/// Embeds `query` and ranks previously ingested documents by cosine
-/// similarity to it.
+/// Embeds `query` and ranks previously ingested documents, each by the
+/// cosine similarity of its best-matching passage (a document ingested
+/// before passages existed is ranked by its one document vector). Scores
+/// are always finite: the store never ranks a vector whose score is not.
 ///
 /// When `extra_db_paths` is empty, this queries only the resolved `db_path`
 /// root, identically to before this parameter existed. Otherwise it queries
 /// `db_path` (or its default) together with every `extra_db_paths` root,
-/// merge-ranked by cosine similarity via
-/// [`mif_store::multi_root_top_k_similar`].
+/// merge-ranked via [`mif_store::multi_root_search`].
 fn search_documents_inner(
     query: &str,
     db_path: Option<&Path>,
     extra_db_paths: &[PathBuf],
     limit: usize,
+    filter: &mif_store::SearchFilter,
 ) -> Result<SearchResult, McpError> {
     let embedder = mif_embed::Embedder::load()?;
     let vector = embedder.embed(query)?;
@@ -607,13 +684,33 @@ fn search_documents_inner(
     if extra_db_paths.is_empty() {
         let db_path = resolve_db_path(db_path);
         let store = mif_store::VectorStore::open(&db_path)?;
-        let matches = store.top_k_similar(&vector, limit)?;
-        return Ok(to_search_result(matches));
+        let matches = store.search(&vector, limit, filter)?;
+        return Ok(SearchResult {
+            matches: matches
+                .into_iter()
+                .map(|m| MatchEntry {
+                    id: m.id,
+                    score: m.score,
+                    heading: m.heading,
+                    root: None,
+                })
+                .collect(),
+        });
     }
 
     let roots = resolve_db_paths(db_path, extra_db_paths);
-    let matches = mif_store::multi_root_top_k_similar(&roots, &vector, limit)?;
-    Ok(to_rooted_search_result(matches))
+    let matches = mif_store::multi_root_search(&roots, &vector, limit, filter)?;
+    Ok(SearchResult {
+        matches: matches
+            .into_iter()
+            .map(|m| MatchEntry {
+                id: m.id,
+                score: m.score,
+                heading: m.heading,
+                root: Some(m.root.display().to_string()),
+            })
+            .collect(),
+    })
 }
 
 /// Finds documents similar to an already-ingested one, identified by `id`.
@@ -689,10 +786,13 @@ fn corpus_stats_inner(
         let db_path = resolve_db_path(db_path);
         let store = mif_store::VectorStore::open(&db_path)?;
         let stats = store.stats()?;
+        let passages = store.passage_stats()?;
         return Ok(CorpusStatsResult {
             count: stats.count,
             dim: stats.dim,
             db: db_path.display().to_string(),
+            passages: Some(passages.passage_count),
+            documents_without_passages: Some(passages.documents_without_passages),
             total_count: None,
             extra_roots: Vec::new(),
         });
@@ -732,6 +832,8 @@ fn corpus_stats_inner(
         count: primary_stats.count,
         dim: primary_stats.dim,
         db: primary_db_path.display().to_string(),
+        passages: None,
+        documents_without_passages: None,
         total_count: Some(multi.total_count),
         extra_roots,
     })
@@ -893,8 +995,9 @@ impl Mif {
     }
 
     #[tool(
-        description = "Lint, validate, prove a lossless round trip, compute an embedding, and \
-                        store the embedding vector for one MIF document"
+        description = "Lint, validate, prove a lossless round trip, embed, and store one MIF \
+                        document. The document is embedded as a summary passage plus one or \
+                        more passages per body section"
     )]
     fn ingest_mif_document(
         &self,
@@ -906,7 +1009,12 @@ impl Mif {
         }
     }
 
-    #[tool(description = "Free-text semantic search over previously ingested documents")]
+    #[tool(
+        description = "Free-text semantic search over previously ingested documents. Each \
+                        document is ranked by its best-matching passage, and each match \
+                        carries that passage's heading when it has one. Optional id, source \
+                        path, and namespace prefixes limit which documents are ranked"
+    )]
     fn search_documents(
         &self,
         Parameters(SearchParams {
@@ -914,6 +1022,9 @@ impl Mif {
             db_path,
             extra_db_paths,
             limit,
+            id_prefix,
+            source_prefix,
+            namespace_prefix,
         }): Parameters<SearchParams>,
     ) -> String {
         match search_documents_inner(
@@ -921,8 +1032,24 @@ impl Mif {
             db_path.as_deref(),
             &extra_db_paths,
             limit.unwrap_or(DEFAULT_LIMIT),
+            &mif_store::SearchFilter {
+                id_prefix,
+                source_prefix,
+                namespace_prefix,
+            },
         ) {
             Ok(result) => serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()),
+            Err(error) => error.to_problem().to_json(),
+        }
+    }
+
+    #[tool(description = "Remove one document's vectors from the vector store, by id")]
+    fn remove_document(
+        &self,
+        Parameters(RemoveParams { id, db_path }): Parameters<RemoveParams>,
+    ) -> String {
+        match remove_document_inner(&id, db_path.as_deref()) {
+            Ok(report) => serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string()),
             Err(error) => error.to_problem().to_json(),
         }
     }
@@ -1026,8 +1153,8 @@ mod tests {
 
     use super::{
         CorpusStatsParams, EmitJsonldParams, EmitMarkdownParams, FindSimilarParams, IngestParams,
-        McpError, Mif, Parameters, ResolveParams, RoundtripParams, SearchParams, ValidateParams,
-        ingest_mif_document_inner, to_search_result,
+        McpError, Mif, Parameters, RemoveParams, ResolveParams, RoundtripParams, SearchParams,
+        ValidateParams, ingest_mif_document_inner, to_search_result,
     };
 
     fn write_temp_file(contents: &str) -> tempfile::NamedTempFile {
@@ -1512,6 +1639,7 @@ Test content via MCP.
         assert_eq!(value["validate"], "ok");
         assert_eq!(value["roundtrip"], "lossless");
         assert_eq!(value["embedding_dim"], 384);
+        assert_eq!(value["passages"], 2);
         assert_eq!(value["model"], mif_embed::MODEL_ID);
         assert_eq!(value["normalized"], true);
         assert_eq!(value["stored"], true);
@@ -1618,6 +1746,9 @@ No type field.
             db_path: Some(db_dir.path().to_path_buf()),
             extra_db_paths: Vec::new(),
             limit: None,
+            id_prefix: None,
+            source_prefix: None,
+            namespace_prefix: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(value.get("status").is_some());
@@ -1680,6 +1811,9 @@ No type field.
             db_path: Some(db_path),
             extra_db_paths: Vec::new(),
             limit: None,
+            id_prefix: None,
+            source_prefix: None,
+            namespace_prefix: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
@@ -1715,6 +1849,9 @@ No type field.
             db_path: Some(db_path_a.clone()),
             extra_db_paths: vec![db_path_b],
             limit: None,
+            id_prefix: None,
+            source_prefix: None,
+            namespace_prefix: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         let matches = value["matches"].as_array().unwrap();
@@ -2007,5 +2144,111 @@ No type field.
         );
         assert_eq!(extra_roots[0]["count"], 0);
         assert!(extra_roots[0]["dim"].is_null());
+    }
+
+    /// A conformant markdown document with a title, a namespace, and two
+    /// body sections.
+    fn sectioned_document(name: &str, scope: &str, owner: &str) -> String {
+        format!(
+            "---\nid: {}\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\nnamespace: records/{name}\n\
+             title: {name}\n---\n\n# {name}\n\n## Scope\n\n{scope}\n\n## Owner\n\n{owner}\n",
+            mif_core::concept_uuid(name)
+        )
+    }
+
+    #[test]
+    fn search_tool_returns_the_matching_passage_heading_and_honors_filters() {
+        warm_embedding_model_cache();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("vectors.db");
+        for (name, owner) in [
+            ("cats", "Quarterly revenue exceeded analyst expectations."),
+            ("dogs", "The kennel team looks after them."),
+        ] {
+            let file = dir.path().join(format!("{name}.md"));
+            std::fs::write(
+                &file,
+                sectioned_document(name, "Small domesticated animals.", owner),
+            )
+            .unwrap();
+            let report = Mif.ingest_mif_document(Parameters(IngestParams {
+                file,
+                db_path: Some(db_path.clone()),
+            }));
+            let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+            assert_eq!(report["passages"], 3, "unexpected ingest report: {report}");
+        }
+        let search = |namespace_prefix: Option<&str>| -> serde_json::Value {
+            let result = Mif.search_documents(Parameters(SearchParams {
+                query: "revenue beat what analysts expected this quarter".to_string(),
+                db_path: Some(db_path.clone()),
+                extra_db_paths: Vec::new(),
+                limit: None,
+                id_prefix: None,
+                source_prefix: None,
+                namespace_prefix: namespace_prefix.map(ToString::to_string),
+            }));
+            serde_json::from_str(&result).unwrap()
+        };
+
+        let all = search(None);
+        let matches = all["matches"].as_array().unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(
+            matches[0]["id"],
+            format!("urn:mif:{}", mif_core::concept_uuid("cats"))
+        );
+        assert_eq!(matches[0]["heading"], "Owner");
+        assert!(matches[0].get("root").is_none());
+
+        let dogs_only = search(Some("records/dogs"));
+        let matches = dogs_only["matches"].as_array().unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0]["id"],
+            format!("urn:mif:{}", mif_core::concept_uuid("dogs"))
+        );
+    }
+
+    #[test]
+    fn remove_tool_deletes_a_document_and_reports_whether_it_was_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("vectors.db");
+        mif_store::VectorStore::open(&db_path)
+            .unwrap()
+            .upsert("urn:mif:a", &[1.0, 0.0], "h", "t")
+            .unwrap();
+        let remove = || -> serde_json::Value {
+            let result = Mif.remove_document(Parameters(RemoveParams {
+                id: "urn:mif:a".to_string(),
+                db_path: Some(db_path.clone()),
+            }));
+            serde_json::from_str(&result).unwrap()
+        };
+
+        assert_eq!(remove()["removed"], true);
+        assert_eq!(remove()["removed"], false);
+        let store = mif_store::VectorStore::open(&db_path).unwrap();
+        assert_eq!(store.count().unwrap(), 0);
+    }
+
+    #[test]
+    fn corpus_stats_tool_reports_passage_counts_for_a_single_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("vectors.db");
+        mif_store::VectorStore::open(&db_path)
+            .unwrap()
+            .upsert("urn:mif:a", &[1.0, 0.0], "h", "t")
+            .unwrap();
+
+        let result = Mif.corpus_stats(Parameters(CorpusStatsParams {
+            db_path: Some(db_path),
+            extra_db_paths: Vec::new(),
+        }));
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(value["count"], 1);
+        assert_eq!(value["passages"], 0);
+        assert_eq!(value["documents_without_passages"], 1);
     }
 }
