@@ -33,17 +33,45 @@ a model change); rows whose decoded vector length doesn't match their own
 `StoreError::VectorBlobMismatch`, matching `get`'s behavior, rather than
 silently skipping them.
 
+Beside its document vector, a document can have passage vectors, one per
+passage it was split into. `upsert_document` takes a `DocumentVectors` (the
+id, the document vector, a slice of `PassageVector`s each with the heading
+it came from, the content hash, the timestamp, and an optional source path
+and namespace) and replaces everything stored for that id in one
+transaction. `search` ranks each document once, by the cosine similarity of
+its best-matching passage, and returns `SearchMatch`es carrying that
+passage's heading; a document with no passages is ranked by its document
+vector. A `SearchFilter` limits `search` to documents whose id, source, or
+namespace starts with a given prefix. `top_k_similar` keeps ranking
+document vectors, which is what document-to-document similarity uses.
+`remove` deletes one document with its passages, `prune` deletes every
+document whose id is not in a keep set and returns the removed ids, and
+`passage_stats` returns a `PassageStats`: the passage count and the number
+of documents that have none.
+
+The schema version is recorded in `PRAGMA user_version`: 0 is the
+single-table layout of releases up to 0.11.0, and 1 adds the `passages`
+table (`doc_id`, `ord`, `heading`, `dim`, `vector`, `content_hash`) and the `source` and
+`namespace` columns on `embeddings`. `open` upgrades a version-0 database in
+place, in one transaction, without rewriting any row; a version-0
+database that is read-only is opened as it is and searched on its document
+vectors. Each passage row carries the content hash of the document it was
+computed from, and `search` uses only passages whose hash matches the
+document row, so passages left behind by a release that predates them are
+ignored.
+
 `StoreError` implements `mif_problem::ToProblem` for RFC 9457
 `application/problem+json` reporting.
 
 A single `VectorStore` is always rooted at one database file. Querying
 across several roots at once (e.g. a project-local store layered with a
 shared central one) is not a method on `VectorStore` itself — it is the
-free functions `multi_root_top_k_similar`, `multi_root_get`, and
-`multi_root_stats`, which each open every given root independently and
-merge the results, failing closed on the first root that cannot be opened
-or queried. `RootedMatch` and `MultiRootStats` are their result types,
-carrying which root each result came from.
+free functions `multi_root_top_k_similar`, `multi_root_search`,
+`multi_root_get`, and `multi_root_stats`, which each open every given root
+independently and merge the results, failing closed on the first root that
+cannot be opened or queried. `RootedMatch`, `RootedSearchMatch`, and
+`MultiRootStats` are their result types, carrying which root each result
+came from.
 
 ## License
 
