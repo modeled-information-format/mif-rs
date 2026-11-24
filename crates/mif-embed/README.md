@@ -16,6 +16,19 @@ L2-normalized `Vec<f32>` of length `EMBEDDING_DIM`. Construction is the
 expensive step — reuse one `Embedder` across calls to `embed` rather than
 reloading the model per call.
 
+`passages::passages(jsonld, count_tokens)` splits the JSON-LD projection of
+a MIF document into the `Passage`s to embed for it: first a summary passage
+(the title, the entity name, the description, and the entity definition or
+first statement), then the body split at headings of level 1 to 3. Each
+section passage starts with the title and heading, holds at most
+`PASSAGE_MAX_TOKENS` (256) tokens, and overlaps the passage before it by
+`PASSAGE_OVERLAP_TOKENS` (32) when a section is split. Link targets, bare
+URLs, `**Related:**` lines, table rule rows, and the `Relationships` and
+`Navigation` sections are left out. `Embedder::passages(jsonld)` calls it
+with the model's own tokenizer (`Embedder::token_count`), and
+`Embedder::embed_passages(texts)` embeds the passage texts in batches,
+returning one vector per text.
+
 If the platform has no resolvable user cache directory,
 `Embedder::load()` fails with `EmbedError::NoCacheDir` rather than falling
 back to an ephemeral location, since a model re-fetched on every run would

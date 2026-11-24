@@ -5,6 +5,11 @@
 //! mean-pooled, L2-normalized sentence embeddings) from the Hugging Face Hub on
 //! first use, caching the model files under the platform cache directory so
 //! later runs are offline. Inference runs on CPU only.
+//!
+//! [`passages`] splits a MIF document into the passages worth embedding, and
+//! [`Embedder::embed_passages`] embeds them in batches.
+
+pub mod passages;
 
 use std::path::PathBuf;
 
@@ -23,6 +28,10 @@ use tokenizers::{Tokenizer, TruncationParams};
 /// artifact's `embedding_model` field) can compare against the model
 /// actually in use instead of duplicating this string.
 pub const MODEL_ID: &str = "sentence-transformers/all-MiniLM-L6-v2";
+
+/// How many passages [`Embedder::embed_passages`] runs through the model in
+/// one forward pass.
+const PASSAGE_BATCH_SIZE: usize = 16;
 
 /// Alias retained for this crate's internal call sites.
 const MODEL_REPO: &str = MODEL_ID;
@@ -342,6 +351,92 @@ impl Embedder {
             .to_vec1::<f32>()
             .map_err(EmbedError::Inference)
     }
+
+    /// The number of model tokens in `text`, not counting the two special
+    /// tokens added around every input. Counts stop at the model's input
+    /// window, so a very long text reports the window size.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EmbedError::Tokenize`] if tokenization fails.
+    pub fn token_count(&self, text: &str) -> Result<usize, EmbedError> {
+        // The tokenizer pads short inputs to a fixed length, so the count is
+        // taken from the attention mask rather than the encoding's length.
+        Ok(self
+            .tokenizer
+            .encode(text, false)
+            .map_err(EmbedError::Tokenize)?
+            .get_attention_mask()
+            .iter()
+            .filter(|attended| **attended != 0)
+            .count())
+    }
+
+    /// Splits the JSON-LD projection of a MIF document into the passages to
+    /// embed for it, sized with this embedder's own tokenizer. See
+    /// [`passages::passages`] for what each passage holds.
+    #[must_use]
+    pub fn passages(&self, jsonld: &serde_json::Value) -> Vec<passages::Passage> {
+        // A text the tokenizer rejects is sized by its byte length, which is
+        // never smaller than its token count, so it is split rather than
+        // passed through oversized.
+        passages::passages(jsonld, &|text| self.token_count(text).unwrap_or(text.len()))
+    }
+
+    /// Computes one embedding per entry of `texts`, in order, running the
+    /// model over several texts at a time. Each vector is what
+    /// [`Self::embed`] returns for the same text, to within floating-point
+    /// error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EmbedError`] if tokenization or model inference fails.
+    pub fn embed_passages<S: AsRef<str>>(&self, texts: &[S]) -> Result<Vec<Vec<f32>>, EmbedError> {
+        let mut out = Vec::with_capacity(texts.len());
+        for batch in texts.chunks(PASSAGE_BATCH_SIZE) {
+            out.extend(self.embed_batch(batch)?);
+        }
+        Ok(out)
+    }
+
+    /// Embeds one batch: every text padded to the longest in the batch, with
+    /// the padding masked out of both attention and pooling.
+    fn embed_batch<S: AsRef<str>>(&self, texts: &[S]) -> Result<Vec<Vec<f32>>, EmbedError> {
+        let mut encodings = Vec::with_capacity(texts.len());
+        for text in texts {
+            encodings.push(
+                self.tokenizer
+                    .encode(text.as_ref(), true)
+                    .map_err(EmbedError::Tokenize)?,
+            );
+        }
+        let width = encodings.iter().map(tokenizers::Encoding::len).max();
+        let Some(width) = width else {
+            return Ok(Vec::new());
+        };
+
+        let mut ids = Vec::with_capacity(texts.len() * width);
+        let mut mask = Vec::with_capacity(texts.len() * width);
+        for encoding in &encodings {
+            let padding = width - encoding.len();
+            ids.extend_from_slice(encoding.get_ids());
+            ids.extend(std::iter::repeat_n(0_u32, padding));
+            mask.extend_from_slice(encoding.get_attention_mask());
+            mask.extend(std::iter::repeat_n(0_u32, padding));
+        }
+        let shape = (texts.len(), width);
+        let input_ids = Tensor::from_vec(ids, shape, &self.device)?;
+        let attention_mask = Tensor::from_vec(mask, shape, &self.device)?;
+        let token_type_ids = input_ids.zeros_like()?;
+
+        let sequence_output =
+            self.model
+                .forward(&input_ids, &token_type_ids, Some(&attention_mask))?;
+
+        mean_pool_batch(&sequence_output, &attention_mask)?
+            .to_vec2::<f32>()
+            .map_err(EmbedError::Inference)
+    }
 }
 
 /// The commit a cached hub file belongs to: the hub cache stores files under
@@ -389,6 +484,23 @@ fn mean_pool(sequence_output: &Tensor, attention_mask: &Tensor) -> Result<Tensor
     let pooled = summed.broadcast_div(&counts)?.squeeze(0)?;
 
     let norm = pooled.sqr()?.sum_keepdim(0)?.sqrt()?;
+    Ok(pooled.broadcast_div(&norm)?)
+}
+
+/// The batched form of [`mean_pool`]: pools `sequence_output`
+/// (`(batch, seq_len, hidden)`) over each row's non-padding tokens per
+/// `attention_mask` (`(batch, seq_len)`) and L2-normalizes each row,
+/// returning a `(batch, hidden)` tensor.
+fn mean_pool_batch(
+    sequence_output: &Tensor,
+    attention_mask: &Tensor,
+) -> Result<Tensor, EmbedError> {
+    let mask = attention_mask.to_dtype(DType::F32)?.unsqueeze(2)?;
+    let summed = sequence_output.broadcast_mul(&mask)?.sum(1)?;
+    let counts = mask.sum(1)?;
+    let pooled = summed.broadcast_div(&counts)?;
+
+    let norm = pooled.sqr()?.sum_keepdim(1)?.sqrt()?;
     Ok(pooled.broadcast_div(&norm)?)
 }
 
@@ -580,5 +692,88 @@ mod tests {
         assert_eq!(embedding.len(), EMBEDDING_DIM);
         let norm: f32 = embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 1e-3, "expected unit norm, got {norm}");
+    }
+
+    #[test]
+    fn embed_passages_matches_embed_for_texts_of_different_lengths() {
+        warm_embedding_model_cache();
+        let embedder = match Embedder::load() {
+            Ok(embedder) => embedder,
+            Err(err) => {
+                eprintln!("skipping: could not load embedding model: {err}");
+                return;
+            },
+        };
+        // More texts than one batch holds, of very different lengths, so
+        // both padding and batch boundaries are exercised.
+        let texts: Vec<String> = (0..20)
+            .map(|n| {
+                format!(
+                    "Passage {n}. {}",
+                    "The campaign reaches educators. ".repeat(n % 7)
+                )
+            })
+            .collect();
+
+        let batched = embedder.embed_passages(&texts).unwrap();
+
+        assert_eq!(batched.len(), texts.len());
+        for (text, vector) in texts.iter().zip(&batched) {
+            let single = embedder.embed(text).unwrap();
+            assert_eq!(vector.len(), EMBEDDING_DIM);
+            let cosine: f32 = single.iter().zip(vector).map(|(a, b)| a * b).sum();
+            assert!(
+                cosine > 0.9999,
+                "batched vector drifted for {text:?}: {cosine}"
+            );
+        }
+        assert!(embedder.embed_passages::<&str>(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn token_count_excludes_special_tokens_and_adds_up_across_words() {
+        warm_embedding_model_cache();
+        let embedder = match Embedder::load() {
+            Ok(embedder) => embedder,
+            Err(err) => {
+                eprintln!("skipping: could not load embedding model: {err}");
+                return;
+            },
+        };
+
+        assert_eq!(embedder.token_count("").unwrap(), 0);
+        let whole = embedder.token_count("campaign management").unwrap();
+        let parts =
+            embedder.token_count("campaign").unwrap() + embedder.token_count("management").unwrap();
+        assert_eq!(whole, parts);
+    }
+
+    #[test]
+    fn embedder_passages_stay_within_the_passage_token_limit() {
+        warm_embedding_model_cache();
+        let embedder = match Embedder::load() {
+            Ok(embedder) => embedder,
+            Err(err) => {
+                eprintln!("skipping: could not load embedding model: {err}");
+                return;
+            },
+        };
+        let body = "Campaign planning covers email, web, events, and paid media. ".repeat(120);
+        let document = serde_json::json!({
+            "title": "Capability record: C04.02 Campaign Management",
+            "entity": { "name": "Campaign Management", "definition": "The ability to run campaigns" },
+            "content": format!("## Scope\n\n{body}"),
+        });
+
+        let passages = embedder.passages(&document);
+
+        assert!(passages.len() > 3);
+        for passage in &passages {
+            let tokens = embedder.token_count(&passage.text).unwrap();
+            assert!(
+                tokens <= super::passages::PASSAGE_MAX_TOKENS,
+                "{tokens} tokens"
+            );
+        }
     }
 }
