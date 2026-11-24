@@ -35,10 +35,14 @@
 //! of releases up to 0.11.0, and 1 adds the `passages` table and the
 //! `source` and `namespace` columns. [`VectorStore::open`] upgrades an
 //! older database in place, in one transaction, without rewriting any row.
+//! A database that cannot be written (a read-only file or mount) is left on
+//! version 0 and opened anyway: every read works on its document vectors,
+//! and it holds no passages.
+//!
 //! A release that predates passages can still read and write an upgraded
-//! database; it sees only the `embeddings` table, so a document it writes
-//! keeps whatever passages were stored for it until the document is stored
-//! again by a release that knows about them.
+//! database; it sees only the `embeddings` table. When it stores a changed
+//! document, the passages left from the old content no longer carry the
+//! document row's content hash, and [`VectorStore::search`] ignores them.
 //!
 //! # Vector Blob Layout
 //!
@@ -273,20 +277,38 @@ CREATE TABLE IF NOT EXISTS passages (
     heading TEXT,
     dim INTEGER NOT NULL,
     vector BLOB NOT NULL,
+    content_hash TEXT NOT NULL,
     PRIMARY KEY (doc_id, ord)
 );";
 
-/// Every vector [`VectorStore::search`] scores: each passage of each
-/// document that passes the filter, or the document's own vector when it
-/// has no passages. A `NULL` filter parameter matches every row; a row
-/// whose `source` or `namespace` is `NULL` matches no prefix.
+/// Every vector [`VectorStore::search`] scores: each current passage of
+/// each document that passes the filter, or the document's own vector when
+/// it has none.
+///
+/// A passage is current when it carries the content hash of its document
+/// row. A release that predates passages rewrites the document row and
+/// leaves the passages behind; those no longer match and are ignored. A
+/// `NULL` filter parameter matches every row; a row whose `source` or
+/// `namespace` is `NULL` matches no prefix. Rows come in passage order, so
+/// the earliest of several equally scored passages is the one reported.
 const SEARCH_SQL: &str =
     "SELECT e.id, p.heading, COALESCE(p.dim, e.dim), COALESCE(p.vector, e.vector)
 FROM embeddings e
-LEFT JOIN passages p ON p.doc_id = e.id
+LEFT JOIN passages p ON p.doc_id = e.id AND p.content_hash = e.content_hash
 WHERE (?1 IS NULL OR substr(e.id, 1, length(?1)) = ?1)
   AND (?2 IS NULL OR substr(e.source, 1, length(?2)) = ?2)
-  AND (?3 IS NULL OR substr(e.namespace, 1, length(?3)) = ?3)";
+  AND (?3 IS NULL OR substr(e.namespace, 1, length(?3)) = ?3)
+ORDER BY e.id, p.ord";
+
+/// [`SEARCH_SQL`] for a database still on schema version 0 (see
+/// [`VectorStore::open`]): document vectors only, and no document has a
+/// source or namespace to match.
+const SEARCH_V0_SQL: &str = "SELECT id, NULL, dim, vector
+FROM embeddings
+WHERE (?1 IS NULL OR substr(id, 1, length(?1)) = ?1)
+  AND ?2 IS NULL
+  AND ?3 IS NULL
+ORDER BY id";
 
 /// One passage vector of a document, for [`VectorStore::upsert_document`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -368,9 +390,10 @@ pub struct RootedSearchMatch {
 /// [`VectorStore::passage_stats`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PassageStats {
-    /// Total number of passage vectors stored.
+    /// Number of current passage vectors: those computed from the content
+    /// their document row now holds.
     pub passage_count: u64,
-    /// Documents with no passages, which [`VectorStore::search`] ranks by
+    /// Documents with no current passages, which [`VectorStore::search`] ranks by
     /// their document vector alone. A non-zero count after an upgrade means
     /// those documents have not been ingested again yet.
     pub documents_without_passages: u64,
@@ -461,12 +484,17 @@ pub struct MultiRootStats {
 #[derive(Debug)]
 pub struct VectorStore {
     conn: Connection,
+    /// Whether the database has the `passages` table. `false` only for a
+    /// version-0 database that could not be upgraded because it is
+    /// read-only.
+    has_passages: bool,
 }
 
 impl VectorStore {
     /// Opens the `SQLite` database at `path`, creating its tables if they do
     /// not already exist and upgrading an older database's schema in place
-    /// (see "Schema Versions" in the module documentation). The database file itself is created by
+    /// (see "Schema Versions" in the module documentation). An older
+    /// database that is read-only is opened without the upgrade. The database file itself is created by
     /// `SQLite` if absent; the parent directory of `path` is not — a missing
     /// parent directory is reported as an error rather than silently
     /// created.
@@ -492,9 +520,15 @@ impl VectorStore {
         };
         let mut conn = Connection::open(path).map_err(open_error)?;
         conn.execute(SCHEMA_SQL, []).map_err(open_error)?;
-        migrate(&mut conn).map_err(open_error)?;
+        let has_passages = match migrate(&mut conn) {
+            Ok(()) => true,
+            // A database this process may only read stays on its old
+            // schema; reads fall back to the document vectors.
+            Err(error) if is_read_only(&error) => false,
+            Err(error) => return Err(open_error(error)),
+        };
 
-        Ok(Self { conn })
+        Ok(Self { conn, has_passages })
     }
 
     /// Inserts a new embedding, or replaces the existing one for `id`.
@@ -602,20 +636,27 @@ impl VectorStore {
         .map_err(query_error)?;
         tx.execute("DELETE FROM passages WHERE doc_id = ?1", [document.id])
             .map_err(query_error)?;
-        for (ord, passage) in document.passages.iter().enumerate() {
-            let ord = i64::try_from(ord).map_err(|_| StoreError::DimensionTooLarge { len: ord })?;
-            tx.execute(
-                "INSERT INTO passages (doc_id, ord, heading, dim, vector)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    document.id,
-                    ord,
-                    passage.heading,
-                    dim_of(passage.vector)?,
-                    encode_vector(passage.vector),
-                ],
-            )
-            .map_err(query_error)?;
+        {
+            let mut insert = tx
+                .prepare(
+                    "INSERT INTO passages (doc_id, ord, heading, dim, vector, content_hash)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                )
+                .map_err(query_error)?;
+            for (ord, passage) in document.passages.iter().enumerate() {
+                let ord =
+                    i64::try_from(ord).map_err(|_| StoreError::DimensionTooLarge { len: ord })?;
+                insert
+                    .execute(params![
+                        document.id,
+                        ord,
+                        passage.heading,
+                        dim_of(passage.vector)?,
+                        encode_vector(passage.vector),
+                        document.content_hash,
+                    ])
+                    .map_err(query_error)?;
+            }
         }
         tx.commit().map_err(query_error)
     }
@@ -673,12 +714,18 @@ impl VectorStore {
     /// Returns [`StoreError::Query`] if the underlying `SQLite` statement
     /// fails.
     pub fn passage_stats(&self) -> Result<PassageStats, StoreError> {
+        if !self.has_passages {
+            return Ok(PassageStats {
+                passage_count: 0,
+                documents_without_passages: self.count()?,
+            });
+        }
         let (passages, without): (i64, i64) = self
             .conn
             .query_row(
-                "SELECT (SELECT COUNT(*) FROM passages),
-                        (SELECT COUNT(*) FROM embeddings e
-                         WHERE NOT EXISTS (SELECT 1 FROM passages p WHERE p.doc_id = e.id))",
+                "SELECT COUNT(p.doc_id), COUNT(DISTINCT e.id) - COUNT(DISTINCT p.doc_id)
+                 FROM embeddings e
+                 LEFT JOIN passages p ON p.doc_id = e.id AND p.content_hash = e.content_hash",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -697,7 +744,8 @@ impl VectorStore {
     /// in descending score order (ties in ascending id order).
     ///
     /// A document stored without passages is scored on its document vector.
-    /// Only documents passing `filter` are scored. Like
+    /// Only documents passing `filter` are scored, and a vector whose score
+    /// is not a finite number (it holds a `NaN`) is skipped. Like
     /// [`Self::top_k_similar`], this is brute-force, skips vectors whose
     /// dimensionality differs from the query's, and aborts on a vector
     /// whose stored length does not match its `dim` column.
@@ -708,19 +756,26 @@ impl VectorStore {
     /// not fit a [`usize`], [`StoreError::VectorBlobMismatch`] if a row's
     /// decoded vector length does not match its `dim` column, or
     /// [`StoreError::Query`] if the underlying `SQLite` statement fails.
-    pub fn search(
+    pub fn search<'a>(
         &self,
         query: &[f32],
         limit: usize,
-        filter: &SearchFilter,
+        filter: &'a SearchFilter,
     ) -> Result<Vec<SearchMatch>, StoreError> {
-        let mut stmt = self.conn.prepare(SEARCH_SQL).map_err(query_error)?;
+        let sql = if self.has_passages {
+            SEARCH_SQL
+        } else {
+            SEARCH_V0_SQL
+        };
+        // An empty prefix asks for no filtering, the same as an unset one.
+        let prefix = |prefix: &'a Option<String>| prefix.as_deref().filter(|p| !p.is_empty());
+        let mut stmt = self.conn.prepare(sql).map_err(query_error)?;
         let rows = stmt
             .query_map(
                 params![
-                    filter.id_prefix,
-                    filter.source_prefix,
-                    filter.namespace_prefix
+                    prefix(&filter.id_prefix),
+                    prefix(&filter.source_prefix),
+                    prefix(&filter.namespace_prefix)
                 ],
                 |row| {
                     let id: String = row.get(0)?;
@@ -741,6 +796,9 @@ impl VectorStore {
                 continue;
             }
             let score = cosine_similarity(query, &vector, query_norm);
+            if !score.is_finite() {
+                continue;
+            }
             match best.entry(id) {
                 Entry::Occupied(mut entry) if score > entry.get().0 => {
                     entry.insert((score, heading));
@@ -853,7 +911,8 @@ impl VectorStore {
     /// simpler and fast enough that no approximate-nearest-neighbor index
     /// is warranted. Rows whose `dim` differs from `query.len()` are
     /// skipped (an incomparable embedding space, e.g. after a model
-    /// change — not data corruption); rows whose decoded vector length
+    /// change — not data corruption), as are rows whose score is not a
+    /// finite number (a vector holding a `NaN`); rows whose decoded vector length
     /// does not match their own `dim` column are data corruption and abort
     /// the query with [`StoreError::VectorBlobMismatch`], matching
     /// [`Self::get`]'s behavior, rather than silently skipping them.
@@ -901,6 +960,9 @@ impl VectorStore {
                 continue;
             }
             let score = cosine_similarity(query, &vector, query_norm);
+            if !score.is_finite() {
+                continue;
+            }
             matches.push(SimilarityMatch { id, score });
         }
 
@@ -1172,6 +1234,15 @@ fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
     tx.commit()
+}
+
+/// Whether a `SQLite` failure means the database cannot be written.
+fn is_read_only(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(failure, _)
+            if failure.code == rusqlite::ErrorCode::ReadOnly
+    )
 }
 
 /// The schema version recorded in the database.
@@ -2216,8 +2287,8 @@ mod tests {
         store
             .conn
             .execute(
-                "INSERT INTO passages (doc_id, ord, heading, dim, vector)
-                 VALUES ('orphan', 0, NULL, 2, ?1)",
+                "INSERT INTO passages (doc_id, ord, heading, dim, vector, content_hash)
+                 VALUES ('orphan', 0, NULL, 2, ?1, 'h')",
                 [encode_vector(&[1.0, 0.0])],
             )
             .unwrap();
@@ -2306,5 +2377,182 @@ mod tests {
         let error =
             multi_root_search(&[root, missing], &[1.0], 10, &SearchFilter::default()).unwrap_err();
         assert!(matches!(error, StoreError::MissingParentDir { .. }));
+    }
+
+    #[test]
+    fn a_read_only_version_0_database_opens_and_searches_on_document_vectors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("vectors.db");
+        write_v0_database(&path);
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions.clone()).unwrap();
+
+        let store = VectorStore::open(&path).unwrap();
+        let hits = store.search(&[1.0, 0.0], 10, &SearchFilter::default());
+        let filtered = store.search(
+            &[1.0, 0.0],
+            10,
+            &SearchFilter {
+                source_prefix: Some("records/".to_string()),
+                ..SearchFilter::default()
+            },
+        );
+        let by_document = store.top_k_similar(&[1.0, 0.0], 10);
+        let stats = store.passage_stats();
+        let version = schema_version(&store.conn);
+        drop(store);
+        // Restored before the assertions so the directory can always be
+        // removed, on every platform.
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&path, permissions).unwrap();
+
+        // A process that may write anything (root) upgrades the file even
+        // through the read-only bit; there is then nothing to fall back from.
+        if version.unwrap() == SCHEMA_VERSION {
+            return;
+        }
+        let hits = hits.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "old-doc");
+        assert_eq!(hits[0].heading, None);
+        assert!(filtered.unwrap().is_empty());
+        assert_eq!(by_document.unwrap().len(), 1);
+        assert_eq!(
+            stats.unwrap(),
+            PassageStats {
+                passage_count: 0,
+                documents_without_passages: 1
+            }
+        );
+    }
+
+    #[test]
+    fn search_ignores_passages_left_behind_by_a_writer_that_predates_them() {
+        let (_dir, store) = open_temp_store();
+        store
+            .upsert_document(&document(
+                "doc",
+                &[1.0, 0.0],
+                &[
+                    passage(None, &[1.0, 0.0]),
+                    passage(Some("Removed"), &[0.0, 1.0]),
+                ],
+            ))
+            .unwrap();
+        // What release 0.11.0 does on re-ingesting the changed document: it
+        // rewrites the document row and knows nothing of the passages.
+        store
+            .conn
+            .execute(
+                "UPDATE embeddings SET vector = ?1, content_hash = 'h-new' WHERE id = 'doc'",
+                [encode_vector(&[0.6, 0.8])],
+            )
+            .unwrap();
+
+        let hits = store
+            .search(&[0.0, 1.0], 10, &SearchFilter::default())
+            .unwrap();
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].heading, None);
+        assert!((hits[0].score - 0.8).abs() < 1e-6);
+        assert_eq!(
+            store.passage_stats().unwrap(),
+            PassageStats {
+                passage_count: 0,
+                documents_without_passages: 1
+            }
+        );
+        // Storing it again with passages makes them current.
+        store
+            .upsert_document(&DocumentVectors {
+                content_hash: "h-new",
+                ..document("doc", &[0.6, 0.8], &[passage(Some("Kept"), &[0.0, 1.0])])
+            })
+            .unwrap();
+        let hits = store
+            .search(&[0.0, 1.0], 10, &SearchFilter::default())
+            .unwrap();
+        assert_eq!(hits[0].heading.as_deref(), Some("Kept"));
+        assert_eq!(store.passage_stats().unwrap().passage_count, 1);
+    }
+
+    #[test]
+    fn search_reports_the_earliest_of_equally_scored_passages() {
+        let (_dir, store) = open_temp_store();
+        store
+            .upsert_document(&document(
+                "doc",
+                &[1.0, 0.0],
+                &[
+                    passage(Some("Low"), &[1.0, 0.0]),
+                    passage(Some("First"), &[0.0, 1.0]),
+                    passage(Some("Second"), &[0.0, 1.0]),
+                    passage(None, &[0.0, 1.0]),
+                ],
+            ))
+            .unwrap();
+
+        for _ in 0..5 {
+            let hits = store
+                .search(&[0.0, 1.0], 10, &SearchFilter::default())
+                .unwrap();
+            assert_eq!(hits[0].heading.as_deref(), Some("First"));
+        }
+    }
+
+    #[test]
+    fn an_empty_filter_prefix_filters_nothing() {
+        let (_dir, store) = open_temp_store();
+        store.upsert("no-source", &[1.0, 0.0], "h", "t").unwrap();
+
+        let hits = store
+            .search(
+                &[1.0, 0.0],
+                10,
+                &SearchFilter {
+                    id_prefix: Some(String::new()),
+                    source_prefix: Some(String::new()),
+                    namespace_prefix: Some(String::new()),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn vectors_holding_a_nan_are_never_ranked() {
+        let (_dir, store) = open_temp_store();
+        store
+            .upsert_document(&document(
+                "broken",
+                &[f32::NAN, 0.0],
+                &[passage(None, &[f32::NAN, 0.0])],
+            ))
+            .unwrap();
+        store
+            .upsert_document(&document(
+                "partly",
+                &[1.0, 0.0],
+                &[
+                    passage(Some("Bad"), &[f32::NAN, 1.0]),
+                    passage(Some("Good"), &[1.0, 0.0]),
+                ],
+            ))
+            .unwrap();
+
+        let hits = store
+            .search(&[1.0, 0.0], 10, &SearchFilter::default())
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "partly");
+        assert_eq!(hits[0].heading.as_deref(), Some("Good"));
+
+        let by_document = store.top_k_similar(&[1.0, 0.0], 10).unwrap();
+        assert_eq!(by_document.len(), 1);
+        assert_eq!(by_document[0].id, "partly");
     }
 }

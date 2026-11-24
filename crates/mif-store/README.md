@@ -51,9 +51,14 @@ of documents that have none.
 
 The schema version is recorded in `PRAGMA user_version`: 0 is the
 single-table layout of releases up to 0.11.0, and 1 adds the `passages`
-table (`doc_id`, `ord`, `heading`, `dim`, `vector`) and the `source` and
+table (`doc_id`, `ord`, `heading`, `dim`, `vector`, `content_hash`) and the `source` and
 `namespace` columns on `embeddings`. `open` upgrades a version-0 database in
-place, in one transaction, without rewriting any row.
+place, in one transaction, without rewriting any row; a version-0
+database that is read-only is opened as it is and searched on its document
+vectors. Each passage row carries the content hash of the document it was
+computed from, and `search` uses only passages whose hash matches the
+document row, so passages left behind by a release that predates them are
+ignored.
 
 `StoreError` implements `mif_problem::ToProblem` for RFC 9457
 `application/problem+json` reporting.

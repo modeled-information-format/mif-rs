@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`mif-store`**: the database gains a schema version (`PRAGMA user_version`). `VectorStore::open` upgrades a database written by 0.11.0 or earlier in place: it adds the `passages` table and the nullable `source` and `namespace` columns on `embeddings`, and rewrites no row. An upgraded database stays readable and writable by 0.11.0. `VectorStore::upsert` now also removes any passages stored for the id it replaces.
+- **`mif-store`**: the database gains a schema version (`PRAGMA user_version`). `VectorStore::open` upgrades a database written by 0.11.0 or earlier in place: it adds the `passages` table and the nullable `source` and `namespace` columns on `embeddings`, and rewrites no row. An upgraded database stays readable and writable by 0.11.0; passages left behind when 0.11.0 stores a changed document are ignored by `search`. A read-only version-0 database is opened without the upgrade and searched on its document vectors. `VectorStore::upsert` now also removes any passages stored for the id it replaces. `top_k_similar` no longer ranks a vector that holds a NaN.
 
 ## [0.11.0] - 2026-10-09
 
