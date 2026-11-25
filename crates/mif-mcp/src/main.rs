@@ -158,7 +158,8 @@ struct GetPassageParams {
     /// and `search_documents`).
     id: String,
     /// The heading of the section to return, as `search_documents` reports
-    /// it. Omit for the document's summary.
+    /// it. Omit for what a match with no heading points at: the document's
+    /// summary, then any text before its first heading.
     heading: Option<String>,
     /// Path to the `SQLite` vector store database. Defaults to
     /// `.mif/vectors.db`.
@@ -199,12 +200,13 @@ impl From<mif_store::PassageSpan> for SpanEntry {
 /// One section returned by `get_passage`.
 #[derive(Debug, serde::Serialize)]
 struct SectionEntry {
-    /// The section's heading; `null` for the document's summary.
+    /// The section's heading; `null` for the document's summary and for
+    /// text before its first heading.
     heading: Option<String>,
     /// The section's markdown as it was written, or the summary's text.
     text: String,
     /// Where the section sits in the document's body; `null` for the
-    /// summary.
+    /// summary alone.
     span: Option<SpanEntry>,
 }
 
@@ -928,7 +930,8 @@ fn match_entry(matched: mif_store::SearchMatch, root: Option<String>) -> MatchEn
 }
 
 /// Returns the sections of an ingested document headed `heading`, as they
-/// were written, or with no `heading` the document's summary. The document
+/// were written, or with no `heading` the document's summary and the text
+/// before its first heading. The document
 /// comes from the first root (`db_path`, then each of `extra_db_paths` in
 /// order) that holds it.
 fn get_passage_inner(
@@ -1299,7 +1302,8 @@ impl Mif {
         description = "Fetch one section of an ingested document as it was written, by the \
                         heading `search_documents` reports, instead of reading the whole \
                         document. A heading that occurs more than once returns each \
-                        occurrence. With no heading, returns the document's summary"
+                        occurrence. With no heading, returns the document's summary, then \
+                        any text before its first heading"
     )]
     fn get_passage(
         &self,

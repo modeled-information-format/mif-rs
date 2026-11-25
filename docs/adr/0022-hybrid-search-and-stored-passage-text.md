@@ -200,8 +200,9 @@ ranking **by default**.
   each body section as written. Spans are positions in the `content` string
   of the document's JSON-LD projection: character offsets from 0, end
   exclusive, counted in Unicode scalar values, and lines from 1.
-- `mif-store` schema version 2 adds `title`, `entity_type`, and
-  `concept_type` to `embeddings`; a text pointer, span, and section index
+- `mif-store` schema version 2 adds `title`, `entity_type`, `concept_type`,
+  and `meta_hash` (the content hash those were written for) to
+  `embeddings`; a text pointer, span, and section index
   to `passages`; a `sections` table; and `passage_text`, an FTS5 table
   (`unicode61` tokenizer) holding passage text.
 - `VectorStore::query` ranks documents. Under `SearchMode::Semantic` it is
@@ -209,8 +210,11 @@ ranking **by default**.
   `SearchMode::Hybrid` each document also gets a lexical rank from the
   `bm25` of its best passage, and the score is `1 / (60 + r)` summed over
   its cosine rank and, when it has one, its lexical rank.
-- Fusion is per document. The passage reported for a document is the one
-  from whichever ranking places the document higher.
+- Fusion is per document. The passage reported for a document is its best
+  cosine passage, unless the lexical ranking places the document higher and
+  one of its passages holds a distinctive query term: one found in a single
+  passage of the store, or in at most one passage in twenty. A match on
+  common words counts toward the document's rank but names no passage.
 - Documents with the same `bm25` share a lexical rank. Templated documents
   hold the same boilerplate word for word, and a common query word matches
   it equally in all of them; an order made up among equals must not move
@@ -226,7 +230,9 @@ ranking **by default**.
   `score`. `SearchFilter` gains exact-match include and exclude lists for
   entity type and concept type.
 - `VectorStore::sections` returns the sections of a document with a given
-  heading as they were written, or the summary. `mif-cli get-passage` and
+  heading as they were written. With no heading it returns the summary and
+  then any text before the first heading, since a match on either reports
+  no heading. `mif-cli get-passage` and
   the `get_passage` MCP tool expose it.
 - `mif-cli prune` no longer reads hidden directories, and `ingest` and
   `prune` take `--ignore` globs.
@@ -239,7 +245,9 @@ Compatibility is part of the decision:
   database. Two triggers keep it consistent when they do: deleting a
   passage row deletes its text, and deleting a document row deletes its
   sections. A document re-ingested by an older release has no text until
-  this release ingests it again.
+  this release ingests it again, and if its content changed, its title and
+  types are ignored until then, because they were written for other
+  content.
 - A document with no stored text takes part in the semantic ranking only.
   `corpus-stats` reports how many remain as `documents_without_text`.
 - `--mode semantic` returns the order and scores of 0.12.0.
@@ -371,6 +379,8 @@ arbitrary order of five equal lexical matches put the wrong document first.
 | Schema version 2 adds text, sections, and types, with triggers for older writers | crates/mif-store/src/lib.rs | `MIGRATE_V2_SQL`, `migrate` | compliant |
 | Hybrid ranking is per-document reciprocal rank fusion with constant 60 | crates/mif-store/src/hybrid.rs | `fuse`, `RRF_K` | compliant |
 | Documents with equal `bm25` share a lexical rank | crates/mif-store/src/hybrid.rs | `rank_lexical` | compliant |
+| A lexical passage is reported only for a distinctive term | crates/mif-store/src/hybrid.rs | `distinctive`, `fuse` | compliant |
+| Title and types are ignored once their content hash is stale | crates/mif-store/src/lib.rs | `SEARCH_SQL`, `write_text` | compliant |
 | Semantic mode returns the cosine ranking of ADR-0021 | crates/mif-store/src/hybrid.rs | `VectorStore::query`, `fuse` | compliant |
 | Both binaries default to hybrid and expose `get_passage` | crates/mif-cli/src/main.rs, crates/mif-mcp/src/main.rs | `search`, `get_passage`, `search_documents`, `get_passage_inner` | compliant |
 

@@ -157,14 +157,16 @@ enum Command {
         #[arg(long)]
         show_passage: bool,
     },
-    /// Print one section of an ingested document as it was written, or,
-    /// with no `--heading`, the document's summary. A heading that occurs
-    /// more than once in the document prints each occurrence.
+    /// Print one section of an ingested document as it was written. A
+    /// heading that occurs more than once in the document prints each
+    /// occurrence. With no `--heading`, prints the document's summary and
+    /// then any text before its first heading, which is what a match with
+    /// no heading points at.
     GetPassage {
         /// The id of the document (as reported by `ingest` and `search`).
         id: String,
         /// The section's heading, as `search` reports it. Omit for the
-        /// document's summary.
+        /// document's summary and the text before its first heading.
         #[arg(long)]
         heading: Option<String>,
         /// Path to the `SQLite` vector store database. Defaults to
@@ -1359,7 +1361,8 @@ fn search(
 }
 
 /// Prints the sections of an ingested document headed `heading`, as they
-/// were written, or with no `heading` the document's summary.
+/// were written, or with no `heading` the document's summary and the text
+/// before its first heading.
 ///
 /// With `extra_db_path`, the document comes from the first root (`db_path`,
 /// then each `extra_db_path` in order) that holds it.

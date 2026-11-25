@@ -25,6 +25,10 @@ use crate::{
 /// as `1 / (RRF_K + rank)`.
 const RRF_K: f32 = 60.0;
 
+/// A query term is distinctive when it occurs in one passage, or in at
+/// most one passage in this many.
+const DISTINCTIVE_SHARE: i64 = 20;
+
 /// How [`VectorStore::query`] ranks documents.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SearchMode {
@@ -56,13 +60,14 @@ pub struct SearchQuery<'a> {
 /// One section of a stored document, from [`VectorStore::sections`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredSection {
-    /// The section's heading. `None` for the document's summary.
+    /// The section's heading. `None` for the document's summary and for
+    /// body text that has no heading.
     pub heading: Option<String>,
     /// The section's markdown as it was written, or, for the summary, the
     /// summary passage's text.
     pub text: String,
     /// Where the section sits in the document's body. `None` for the
-    /// summary.
+    /// summary alone.
     pub span: Option<PassageSpan>,
 }
 
@@ -81,7 +86,11 @@ struct Lexical {
     bm25: f32,
     /// The document's place in its own store's lexical ranking, from 1.
     rank: usize,
-    passage: PassageRef,
+    /// The document's best passage holding a distinctive query term (see
+    /// [`DISTINCTIVE_SHARE`]). `None` when the document matched on common
+    /// words only: such a match counts toward its rank, but says nothing
+    /// about which of its passages answers the query.
+    passage: Option<PassageRef>,
 }
 
 /// One document that passed the filter, scored but not yet ranked.
@@ -104,17 +113,27 @@ struct Ranked {
     passage: PassageRef,
 }
 
-/// The FTS5 query for free text: each word that holds a letter or a digit
-/// as a quoted phrase, any of which may match. Quoting keeps punctuation
-/// from being read as query syntax, and makes a hyphenated identifier
-/// (`ADR-007`) match as the adjacent tokens it is indexed as. `None` when
-/// no word is left.
-fn fts_query(text: &str) -> Option<String> {
-    let phrases: Vec<String> = text
-        .split_whitespace()
+/// The FTS5 phrases of free text: each word that holds a letter or a digit,
+/// quoted. Quoting keeps punctuation from being read as query syntax, and
+/// makes a hyphenated identifier (`ADR-007`) match as the adjacent tokens
+/// it is indexed as. Control characters are dropped: FTS5 reads a NUL as
+/// the end of the query.
+fn fts_phrases(text: &str) -> Vec<String> {
+    text.split_whitespace()
         .filter(|word| word.chars().any(char::is_alphanumeric))
-        .map(|word| format!("\"{}\"", word.replace('"', " ")))
-        .collect();
+        .map(|word| {
+            let word: String = word
+                .chars()
+                .filter(|c| !c.is_control())
+                .map(|c| if c == '"' { ' ' } else { c })
+                .collect();
+            format!("\"{word}\"")
+        })
+        .collect()
+}
+
+/// The FTS5 query matching any of `phrases`. `None` when there are none.
+fn fts_query(phrases: &[String]) -> Option<String> {
     Some(phrases.join(" OR ")).filter(|query| !query.is_empty())
 }
 
@@ -165,10 +184,13 @@ fn fuse(candidates: Vec<(usize, Candidate)>, mode: SearchMode, limit: usize) -> 
                 },
             };
             // Report the passage from whichever ranking places the document
-            // higher: that is the passage that got it into the results.
+            // higher, since that is what got it into the results; but a
+            // match on common words alone names no passage, and then the
+            // passage nearest in meaning stands.
             let passage = lexical
                 .filter(|l| l.rank < cosine_rank)
-                .map_or_else(|| candidate.cosine_passage.clone(), |l| l.passage.clone());
+                .and_then(|l| l.passage.clone())
+                .unwrap_or_else(|| candidate.cosine_passage.clone());
             Ranked {
                 root,
                 candidate,
@@ -355,9 +377,50 @@ impl VectorStore {
         by_text: &HashMap<i64, (String, PassageRef)>,
         candidates: &mut HashMap<String, Candidate>,
     ) -> Result<(), StoreError> {
-        let Some(fts) = fts_query(text) else {
+        let phrases = fts_phrases(text);
+        let Some(fts) = fts_query(&phrases) else {
             return Ok(());
         };
+        let best = self.best_passages(&fts, by_text)?;
+        let distinctive = match fts_query(&self.distinctive(&phrases)?) {
+            Some(fts) => self.best_passages(&fts, by_text)?,
+            None => HashMap::new(),
+        };
+
+        let mut order: Vec<(&str, f32)> = best
+            .iter()
+            .map(|(id, (bm25, _))| (id.as_str(), *bm25))
+            .collect();
+        order.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+        // Documents with the same bm25 share a rank. Text that many
+        // documents hold word for word (a template's boilerplate) matches a
+        // common query word equally in all of them, and an order made up
+        // among equals must not move any of them past a better match.
+        let mut rank = 0;
+        let mut previous: Option<f32> = None;
+        for (index, (id, bm25)) in order.into_iter().enumerate() {
+            if previous.is_none_or(|previous| previous.total_cmp(&bm25).is_ne()) {
+                rank = index + 1;
+                previous = Some(bm25);
+            }
+            if let Some(candidate) = candidates.get_mut(id) {
+                candidate.lexical = Some(Lexical {
+                    bm25,
+                    rank,
+                    passage: distinctive.get(id).map(|(_, passage)| passage.clone()),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Each candidate document's best passage for an FTS5 query, with its
+    /// bm25: the lowest bm25, then the earliest passage.
+    fn best_passages(
+        &self,
+        fts: &str,
+        by_text: &HashMap<i64, (String, PassageRef)>,
+    ) -> Result<HashMap<String, (f32, PassageRef)>, StoreError> {
         let mut stmt = self
             .conn
             .prepare(
@@ -373,8 +436,7 @@ impl VectorStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(query_error)?;
 
-        // Each document's best passage: the lowest bm25, then the earliest.
-        let mut best: HashMap<&str, (f32, &PassageRef)> = HashMap::new();
+        let mut best: HashMap<String, (f32, PassageRef)> = HashMap::new();
         for (rowid, bm25) in hits {
             // Text left by a replaced passage, or of a filtered-out
             // document, belongs to no candidate.
@@ -384,38 +446,37 @@ impl VectorStore {
             // bm25 is an f64 whose magnitude is far inside f32's range.
             #[allow(clippy::cast_possible_truncation)]
             let bm25 = bm25 as f32;
-            let better = best.get(id.as_str()).is_none_or(|(held, held_passage)| {
+            let better = best.get(id).is_none_or(|(held, held_passage)| {
                 bm25 < *held || (bm25.total_cmp(held).is_eq() && passage.ord < held_passage.ord)
             });
             if better {
-                best.insert(id, (bm25, passage));
+                best.insert(id.clone(), (bm25, passage.clone()));
             }
         }
-        let mut order: Vec<(&str, f32, &PassageRef)> = best
-            .into_iter()
-            .map(|(id, (bm25, passage))| (id, bm25, passage))
-            .collect();
-        order.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(b.0)));
-        // Documents with the same bm25 share a rank. Text that many
-        // documents hold word for word (a template's boilerplate) matches a
-        // common query word equally in all of them, and an order made up
-        // among equals must not move any of them past a better match.
-        let mut rank = 0;
-        let mut previous: Option<f32> = None;
-        for (index, (id, bm25, passage)) in order.into_iter().enumerate() {
-            if previous.is_none_or(|previous| previous.total_cmp(&bm25).is_ne()) {
-                rank = index + 1;
-                previous = Some(bm25);
-            }
-            if let Some(candidate) = candidates.get_mut(id) {
-                candidate.lexical = Some(Lexical {
-                    bm25,
-                    rank,
-                    passage: passage.clone(),
-                });
+        Ok(best)
+    }
+
+    /// The phrases that are distinctive in this store: those found in one
+    /// passage, or in at most one passage in [`DISTINCTIVE_SHARE`].
+    fn distinctive(&self, phrases: &[String]) -> Result<Vec<String>, StoreError> {
+        let total: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM passage_text", [], |row| row.get(0))
+            .map_err(query_error)?;
+        let mut count = self
+            .conn
+            .prepare("SELECT COUNT(*) FROM passage_text WHERE passage_text MATCH ?1")
+            .map_err(query_error)?;
+        let mut kept = Vec::new();
+        for phrase in phrases {
+            let found: i64 = count
+                .query_row([phrase], |row| row.get(0))
+                .map_err(query_error)?;
+            if found == 1 || (found > 0 && found.saturating_mul(DISTINCTIVE_SHARE) <= total) {
+                kept.push(phrase.clone());
             }
         }
-        Ok(())
+        Ok(kept)
     }
 
     /// Reads back what a match reports beyond its scores: the document's
@@ -432,7 +493,11 @@ impl VectorStore {
         let (source, title, entity_type, concept_type) = if self.has_text {
             self.conn
                 .query_row(
-                    "SELECT source, title, entity_type, concept_type FROM embeddings
+                    "SELECT source,
+                            CASE WHEN meta_hash = content_hash THEN title END,
+                            CASE WHEN meta_hash = content_hash THEN entity_type END,
+                            CASE WHEN meta_hash = content_hash THEN concept_type END
+                     FROM embeddings
                      WHERE id = ?1",
                     [&candidate.id],
                     |row| Ok((text(0)(row)?, text(1)(row)?, text(2)(row)?, text(3)(row)?)),
@@ -487,8 +552,11 @@ impl VectorStore {
     }
 
     /// The sections of a stored document headed `heading`, in document
-    /// order, as they were written; or, with no `heading`, the document's
-    /// summary. `None` when nothing is stored for `id`.
+    /// order, as they were written. With no `heading`: the document's
+    /// summary, then any body section that has no heading (the text before
+    /// the first one), which is what a match with no heading points at; the
+    /// summary has no span and such a section has one. `None` when nothing
+    /// is stored for `id`.
     ///
     /// A heading that occurs more than once in the document gives one entry
     /// per occurrence. The list is empty when the document has no such
@@ -547,28 +615,7 @@ impl VectorStore {
             return Ok(Some(Vec::new()));
         }
         let Some(heading) = heading else {
-            let summary = self
-                .conn
-                .query_row(
-                    "SELECT t.text FROM embeddings e
-                     JOIN passages p ON p.doc_id = e.id AND p.content_hash = e.content_hash
-                     JOIN passage_text t ON t.rowid = p.text_rowid
-                     WHERE e.id = ?1 AND p.ord = 0",
-                    [id],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()
-                .map_err(query_error)?;
-            return Ok(Some(
-                summary
-                    .map(|text| StoredSection {
-                        heading: None,
-                        text,
-                        span: None,
-                    })
-                    .into_iter()
-                    .collect(),
-            ));
+            return self.unheaded_sections(id).map(Some);
         };
         let mut stmt = self
             .conn
@@ -592,6 +639,57 @@ impl VectorStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(query_error)?;
         Ok(Some(sections))
+    }
+}
+
+impl VectorStore {
+    /// What a stored document holds under no heading: its summary, then
+    /// any body section that has none (the text before its first heading).
+    /// A match that reports no heading is one of these.
+    fn unheaded_sections(&self, id: &str) -> Result<Vec<StoredSection>, StoreError> {
+        let summary = self
+            .conn
+            .query_row(
+                "SELECT t.text FROM embeddings e
+                 JOIN passages p ON p.doc_id = e.id AND p.content_hash = e.content_hash
+                 JOIN passage_text t ON t.rowid = p.text_rowid
+                 WHERE e.id = ?1 AND p.ord = 0",
+                [id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(query_error)?;
+        let mut sections: Vec<StoredSection> = summary
+            .map(|text| StoredSection {
+                heading: None,
+                text,
+                span: None,
+            })
+            .into_iter()
+            .collect();
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT s.text, s.start_char, s.end_char, s.start_line, s.end_line
+                 FROM embeddings e
+                 JOIN sections s ON s.doc_id = e.id AND s.content_hash = e.content_hash
+                 WHERE e.id = ?1 AND s.heading IS NULL
+                 ORDER BY s.ord",
+            )
+            .map_err(query_error)?;
+        let unheaded = stmt
+            .query_map([id], |row| {
+                Ok(StoredSection {
+                    heading: None,
+                    text: row.get(0)?,
+                    span: span_at(row, 1)?,
+                })
+            })
+            .map_err(query_error)?;
+        for section in unheaded {
+            sections.push(section.map_err(query_error)?);
+        }
+        Ok(sections)
     }
 }
 
@@ -892,14 +990,15 @@ mod tests {
             "plain AND NOT (words",
             "col:umn* ^ NEAR(",
             "it's \"quoted\" - text",
+            "pla\u{0}in \u{0}",
         ] {
             let hits = store.query(&hybrid(&[1.0, 0.0], text, &filter)).unwrap();
             assert_eq!(ids(&hits), vec!["doc"], "query {text:?}");
         }
-        assert_eq!(fts_query("--- ???"), None);
+        assert_eq!(fts_query(&fts_phrases("--- ???")), None);
         assert_eq!(
-            fts_query("a\"b  c-d").as_deref(),
-            Some("\"a b\" OR \"c-d\"")
+            fts_query(&fts_phrases("a\"b  c-d x\u{0}y\u{7}")).as_deref(),
+            Some("\"a b\" OR \"c-d\" OR \"xy\"")
         );
     }
 
@@ -977,6 +1076,51 @@ mod tests {
             ))
             .unwrap();
         assert!((only[0].score - reciprocal(1) - reciprocal(1)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_title_and_types_written_for_other_content_are_not_reported() {
+        let (_dir, store) = open_temp_store();
+        let one = [(None, [1.0, 0.0], "text")];
+        store_document(&store, "replaced", &one, Some("practice"), Some("semantic"));
+        store_document(
+            &store,
+            "older-writer",
+            &one,
+            Some("practice"),
+            Some("semantic"),
+        );
+        let typed = SearchFilter {
+            entity_types: vec!["practice".to_string()],
+            ..Default::default()
+        };
+        let found = |filter: &SearchFilter| {
+            let hits = store.query(&hybrid(&[1.0, 0.0], "text", filter)).unwrap();
+            hits.into_iter()
+                .map(|hit| (hit.id, hit.title, hit.entity_type, hit.concept_type))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(found(&typed).len(), 2);
+
+        // A plain upsert replaces the document, even with the same hash.
+        store.upsert("replaced", &[1.0, 0.0], "h", "t").unwrap();
+        // A release that predates types stores changed content: its
+        // statement rewrites the hash and leaves the columns it does not
+        // know of.
+        store
+            .conn
+            .execute(
+                "UPDATE embeddings SET content_hash = 'h2' WHERE id = 'older-writer'",
+                [],
+            )
+            .unwrap();
+
+        assert!(found(&typed).is_empty());
+        let all = found(&SearchFilter::default());
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().all(|(_, title, entity, concept)| {
+            title.is_none() && entity.is_none() && concept.is_none()
+        }));
     }
 
     #[test]
@@ -1164,11 +1308,20 @@ mod tests {
         );
         assert_eq!(
             store.sections("doc", None).unwrap().unwrap(),
-            vec![StoredSection {
-                heading: None,
-                text: "Title\nWhat it is".to_string(),
-                span: None,
-            }]
+            vec![
+                StoredSection {
+                    heading: None,
+                    text: "Title\nWhat it is".to_string(),
+                    span: None,
+                },
+                // The text before the first heading, which a match with no
+                // heading may also point at.
+                StoredSection {
+                    heading: None,
+                    text: "Preamble.".to_string(),
+                    span: Some(span(1)),
+                },
+            ]
         );
         assert!(
             store
@@ -1470,7 +1623,9 @@ mod tests {
             lexical: rank.map(|rank| Lexical {
                 bm25: -1.0,
                 rank,
-                passage: passage(2),
+                // The document named "common" matched on common words
+                // only.
+                passage: (id != "common").then_some(passage(2)),
             }),
         };
         let candidates = || {
@@ -1478,6 +1633,7 @@ mod tests {
                 (0, candidate("first", 0.9, Some(2))),
                 (0, candidate("second", 0.8, Some(1))),
                 (0, candidate("third", 0.7, None)),
+                (0, candidate("common", 0.6, Some(1))),
             ]
         };
 
@@ -1488,6 +1644,9 @@ mod tests {
         assert_eq!(by_id("first").passage, passage(1));
         assert_eq!(by_id("second").passage, passage(2));
         assert_eq!(by_id("third").passage, passage(1));
+        // Placed higher by a match on common words alone: that match names
+        // no passage, so the passage nearest in meaning is reported.
+        assert_eq!(by_id("common").passage, passage(1));
 
         let semantic = fuse(candidates(), SearchMode::Semantic, 2);
         assert_eq!(semantic.len(), 2);

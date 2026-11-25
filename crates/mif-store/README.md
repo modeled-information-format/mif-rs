@@ -69,7 +69,12 @@ counts them. Each `SearchMatch` carries the passage's heading, text, and
 span and the document's source, title, and types, and `SearchFilter` has
 exact-match include and exclude lists for entity type and concept type.
 `sections(id, heading)` returns the stored sections with that heading, one
-per occurrence, or with no heading the summary passage's text.
+per occurrence. With no heading it returns the summary passage's text and
+then any section that has no heading (the text before the first one). The
+passage a `Hybrid` match reports is the document's best lexical one only
+when that ranking places the document higher and the passage holds a query
+term found in one passage, or in at most one passage in twenty; otherwise
+it is the best cosine passage.
 `multi_root_query` and `multi_root_sections` do the same across roots:
 cosine similarities are ranked together, and each document keeps the
 lexical rank it has in its own root.
@@ -85,7 +90,9 @@ computed from, and `search` uses only passages whose hash matches the
 document row, so passages left behind by a release that predates them are
 ignored.
 
-Version 2 adds `title`, `entity_type`, and `concept_type` on `embeddings`;
+Version 2 adds `title`, `entity_type`, `concept_type`, and `meta_hash` (the
+content hash those three were written for; they are ignored once an older
+release rewrites the document) on `embeddings`;
 `section`, `text_rowid`, and the four span columns on `passages`; the
 `sections` table; and `passage_text`, an FTS5 table holding passage text.
 `open` upgrades a version-1 database the same way, and a read-only one is

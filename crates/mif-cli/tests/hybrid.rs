@@ -78,8 +78,7 @@ fn corpus(dir: &Path) -> Option<String> {
             "bread",
             "Baking bread",
             None,
-            "# Baking bread\n\nA weekend routine.\n\n## Method\n\n\
-             Knead the dough, let it rise, then bake the loaf.",
+            "A weekend routine.\n\n## Method\n\nKnead the dough, let it rise, then bake the loaf.",
         ),
     );
     // The store sits in `.mif` beside the documents, so each recorded
@@ -298,6 +297,19 @@ fn get_passage_prints_a_section_as_it_was_written() {
             .unwrap()
             .starts_with("Consent handling")
     );
+
+    // A match with no heading is the summary or the text before the first
+    // heading; asking with no heading gives both, and only the second has
+    // a span.
+    let bread = urn("bread");
+    let unheaded = mif_cli(&["--format", "json", "get-passage", &bread, "--db-path", &db]);
+    let parsed: serde_json::Value = serde_json::from_slice(&unheaded.stdout).unwrap();
+    let sections = parsed["sections"].as_array().unwrap();
+    assert_eq!(sections.len(), 2);
+    assert!(sections[0]["span"].is_null());
+    assert_eq!(sections[1]["text"], "A weekend routine.");
+    assert!(sections[1]["heading"].is_null());
+    assert_eq!(sections[1]["span"]["start_line"], 1);
 
     // As text, the section alone is printed.
     let text = mif_cli(&[

@@ -299,6 +299,10 @@ CREATE TABLE IF NOT EXISTS passages (
 
 /// Upgrades a version-1 database to version 2.
 ///
+/// `meta_hash` is the content hash a document's title and types were
+/// written for. A release that predates them rewrites `content_hash` and
+/// leaves them behind; they no longer match and are ignored.
+///
 /// `passage_text` holds each passage's own text and its full-text index;
 /// a passage row points at its text by `text_rowid`. The triggers keep the
 /// text and the sections in step when a release that predates them deletes
@@ -306,6 +310,7 @@ CREATE TABLE IF NOT EXISTS passages (
 const MIGRATE_V2_SQL: &str = "ALTER TABLE embeddings ADD COLUMN title TEXT;
 ALTER TABLE embeddings ADD COLUMN entity_type TEXT;
 ALTER TABLE embeddings ADD COLUMN concept_type TEXT;
+ALTER TABLE embeddings ADD COLUMN meta_hash TEXT;
 ALTER TABLE passages ADD COLUMN section INTEGER;
 ALTER TABLE passages ADD COLUMN text_rowid INTEGER;
 ALTER TABLE passages ADD COLUMN start_char INTEGER;
@@ -347,7 +352,9 @@ END;";
 /// the earliest of several equally scored passages is the one reported.
 const SEARCH_SQL: &str =
     "SELECT e.id, p.heading, COALESCE(p.dim, e.dim), COALESCE(p.vector, e.vector),
-       p.ord, p.text_rowid, e.entity_type, e.concept_type
+       p.ord, p.text_rowid,
+       CASE WHEN e.meta_hash = e.content_hash THEN e.entity_type END,
+       CASE WHEN e.meta_hash = e.content_hash THEN e.concept_type END
 FROM embeddings e
 LEFT JOIN passages p ON p.doc_id = e.id AND p.content_hash = e.content_hash
 WHERE (?1 IS NULL OR substr(e.id, 1, length(?1)) = ?1)
@@ -728,6 +735,14 @@ impl VectorStore {
         if self.has_text {
             tx.execute("DELETE FROM sections WHERE doc_id = ?1", [id])
                 .map_err(query_error)?;
+            // The title and types belonged to the document this replaces.
+            tx.execute(
+                "UPDATE embeddings
+                 SET title = NULL, entity_type = NULL, concept_type = NULL, meta_hash = NULL
+                 WHERE id = ?1",
+                [id],
+            )
+            .map_err(query_error)?;
         }
         tx.commit().map_err(query_error)
     }
@@ -1502,12 +1517,15 @@ fn delete_document(conn: &Connection, id: &str) -> Result<bool, StoreError> {
 /// sections.
 fn write_text(conn: &Connection, document: &DocumentVectors<'_>) -> Result<(), StoreError> {
     conn.execute(
-        "UPDATE embeddings SET title = ?2, entity_type = ?3, concept_type = ?4 WHERE id = ?1",
+        "UPDATE embeddings
+         SET title = ?2, entity_type = ?3, concept_type = ?4, meta_hash = ?5
+         WHERE id = ?1",
         params![
             document.id,
             document.title,
             document.entity_type,
-            document.concept_type
+            document.concept_type,
+            document.content_hash,
         ],
     )
     .map_err(query_error)?;
