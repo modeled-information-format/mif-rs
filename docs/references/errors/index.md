@@ -89,6 +89,9 @@ library crate's own problem type.
 - [mif-mcp-json-serialize-failure/v1](/mif-rs/references/errors/mif-mcp-json-serialize-failure/v1/)
 - [mif-cli-ingest-batch-failed/v1](/mif-rs/references/errors/mif-cli-ingest-batch-failed/v1/)
 - [mif-cli-prune-empty-root/v1](/mif-rs/references/errors/mif-cli-prune-empty-root/v1/)
+- [mif-cli-section-not-found/v1](/mif-rs/references/errors/mif-cli-section-not-found/v1/)
+- [mif-mcp-section-not-found/v1](/mif-rs/references/errors/mif-mcp-section-not-found/v1/)
+- [mif-cli-invalid-ignore-pattern/v1](/mif-rs/references/errors/mif-cli-invalid-ignore-pattern/v1/)
 
 ## Research-harness engine (`mif-rh`)
 

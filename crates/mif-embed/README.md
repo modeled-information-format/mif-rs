@@ -28,9 +28,16 @@ URLs, `**Related:**` lines, table rule rows, and the `Relationships` and
 with the model's own tokenizer (`Embedder::token_count`), and
 `Embedder::embed_passages(texts)` embeds the passage texts in batches,
 returning one vector per text. `Embedder::embed_document(jsonld)` does both:
-it returns one `EmbeddedPassage` (heading and vector) per passage, the
-summary first, and is what `mif-cli` and `mif-mcp` call to ingest a
-document.
+it returns one `EmbeddedPassage` per passage, the summary first, and is what
+`mif-cli` and `mif-mcp` call to ingest a document.
+
+Each `Passage` (and `EmbeddedPassage`) also carries its own text, without the
+title and heading line and without the overlap, and a `Span`: where the
+paragraphs and table rows that text came from sit in the document's body, as
+character offsets (from 0, end exclusive, in Unicode scalar values) and lines
+(from 1). The summary passage has no span. `passages::sections(jsonld)`
+returns the body sections as they are written, heading line included, in the
+order `Passage::section` indexes.
 
 If the platform has no resolvable user cache directory,
 `Embedder::load()` fails with `EmbedError::NoCacheDir` rather than falling
