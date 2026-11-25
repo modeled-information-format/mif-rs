@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-25
+
 Search is hybrid by default, and a match carries the passage that matched. MIF specification pin unchanged (1.4.2). See [ADR-0022](docs/adr/0022-hybrid-search-and-stored-passage-text.md).
 
 ### Added

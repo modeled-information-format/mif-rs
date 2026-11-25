@@ -44,6 +44,7 @@ files against that release's immutable mirror at
 
 | mif-rs | MIF specification | Notes |
 |---|---|---|
+| 0.13.0 | 1.4.2 | No schema change; `search` ranks in hybrid mode by default (semantic plus exact terms), a match carries the passage that matched, and `get-passage` fetches one section (re-ingest to get passage text, types, and sections; `--mode semantic` gives the 0.12.0 ranking) |
 | 0.12.0 | 1.4.2 | No schema change; documents are embedded as passages and `search` ranks each document by its best-matching passage (re-ingest to get the new ranking) |
 | 0.11.0 | 1.4.2 | No schema change; `ingest` reports the embedding model, revision, and normalization |
 | 0.10.0 | 1.4.2 | Concept `@id` must be `urn:mif:<uuid>`; `memoryType` alone satisfies the type check (rules introduced in MIF 1.4.0) |
