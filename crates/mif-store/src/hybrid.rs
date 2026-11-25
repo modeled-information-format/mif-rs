@@ -1495,6 +1495,8 @@ mod tests {
         ));
         let sections = store.sections("old-doc", Some("Kept"));
         let stats = store.passage_stats();
+        let current = store.is_current("old-doc", "old-hash", Some("records/old.md"));
+        let changed = store.is_current("old-doc", "new-hash", Some("records/old.md"));
         let version = schema_version(&store.conn);
         drop(store);
         // Restored before the assertions so the directory can always be
@@ -1515,6 +1517,10 @@ mod tests {
         assert_eq!(hits[0].text, None);
         assert!(typed.unwrap().is_empty());
         assert!(sections.unwrap().unwrap().is_empty());
+        // Nothing can be written here, so what the older release stored is
+        // as current as it gets, and an ingest can skip it.
+        assert!(current.unwrap());
+        assert!(!changed.unwrap());
         assert_eq!(
             stats.unwrap(),
             PassageStats {

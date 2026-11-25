@@ -69,7 +69,8 @@ pub struct Span {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocSection {
     /// The section's heading, cleaned the way [`Passage::heading`] is.
-    /// `None` for body text that precedes the first heading.
+    /// `None` for body text that precedes the first heading, and for a
+    /// section whose heading has no words left once cleaned.
     pub heading: Option<String>,
     /// The section's markdown, unchanged: its heading line, then everything
     /// up to the next heading of level 1 to 3.

@@ -200,6 +200,27 @@ fn semantic_mode_scores_by_cosine_and_text_output_is_unchanged() {
     );
     // An error format chosen for a pipe does not turn results into JSON.
     assert!(!line.trim_start().starts_with('{'));
+
+    // A cosine score keeps four decimal places; a fusion score, which is
+    // small and close to its neighbours, is printed to six.
+    let places = |mode: &str| {
+        let output = mif_cli(&["search", "loaf", "--db-path", &db, "--mode", mode]);
+        let text = String::from_utf8_lossy(&output.stdout).into_owned();
+        let scores: Vec<String> = text
+            .lines()
+            .map(|line| line.split_whitespace().next().unwrap().to_string())
+            .collect();
+        assert_eq!(scores.len(), 3, "{text}");
+        scores
+    };
+    assert!(
+        places("semantic")
+            .iter()
+            .all(|score| score.len() == "0.1234".len())
+    );
+    let fused = places("hybrid");
+    assert!(fused.iter().all(|score| score.len() == "0.012345".len()));
+    assert_ne!(fused[1], fused[2]);
 }
 
 #[test]

@@ -1,4 +1,5 @@
 ---
+# Diátaxis: Explanation
 title: "Hybrid Search and Stored Passage Text"
 description: "Store each passage's text and each section's markdown beside the vectors, rank search by reciprocal rank fusion of cosine similarity and bm25 by default, and return the matching passage with its document, amending ADR-0021's vectors-only store and cosine-only ranking."
 type: adr

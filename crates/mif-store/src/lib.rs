@@ -1,10 +1,12 @@
 //! `SQLite`-backed vector store for document embeddings in the MIF (Modeled
 //! Information Format) ecosystem.
 //!
-//! [`VectorStore`] wraps a single `SQLite` connection and two tables:
+//! [`VectorStore`] wraps a single `SQLite` connection. Its tables are
 //! `embeddings`, one row per document (id, dim, vector, `content_hash`,
-//! `updated_at`, source, namespace), and `passages`, the vectors of the
-//! passages a document was split into (see "Documents and Passages"). Vectors
+//! `updated_at`, source, namespace, title, and types); `passages`, the
+//! vectors of the passages a document was split into (see "Documents and
+//! Passages"); `passage_text`, those passages' text and its full-text
+//! index; and `sections`, each document's body sections as written. Vectors
 //! are stored as a raw little-endian `f32` blob — see "Vector Blob Layout"
 //! below for the exact on-disk format. This crate does not compute
 //! embeddings or timestamps; both are supplied by the caller, keeping the
@@ -909,8 +911,11 @@ impl VectorStore {
     /// Whether the store already holds `id` exactly as an ingest of content
     /// hashing to `content_hash`, read from `source`, would leave it: the
     /// document row carries that hash and that source and has current
-    /// passages. An ingest can skip such a document. A document that has
-    /// only moved is not current, since its stored source is the old path.
+    /// passages stored with their text. An ingest can skip such a document.
+    /// A document that has only moved is not current, since its stored
+    /// source is the old path. In a database that could not be upgraded
+    /// (it is read-only), passages need no text to count: nothing can be
+    /// written there, so there is nothing for an ingest to add.
     ///
     /// # Errors
     ///
@@ -922,19 +927,27 @@ impl VectorStore {
         content_hash: &str,
         source: Option<&str>,
     ) -> Result<bool, StoreError> {
-        // A database that could not be upgraded cannot be written either,
-        // so nothing in it is as an ingest would leave it.
-        if !self.has_text {
+        if !self.has_passages {
             return Ok(false);
         }
+        // A database that could not be upgraded cannot be written, so it
+        // can never hold passage text: there, what the release that wrote
+        // it left is as current as a document gets, and an ingest that
+        // skips unchanged documents has nothing to attempt.
+        let with_text = if self.has_text {
+            "AND p.text_rowid IS NOT NULL"
+        } else {
+            ""
+        };
         self.conn
             .query_row(
-                "SELECT EXISTS (
-                     SELECT 1 FROM embeddings e
-                     JOIN passages p ON p.doc_id = e.id AND p.content_hash = e.content_hash
-                     WHERE e.id = ?1 AND e.content_hash = ?2 AND e.source IS ?3
-                       AND p.text_rowid IS NOT NULL
-                 )",
+                &format!(
+                    "SELECT EXISTS (
+                         SELECT 1 FROM embeddings e
+                         JOIN passages p ON p.doc_id = e.id AND p.content_hash = e.content_hash
+                         WHERE e.id = ?1 AND e.content_hash = ?2 AND e.source IS ?3 {with_text}
+                     )"
+                ),
                 params![id, content_hash, source],
                 |row| row.get(0),
             )

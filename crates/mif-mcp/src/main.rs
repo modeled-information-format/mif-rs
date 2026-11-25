@@ -99,9 +99,10 @@ struct SearchParams {
     /// `.mif/vectors.db`.
     db_path: Option<PathBuf>,
     /// Additional `SQLite` vector store database(s) to search alongside
-    /// `db_path` (or its default), merge-ranked by cosine similarity into
-    /// one result list. Empty or omitted means single-root search,
-    /// unchanged from before this parameter existed. A root listed more
+    /// `db_path` (or its default), merged into one ranked list: by cosine
+    /// similarity in `semantic` mode; in `hybrid` mode cosine similarities
+    /// are ranked together and each document keeps the lexical rank it has
+    /// in its own store. Empty or omitted means single-root search. A root listed more
     /// than once (the same path given as both `db_path` and in
     /// `extra_db_paths`, or repeated within `extra_db_paths`) is not
     /// deduplicated, so its rows are counted and ranked once per
@@ -410,8 +411,7 @@ struct RootStats {
 /// default) alone, exactly as they did before `extra_db_paths` existed.
 /// `total_count` and `extra_roots` are populated only when `extra_db_paths`
 /// was non-empty and omitted entirely otherwise, so a single-root query's
-/// JSON output is byte-for-byte unchanged from before this parameter
-/// existed.
+/// JSON output carries no multi-root field.
 #[derive(Debug, serde::Serialize)]
 struct CorpusStatsResult {
     /// Total number of embeddings stored at the primary root.
@@ -865,15 +865,16 @@ fn to_rooted_search_result(matches: Vec<mif_store::RootedMatch>) -> SearchResult
     }
 }
 
-/// Embeds `query` and ranks previously ingested documents, each by the
-/// cosine similarity of its best-matching passage (a document ingested
+/// Embeds `query` and ranks previously ingested documents by `mode`: the
+/// cosine similarity of each document's best-matching passage, or that
+/// ranking fused with a lexical one over passage text (a document ingested
 /// before passages existed is ranked by its one document vector). Scores
 /// are always finite: the store never ranks a vector whose score is not.
 ///
 /// When `extra_db_paths` is empty, this queries only the resolved `db_path`
-/// root, identically to before this parameter existed. Otherwise it queries
-/// `db_path` (or its default) together with every `extra_db_paths` root,
-/// merge-ranked via [`mif_store::multi_root_search`].
+/// root. Otherwise it queries `db_path` (or its default) together with
+/// every `extra_db_paths` root, merged into one ranked list by
+/// [`mif_store::multi_root_query`].
 fn search_documents_inner(
     query: &str,
     db_path: Option<&Path>,
@@ -940,9 +941,18 @@ fn get_passage_inner(
     db_path: Option<&Path>,
     extra_db_paths: &[PathBuf],
 ) -> Result<GetPassageResult, McpError> {
-    let roots = resolve_db_paths(db_path, extra_db_paths);
-    let (root, sections) = mif_store::multi_root_sections(&roots, id, heading)?
-        .ok_or_else(|| McpError::DocumentNotFound(id.to_string()))?;
+    // One root is asked directly, so its failures are its own and not a
+    // multi-root one.
+    let found = if extra_db_paths.is_empty() {
+        let root = resolve_db_path(db_path);
+        mif_store::VectorStore::open(&root)?
+            .sections(id, heading)?
+            .map(|sections| (root, sections))
+    } else {
+        let roots = resolve_db_paths(db_path, extra_db_paths);
+        mif_store::multi_root_sections(&roots, id, heading)?
+    };
+    let (root, sections) = found.ok_or_else(|| McpError::DocumentNotFound(id.to_string()))?;
     if sections.is_empty() {
         return Err(McpError::SectionNotFound {
             id: id.to_string(),

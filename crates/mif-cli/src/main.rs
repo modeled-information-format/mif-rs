@@ -88,11 +88,14 @@ enum Command {
         /// directory argument (`notes/archive/**`). `*` and `?` stay within
         /// one path component and `**` crosses them. A matching directory
         /// is not entered. A file named as an argument itself is always
-        /// ingested.
+        /// ingested, even from a hidden or ignored directory; `prune` does
+        /// not look there, so its next run removes that document unless
+        /// the file is also reachable from the prune root.
         #[arg(long, value_name = "GLOB")]
         ignore: Vec<String>,
     },
-    /// Free-text semantic search over previously ingested documents.
+    /// Free-text search over previously ingested documents, by meaning and,
+    /// by default, by exact terms as well (see `--mode`).
     Search {
         /// The query text to embed and rank stored documents against.
         /// Accepts a value starting with `-` (free-authored prose); the
@@ -106,8 +109,10 @@ enum Command {
         #[arg(long)]
         db_path: Option<PathBuf>,
         /// Additional `SQLite` vector store database(s) to search alongside
-        /// `--db-path` (or its default), merge-ranked by cosine similarity
-        /// into one result list. Repeatable (`--extra-db-path a --extra-db-path
+        /// `--db-path` (or its default), merged into one ranked list: by
+        /// cosine similarity in `semantic` mode; in `hybrid` mode cosine
+        /// similarities are ranked together and each document keeps the
+        /// lexical rank it has in its own store. Repeatable (`--extra-db-path a --extra-db-path
         /// b`). A root queried more than once (the same path given twice, or
         /// given as both `--db-path` and `--extra-db-path`) is not
         /// deduplicated, so its rows are counted and ranked once per
@@ -192,7 +197,9 @@ enum Command {
     /// under a directory. A document exists if a `.md` file with
     /// frontmatter, or a JSON-LD file, beneath the directory carries its id.
     /// Hidden directories are not looked in, as `ingest` does not ingest
-    /// from them, so a copy left in one does not keep a document.
+    /// from them, so a copy left in one does not keep a document. Neither
+    /// does a file `ingest` was given by name from a hidden or ignored
+    /// directory: that document is removed.
     Prune {
         /// The directory holding the documents to keep.
         #[arg(long)]
@@ -717,7 +724,11 @@ fn passage_suffix(heading: Option<&str>, show_passage: bool) -> String {
 
 /// Formats `search` results for display, one line per document, in the
 /// same `score  id` form as [`format_matches`].
-fn format_search_matches(matches: &[mif_store::SearchMatch], show_passage: bool) -> String {
+fn format_search_matches(
+    matches: &[mif_store::SearchMatch],
+    show_passage: bool,
+    places: usize,
+) -> String {
     if matches.is_empty() {
         return "(no matches)".to_string();
     }
@@ -725,7 +736,7 @@ fn format_search_matches(matches: &[mif_store::SearchMatch], show_passage: bool)
         .iter()
         .map(|m| {
             let passage = passage_suffix(m.heading.as_deref(), show_passage);
-            format!("{:.4}  {}{passage}", m.score, m.id)
+            format!("{:.places$}  {}{passage}", m.score, m.id)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -736,6 +747,7 @@ fn format_search_matches(matches: &[mif_store::SearchMatch], show_passage: bool)
 fn format_rooted_search_matches(
     matches: &[mif_store::RootedSearchMatch],
     show_passage: bool,
+    places: usize,
 ) -> String {
     if matches.is_empty() {
         return "(no matches)".to_string();
@@ -745,7 +757,7 @@ fn format_rooted_search_matches(
         .map(|m| {
             let passage = passage_suffix(m.document.heading.as_deref(), show_passage);
             format!(
-                "{:.4}  {}  (root={}){passage}",
+                "{:.places$}  {}  (root={}){passage}",
                 m.document.score,
                 m.document.id,
                 m.root.display()
@@ -753,6 +765,16 @@ fn format_rooted_search_matches(
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// How many decimal places a score is printed to. A cosine similarity keeps
+/// the four places it has always had. A fusion score is small and falls off
+/// slowly with rank, so it needs six for neighbouring results to differ.
+const fn score_places(mode: mif_store::SearchMode) -> usize {
+    match mode {
+        mif_store::SearchMode::Semantic => 4,
+        mif_store::SearchMode::Hybrid => 6,
+    }
 }
 
 /// A span as JSON: its character offsets and lines in the document body.
@@ -1307,15 +1329,17 @@ fn prune(
     Ok(lines.join("\n"))
 }
 
-/// Embeds `query` and ranks previously ingested documents, each by the
-/// cosine similarity of its best-matching passage (a document ingested
-/// before passages existed is ranked by its one document vector).
+/// Embeds `query` and ranks previously ingested documents by
+/// `options.mode`: the cosine similarity of each document's best-matching
+/// passage, or that ranking fused with a lexical one over passage text (a
+/// document ingested before passages existed is ranked by its one document
+/// vector).
 ///
 /// When `extra_db_path` is empty, this queries only the resolved `db_path`
 /// root, identically to single-root usage before multi-root support existed.
 /// Otherwise it queries `db_path` (or its default) together with every
-/// `extra_db_path` root, merge-ranked by cosine similarity via
-/// [`mif_store::multi_root_search`].
+/// `extra_db_path` root, merged into one ranked list by
+/// [`mif_store::multi_root_query`].
 ///
 /// # Errors
 ///
@@ -1345,7 +1369,11 @@ fn search(
             let matches: Vec<_> = matches.iter().map(|m| match_json(m, None)).collect();
             return to_json_text(&serde_json::json!({ "matches": matches }));
         }
-        return Ok(format_search_matches(&matches, options.show_passage));
+        return Ok(format_search_matches(
+            &matches,
+            options.show_passage,
+            score_places(options.mode),
+        ));
     }
 
     let roots = resolve_db_paths(db_path, extra_db_path);
@@ -1357,7 +1385,11 @@ fn search(
             .collect();
         return to_json_text(&serde_json::json!({ "matches": matches }));
     }
-    Ok(format_rooted_search_matches(&matches, options.show_passage))
+    Ok(format_rooted_search_matches(
+        &matches,
+        options.show_passage,
+        score_places(options.mode),
+    ))
 }
 
 /// Prints the sections of an ingested document headed `heading`, as they
@@ -1380,9 +1412,18 @@ fn get_passage(
     extra_db_path: &[PathBuf],
     json: bool,
 ) -> Result<String, CliError> {
-    let roots = resolve_db_paths(db_path, extra_db_path);
-    let (root, sections) = mif_store::multi_root_sections(&roots, id, heading)?
-        .ok_or_else(|| CliError::DocumentNotFound(id.to_string()))?;
+    // One root is asked directly, so its failures are its own and not a
+    // multi-root one.
+    let found = if extra_db_path.is_empty() {
+        let root = resolve_db_path(db_path);
+        mif_store::VectorStore::open(&root)?
+            .sections(id, heading)?
+            .map(|sections| (root, sections))
+    } else {
+        let roots = resolve_db_paths(db_path, extra_db_path);
+        mif_store::multi_root_sections(&roots, id, heading)?
+    };
+    let (root, sections) = found.ok_or_else(|| CliError::DocumentNotFound(id.to_string()))?;
     if sections.is_empty() {
         return Err(CliError::SectionNotFound {
             id: id.to_string(),
