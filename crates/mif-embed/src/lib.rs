@@ -53,6 +53,14 @@ pub struct EmbeddedPassage {
     /// The body heading the passage was taken from; see
     /// [`passages::Passage::heading`].
     pub heading: Option<String>,
+    /// The passage's own text; see [`passages::Passage::body`].
+    pub text: String,
+    /// Where that text sits in the document's body; see
+    /// [`passages::Passage::span`].
+    pub span: Option<passages::Span>,
+    /// The index of the section the passage came from; see
+    /// [`passages::Passage::section`].
+    pub section: Option<usize>,
     /// The passage's embedding vector.
     pub vector: Vec<f32>,
 }
@@ -417,6 +425,9 @@ impl Embedder {
             .zip(vectors)
             .map(|(passage, vector)| EmbeddedPassage {
                 heading: passage.heading,
+                text: passage.body,
+                span: passage.span,
+                section: passage.section,
                 vector,
             })
             .collect())

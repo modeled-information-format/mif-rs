@@ -30,7 +30,8 @@ const DEFAULT_DB_PATH: &str = ".mif/vectors.db";
 )]
 struct Cli {
     /// Error rendering format. Defaults to `pretty` on a terminal and `json`
-    /// otherwise.
+    /// otherwise. Given as `json`, it also makes `search` and `get-passage`
+    /// print their results as JSON; without the flag they print text.
     #[arg(long, global = true, value_parser = ["pretty", "json"])]
     format: Option<String>,
     #[command(subcommand)]
@@ -80,6 +81,16 @@ enum Command {
         /// and current passages.
         #[arg(long)]
         changed_only: bool,
+        /// Leave out files and directories beneath a directory argument
+        /// that match this pattern. Repeatable. A pattern with no `/`
+        /// matches a file or directory name at any depth (`drafts`,
+        /// `*.draft.md`); one with a `/` matches the path relative to the
+        /// directory argument (`notes/archive/**`). `*` and `?` stay within
+        /// one path component and `**` crosses them. A matching directory
+        /// is not entered. A file named as an argument itself is always
+        /// ingested.
+        #[arg(long, value_name = "GLOB")]
+        ignore: Vec<String>,
     },
     /// Free-text semantic search over previously ingested documents.
     Search {
@@ -118,10 +129,53 @@ enum Command {
         /// Only documents whose MIF namespace starts with this.
         #[arg(long)]
         namespace_prefix: Option<String>,
+        /// Only documents whose ontology entity type (`entity.entity_type`)
+        /// is exactly this. Repeatable: any of the values given matches.
+        /// Documents ingested before types were recorded never match.
+        #[arg(long, value_name = "TYPE")]
+        entity_type: Vec<String>,
+        /// No document whose ontology entity type is exactly this.
+        /// Repeatable.
+        #[arg(long, value_name = "TYPE")]
+        exclude_entity_type: Vec<String>,
+        /// Only documents whose concept type (`conceptType`) is exactly
+        /// this. Repeatable: any of the values given matches.
+        #[arg(long, value_name = "TYPE")]
+        concept_type: Vec<String>,
+        /// No document whose concept type is exactly this. Repeatable.
+        #[arg(long, value_name = "TYPE")]
+        exclude_concept_type: Vec<String>,
+        /// How to rank. `hybrid` fuses the semantic ranking with a lexical
+        /// one over passage text, so an identifier or an exact term is
+        /// found by the text that holds it; the score is then a reciprocal
+        /// rank fusion value, not a cosine similarity. `semantic` ranks by
+        /// cosine similarity alone, as releases before 0.13.0 did.
+        #[arg(long, value_parser = ["semantic", "hybrid"], default_value = "hybrid")]
+        mode: String,
         /// Append the heading of each document's best-matching passage to
         /// its result line, as `[Heading]`.
         #[arg(long)]
         show_passage: bool,
+    },
+    /// Print one section of an ingested document as it was written, or,
+    /// with no `--heading`, the document's summary. A heading that occurs
+    /// more than once in the document prints each occurrence.
+    GetPassage {
+        /// The id of the document (as reported by `ingest` and `search`).
+        id: String,
+        /// The section's heading, as `search` reports it. Omit for the
+        /// document's summary.
+        #[arg(long)]
+        heading: Option<String>,
+        /// Path to the `SQLite` vector store database. Defaults to
+        /// `.mif/vectors.db`.
+        #[arg(long)]
+        db_path: Option<PathBuf>,
+        /// Additional `SQLite` vector store database(s) to look in after
+        /// `--db-path` (or its default). The document comes from the first
+        /// root, in that order, that holds it.
+        #[arg(long)]
+        extra_db_path: Vec<PathBuf>,
     },
     /// Remove one document's vectors from the vector store.
     Remove {
@@ -135,6 +189,8 @@ enum Command {
     /// Remove from the vector store every document that no longer exists
     /// under a directory. A document exists if a `.md` file with
     /// frontmatter, or a JSON-LD file, beneath the directory carries its id.
+    /// Hidden directories are not looked in, as `ingest` does not ingest
+    /// from them, so a copy left in one does not keep a document.
     Prune {
         /// The directory holding the documents to keep.
         #[arg(long)]
@@ -146,6 +202,10 @@ enum Command {
         /// List what would be removed without removing it.
         #[arg(long)]
         dry_run: bool,
+        /// Do not count files and directories that match this pattern.
+        /// Repeatable. See `ingest`'s `--ignore` for the pattern rules.
+        #[arg(long, value_name = "GLOB")]
+        ignore: Vec<String>,
     },
     /// Find previously ingested documents similar to an already-ingested one.
     FindSimilar {
@@ -302,6 +362,27 @@ enum CliError {
         /// The directory that was scanned.
         root: String,
     },
+    /// `get-passage` found the document but nothing stored for it under the
+    /// heading asked for.
+    #[error(
+        "no section {} is stored for document '{id}'",
+        heading.as_ref().map_or_else(|| "summary".to_string(), |heading| format!("headed '{heading}'"))
+    )]
+    SectionNotFound {
+        /// The document that was found.
+        id: String,
+        /// The heading asked for; `None` for the summary.
+        heading: Option<String>,
+    },
+    /// An `--ignore` pattern is not a valid glob.
+    #[error("invalid --ignore pattern '{pattern}': {source}")]
+    InvalidIgnore {
+        /// The pattern as given.
+        pattern: String,
+        /// Why it could not be read.
+        #[source]
+        source: globset::Error,
+    },
 }
 
 impl CliError {
@@ -346,6 +427,20 @@ impl CliError {
                 slug: "mif-cli-prune-empty-root",
                 version: "v1",
                 title: "No MIF document found under the prune root",
+                status: 400,
+                exit_code: 2,
+            },
+            Self::SectionNotFound { .. } => ProblemMeta {
+                slug: "mif-cli-section-not-found",
+                version: "v1",
+                title: "No such section is stored for the document",
+                status: 404,
+                exit_code: 3,
+            },
+            Self::InvalidIgnore { .. } => ProblemMeta {
+                slug: "mif-cli-invalid-ignore-pattern",
+                version: "v1",
+                title: "An --ignore pattern is not a valid glob",
                 status: 400,
                 exit_code: 2,
             },
@@ -412,6 +507,23 @@ impl ToProblem for CliError {
                     "Check `--root` names the directory that holds the ingested documents.",
                     mif_problem::Applicability::MaybeIncorrect,
                 )),
+            Self::SectionNotFound { .. } => self
+                .meta()
+                .into_details(env!("CARGO_PKG_NAME"), self.to_string())
+                .with_suggested_fix(mif_problem::SuggestedFix::new(
+                    "Use a heading exactly as `mif-cli search --show-passage` reports it. A \
+                     document ingested by a release before 0.13.0 has no sections until it is \
+                     ingested again.",
+                    mif_problem::Applicability::MaybeIncorrect,
+                )),
+            Self::InvalidIgnore { .. } => self
+                .meta()
+                .into_details(env!("CARGO_PKG_NAME"), self.to_string())
+                .with_suggested_fix(mif_problem::SuggestedFix::new(
+                    "Write the pattern as a glob: `*` and `?` within one path component, `**` \
+                     across them, `[abc]` for a character class.",
+                    mif_problem::Applicability::MaybeIncorrect,
+                )),
             Self::Json { .. } | Self::JsonSerialize { .. } => self
                 .meta()
                 .into_details(env!("CARGO_PKG_NAME"), self.to_string()),
@@ -422,7 +534,8 @@ impl ToProblem for CliError {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let format = OutputFormat::select(cli.format.as_deref(), std::io::stderr().is_terminal());
-    match run(&cli.command) {
+    let json = cli.format.as_deref() == Some("json");
+    match run(&cli.command, json) {
         Ok(message) => {
             println!("{message}");
             ExitCode::SUCCESS
@@ -434,7 +547,9 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(command: &Command) -> Result<String, CliError> {
+/// Runs one subcommand. `json` is whether `--format json` was given, which
+/// `search` and `get-passage` print their results by.
+fn run(command: &Command, json: bool) -> Result<String, CliError> {
     match command {
         Command::Validate { file, level } => validate(file, *level),
         Command::Ontology { command } => match command {
@@ -444,7 +559,8 @@ fn run(command: &Command) -> Result<String, CliError> {
             files,
             db_path,
             changed_only,
-        } => ingest_paths(files, db_path.as_deref(), *changed_only),
+            ignore,
+        } => ingest_paths(files, db_path.as_deref(), *changed_only, ignore),
         Command::Search {
             query,
             db_path,
@@ -453,6 +569,11 @@ fn run(command: &Command) -> Result<String, CliError> {
             id_prefix,
             source_prefix,
             namespace_prefix,
+            entity_type,
+            exclude_entity_type,
+            concept_type,
+            exclude_concept_type,
+            mode,
             show_passage,
         } => search(
             query,
@@ -464,16 +585,39 @@ fn run(command: &Command) -> Result<String, CliError> {
                     id_prefix: id_prefix.clone(),
                     source_prefix: source_prefix.clone(),
                     namespace_prefix: namespace_prefix.clone(),
+                    entity_types: entity_type.clone(),
+                    exclude_entity_types: exclude_entity_type.clone(),
+                    concept_types: concept_type.clone(),
+                    exclude_concept_types: exclude_concept_type.clone(),
+                },
+                mode: if mode == "semantic" {
+                    mif_store::SearchMode::Semantic
+                } else {
+                    mif_store::SearchMode::Hybrid
                 },
                 show_passage: *show_passage,
+                json,
             },
+        ),
+        Command::GetPassage {
+            id,
+            heading,
+            db_path,
+            extra_db_path,
+        } => get_passage(
+            id,
+            heading.as_deref(),
+            db_path.as_deref(),
+            extra_db_path,
+            json,
         ),
         Command::Remove { id, db_path } => remove(id, db_path.as_deref()),
         Command::Prune {
             root,
             db_path,
             dry_run,
-        } => prune(root, db_path.as_deref(), *dry_run),
+            ignore,
+        } => prune(root, db_path.as_deref(), *dry_run, ignore),
         Command::FindSimilar {
             id,
             db_path,
@@ -552,8 +696,13 @@ struct SearchOptions {
     limit: usize,
     /// Which stored documents to rank.
     filter: mif_store::SearchFilter,
+    /// How to rank them.
+    mode: mif_store::SearchMode,
     /// Whether to append each match's passage heading to its line.
     show_passage: bool,
+    /// Whether to print the matches as JSON, with everything known about
+    /// each, instead of one text line per match.
+    json: bool,
 }
 
 /// The ` [Heading]` suffix of a result line, when headings are asked for
@@ -592,16 +741,54 @@ fn format_rooted_search_matches(
     matches
         .iter()
         .map(|m| {
-            let passage = passage_suffix(m.heading.as_deref(), show_passage);
+            let passage = passage_suffix(m.document.heading.as_deref(), show_passage);
             format!(
                 "{:.4}  {}  (root={}){passage}",
-                m.score,
-                m.id,
+                m.document.score,
+                m.document.id,
                 m.root.display()
             )
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A span as JSON: its character offsets and lines in the document body.
+fn span_json(span: mif_store::PassageSpan) -> serde_json::Value {
+    serde_json::json!({
+        "start_char": span.start_char,
+        "end_char": span.end_char,
+        "start_line": span.start_line,
+        "end_line": span.end_line,
+    })
+}
+
+/// One `search` match as JSON: the document, the passage that matched, and
+/// the scores. A field with nothing to report is `null`; `root` is present
+/// only for a multi-root search.
+fn match_json(matched: &mif_store::SearchMatch, root: Option<&Path>) -> serde_json::Value {
+    let mut entry = serde_json::json!({
+        "id": matched.id,
+        "score": matched.score,
+        "cosine": matched.cosine,
+        "bm25": matched.bm25,
+        "path": matched.source,
+        "title": matched.title,
+        "entity_type": matched.entity_type,
+        "concept_type": matched.concept_type,
+        "heading": matched.heading,
+        "text": matched.text,
+        "span": matched.span.map(span_json),
+    });
+    if let (Some(root), Some(fields)) = (root, entry.as_object_mut()) {
+        fields.insert("root".to_string(), root.display().to_string().into());
+    }
+    entry
+}
+
+/// Serializes a result as pretty-printed JSON text.
+fn to_json_text(value: &serde_json::Value) -> Result<String, CliError> {
+    serde_json::to_string_pretty(value).map_err(|source| CliError::JsonSerialize { source })
 }
 
 /// Validates one MIF document: projects markdown-with-frontmatter or
@@ -751,7 +938,9 @@ fn ingest_paths(
     paths: &[PathBuf],
     db_path: Option<&Path>,
     changed_only: bool,
+    ignore: &[String],
 ) -> Result<String, CliError> {
+    let ignore = Ignore::new(ignore)?;
     let mut context = IngestContext::new(db_path);
     if let [file] = paths
         && !file.is_dir()
@@ -763,7 +952,7 @@ fn ingest_paths(
     for path in paths {
         if path.is_dir() {
             let mut found = Vec::new();
-            walk(path, true, &mut found)?;
+            walk(path, path, &ignore, &mut found)?;
             files.extend(found.into_iter().filter(|file| is_markdown_document(file)));
         } else {
             files.push(path.clone());
@@ -851,6 +1040,18 @@ fn ingest_one(
         .map(|p| mif_store::PassageVector {
             heading: p.heading.as_deref(),
             vector: &p.vector,
+            text: Some(&p.text),
+            span: p.span.map(store_span),
+            section: p.section,
+        })
+        .collect();
+    let written = mif_embed::passages::sections(&jsonld);
+    let sections: Vec<mif_store::SectionText<'_>> = written
+        .iter()
+        .map(|section| mif_store::SectionText {
+            heading: section.heading.as_deref(),
+            text: &section.text,
+            span: store_span(section.span),
         })
         .collect();
     let updated_at = chrono::Utc::now().to_rfc3339();
@@ -863,7 +1064,15 @@ fn ingest_one(
             content_hash: &hash,
             updated_at: &updated_at,
             source: Some(&source),
-            namespace: jsonld.get("namespace").and_then(serde_json::Value::as_str),
+            namespace: text_at(&jsonld, "namespace"),
+            title: text_at(&jsonld, "title"),
+            entity_type: jsonld
+                .get("entity")
+                .and_then(|entity| text_at(entity, "entity_type")),
+            // `memoryType` is the deprecated name of `conceptType`.
+            concept_type: text_at(&jsonld, "conceptType")
+                .or_else(|| text_at(&jsonld, "memoryType")),
+            sections: &sections,
         })?;
 
     Ok(format!(
@@ -875,11 +1084,82 @@ fn ingest_one(
     ))
 }
 
+/// A string field of a JSON object.
+fn text_at<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    value.get(key).and_then(serde_json::Value::as_str)
+}
+
+/// A span from the passage builder as the store records it.
+const fn store_span(span: mif_embed::passages::Span) -> mif_store::PassageSpan {
+    mif_store::PassageSpan {
+        start_char: span.start_char,
+        end_char: span.end_char,
+        start_line: span.start_line,
+        end_line: span.end_line,
+    }
+}
+
+/// The `--ignore` patterns of an `ingest` or a `prune`.
+///
+/// A pattern with no `/` is matched against a file or directory name, so it
+/// applies at any depth; one with a `/` is matched against the path
+/// relative to the directory being walked. `*` and `?` stay within one
+/// path component, and `**` crosses them.
+struct Ignore {
+    names: globset::GlobSet,
+    paths: globset::GlobSet,
+}
+
+impl Ignore {
+    fn new(patterns: &[String]) -> Result<Self, CliError> {
+        let mut names = globset::GlobSetBuilder::new();
+        let mut paths = globset::GlobSetBuilder::new();
+        for pattern in patterns {
+            let invalid = |source| CliError::InvalidIgnore {
+                pattern: pattern.clone(),
+                source,
+            };
+            // `drafts/` names the directory `drafts`; `/notes` is anchored
+            // to the walked directory, which every path pattern already is.
+            let trimmed = pattern.trim_end_matches('/');
+            let anchored = trimmed.contains('/');
+            let glob = globset::GlobBuilder::new(trimmed.trim_start_matches('/'))
+                .literal_separator(true)
+                .build()
+                .map_err(invalid)?;
+            if anchored {
+                paths.add(glob);
+            } else {
+                names.add(glob);
+            }
+        }
+        let invalid = |source| CliError::InvalidIgnore {
+            pattern: patterns.join(" "),
+            source,
+        };
+        Ok(Self {
+            names: names.build().map_err(invalid)?,
+            paths: paths.build().map_err(invalid)?,
+        })
+    }
+
+    /// Whether the entry at `path`, beneath the walked directory `root`, is
+    /// left out.
+    fn matches(&self, root: &Path, path: &Path) -> bool {
+        path.file_name()
+            .is_some_and(|name| self.names.is_match(name))
+            || path
+                .strip_prefix(root)
+                .is_ok_and(|relative| self.paths.is_match(relative))
+    }
+}
+
 /// Collects every file beneath `dir`, in path order, including files
-/// reached through a symbolic link. `.git` and `node_modules` are never
-/// entered, and with `skip_hidden` neither is any directory whose name
-/// starts with a dot. Symbolic links to directories are not followed.
-fn walk(dir: &Path, skip_hidden: bool, out: &mut Vec<PathBuf>) -> Result<(), CliError> {
+/// reached through a symbolic link, leaving out whatever `ignore` matches
+/// (by its path relative to `root`, the directory the walk started at).
+/// `.git`, `node_modules`, and any directory whose name starts with a dot
+/// are never entered. Symbolic links to directories are not followed.
+fn walk(dir: &Path, root: &Path, ignore: &Ignore, out: &mut Vec<PathBuf>) -> Result<(), CliError> {
     let io_error = |source| CliError::Io {
         path: dir.display().to_string(),
         source,
@@ -890,19 +1170,19 @@ fn walk(dir: &Path, skip_hidden: bool, out: &mut Vec<PathBuf>) -> Result<(), Cli
         .map_err(io_error)?;
     entries.sort_by_key(std::fs::DirEntry::file_name);
     for entry in entries {
+        let path = entry.path();
+        if ignore.matches(root, &path) {
+            continue;
+        }
         let name = entry.file_name();
         let name = name.to_string_lossy();
         let file_type = entry.file_type().map_err(io_error)?;
         // A link to a file is that file; a link to a directory is not
         // entered, since it may lead back into the tree being walked.
-        if file_type.is_file() || (file_type.is_symlink() && entry.path().is_file()) {
-            out.push(entry.path());
-        } else if file_type.is_dir()
-            && name != ".git"
-            && name != "node_modules"
-            && !(skip_hidden && name.starts_with('.'))
-        {
-            walk(&entry.path(), skip_hidden, out)?;
+        if file_type.is_file() || (file_type.is_symlink() && path.is_file()) {
+            out.push(path);
+        } else if file_type.is_dir() && name != "node_modules" && !name.starts_with('.') {
+            walk(&path, root, ignore, out)?;
         }
     }
     Ok(())
@@ -987,9 +1267,14 @@ fn remove(id: &str, db_path: Option<&Path>) -> Result<String, CliError> {
 /// Returns [`CliError::PruneEmptyRoot`] if no document is found under
 /// `root`, or [`CliError`] if `root` cannot be read, a file's frontmatter
 /// cannot be parsed, or the vector store cannot be opened or written.
-fn prune(root: &Path, db_path: Option<&Path>, dry_run: bool) -> Result<String, CliError> {
+fn prune(
+    root: &Path,
+    db_path: Option<&Path>,
+    dry_run: bool,
+    ignore: &[String],
+) -> Result<String, CliError> {
     let mut files = Vec::new();
-    walk(root, false, &mut files)?;
+    walk(root, root, &Ignore::new(ignore)?, &mut files)?;
     let mut keep = HashSet::new();
     for file in &files {
         keep.extend(document_id(file)?);
@@ -1042,17 +1327,87 @@ fn search(
 ) -> Result<String, CliError> {
     let embedder = mif_embed::Embedder::load()?;
     let vector = embedder.embed(query)?;
+    let search = mif_store::SearchQuery {
+        vector: &vector,
+        text: query,
+        mode: options.mode,
+        limit: options.limit,
+        filter: &options.filter,
+    };
 
     if extra_db_path.is_empty() {
         let db_path = resolve_db_path(db_path);
         let store = mif_store::VectorStore::open(&db_path)?;
-        let matches = store.search(&vector, options.limit, &options.filter)?;
+        let matches = store.query(&search)?;
+        if options.json {
+            let matches: Vec<_> = matches.iter().map(|m| match_json(m, None)).collect();
+            return to_json_text(&serde_json::json!({ "matches": matches }));
+        }
         return Ok(format_search_matches(&matches, options.show_passage));
     }
 
     let roots = resolve_db_paths(db_path, extra_db_path);
-    let matches = mif_store::multi_root_search(&roots, &vector, options.limit, &options.filter)?;
+    let matches = mif_store::multi_root_query(&roots, &search)?;
+    if options.json {
+        let matches: Vec<_> = matches
+            .iter()
+            .map(|m| match_json(&m.document, Some(&m.root)))
+            .collect();
+        return to_json_text(&serde_json::json!({ "matches": matches }));
+    }
     Ok(format_rooted_search_matches(&matches, options.show_passage))
+}
+
+/// Prints the sections of an ingested document headed `heading`, as they
+/// were written, or with no `heading` the document's summary.
+///
+/// With `extra_db_path`, the document comes from the first root (`db_path`,
+/// then each `extra_db_path` in order) that holds it.
+///
+/// # Errors
+///
+/// Returns [`CliError::DocumentNotFound`] if `id` is in no queried root,
+/// [`CliError::SectionNotFound`] if the document has nothing stored under
+/// `heading`, or [`CliError`] if a vector store root cannot be opened or
+/// queried.
+fn get_passage(
+    id: &str,
+    heading: Option<&str>,
+    db_path: Option<&Path>,
+    extra_db_path: &[PathBuf],
+    json: bool,
+) -> Result<String, CliError> {
+    let roots = resolve_db_paths(db_path, extra_db_path);
+    let (root, sections) = mif_store::multi_root_sections(&roots, id, heading)?
+        .ok_or_else(|| CliError::DocumentNotFound(id.to_string()))?;
+    if sections.is_empty() {
+        return Err(CliError::SectionNotFound {
+            id: id.to_string(),
+            heading: heading.map(ToString::to_string),
+        });
+    }
+    if !json {
+        return Ok(sections
+            .iter()
+            .map(|section| section.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n"));
+    }
+    let sections: Vec<_> = sections
+        .iter()
+        .map(|section| {
+            serde_json::json!({
+                "heading": section.heading,
+                "text": section.text,
+                "span": section.span.map(span_json),
+            })
+        })
+        .collect();
+    let mut result = serde_json::json!({ "id": id, "sections": sections });
+    if let (false, Some(fields)) = (extra_db_path.is_empty(), result.as_object_mut()) {
+        fields.insert("root".to_string(), root.display().to_string().into());
+    }
+    to_json_text(&result)
 }
 
 /// Finds documents similar to an already-ingested one, identified by `id`.
@@ -1143,11 +1498,13 @@ fn corpus_stats(db_path: Option<&Path>, extra_db_path: &[PathBuf]) -> Result<Str
             || format!("count=0 db={}", db_path.display()),
             |dim| {
                 format!(
-                    "count={} dim={dim} db={} passages={} documents_without_passages={}",
+                    "count={} dim={dim} db={} passages={} documents_without_passages={} \
+                     documents_without_text={}",
                     stats.count,
                     db_path.display(),
                     passages.passage_count,
-                    passages.documents_without_passages
+                    passages.documents_without_passages,
+                    passages.documents_without_text
                 )
             },
         ));
@@ -1271,6 +1628,11 @@ fn emit_markdown(
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    /// Runs a subcommand the way a call without `--format json` does.
+    fn run_text(command: &Command) -> Result<String, CliError> {
+        run(command, false)
+    }
 
     use mif_problem::{OutputFormat, ToProblem};
 
@@ -2037,7 +2399,7 @@ No type field.
             "ontology:\n  id: base\n  version: 1.0.0\n",
         )
         .unwrap();
-        let resolve_result = run(&Command::Ontology {
+        let resolve_result = run_text(&Command::Ontology {
             command: OntologyCommand::Resolve {
                 id: "base".to_string(),
                 ontologies_dir: ontologies_dir.path().to_path_buf(),
@@ -2046,7 +2408,7 @@ No type field.
         assert!(resolve_result.is_ok());
 
         let missing_file = tempfile::tempdir().unwrap().path().join("missing.json");
-        let validate_result = run(&Command::Validate {
+        let validate_result = run_text(&Command::Validate {
             file: missing_file,
             level: 1,
         });
@@ -2056,14 +2418,15 @@ No type field.
         let db_path = db_dir.path().join("vectors.db");
         warm_embedding_model_cache();
         let doc_file = write_temp_file(VALID_MARKDOWN_FIXTURE);
-        let ingest_result = run(&Command::Ingest {
+        let ingest_result = run_text(&Command::Ingest {
             files: vec![doc_file.path().to_path_buf()],
             db_path: Some(db_path.clone()),
             changed_only: false,
+            ignore: Vec::new(),
         });
         assert!(ingest_result.is_ok());
 
-        let search_result = run(&Command::Search {
+        let search_result = run_text(&Command::Search {
             query: "test content".to_string(),
             db_path: Some(db_path.clone()),
             extra_db_path: Vec::new(),
@@ -2071,11 +2434,16 @@ No type field.
             id_prefix: None,
             source_prefix: None,
             namespace_prefix: None,
+            entity_type: Vec::new(),
+            exclude_entity_type: Vec::new(),
+            concept_type: Vec::new(),
+            exclude_concept_type: Vec::new(),
+            mode: "hybrid".to_string(),
             show_passage: false,
         });
         assert!(search_result.is_ok());
 
-        let find_similar_result = run(&Command::FindSimilar {
+        let find_similar_result = run_text(&Command::FindSimilar {
             id: "urn:mif:89886348-4773-5732-88b5-84366da76468".to_string(),
             db_path: Some(db_path.clone()),
             extra_db_path: Vec::new(),
@@ -2083,7 +2451,7 @@ No type field.
         });
         assert!(find_similar_result.is_ok());
 
-        let corpus_stats_result = run(&Command::CorpusStats {
+        let corpus_stats_result = run_text(&Command::CorpusStats {
             db_path: Some(db_path),
             extra_db_path: Vec::new(),
         });
@@ -2379,7 +2747,9 @@ No type field.
         let store = mif_store::VectorStore::open(&db_path).unwrap();
         assert_eq!(store.passage_stats().unwrap().passage_count, 3);
         let stats = corpus_stats(Some(&db_path), &[]).unwrap();
-        assert!(stats.ends_with("passages=3 documents_without_passages=0"));
+        assert!(
+            stats.ends_with("passages=3 documents_without_passages=0 documents_without_text=0")
+        );
     }
 
     #[test]
@@ -2493,7 +2863,7 @@ No type field.
         )
         .unwrap();
 
-        let error = ingest_paths(&[docs], Some(&db_path), false).unwrap_err();
+        let error = ingest_paths(&[docs], Some(&db_path), false, &[]).unwrap_err();
 
         assert!(matches!(
             error,
@@ -2516,15 +2886,15 @@ No type field.
         fs::write(&file, sectioned_document("a", "A", "Alpha.", "Team.")).unwrap();
         let files = [file.clone()];
 
-        let first = ingest_paths(&files, Some(&db_path), true).unwrap();
-        let second = ingest_paths(&files, Some(&db_path), true).unwrap();
+        let first = ingest_paths(&files, Some(&db_path), true, &[]).unwrap();
+        let second = ingest_paths(&files, Some(&db_path), true, &[]).unwrap();
         fs::write(
             &file,
             sectioned_document("a", "A", "Alpha, revised.", "Team."),
         )
         .unwrap();
-        let third = ingest_paths(&files, Some(&db_path), true).unwrap();
-        let unconditional = ingest_paths(&files, Some(&db_path), false).unwrap();
+        let third = ingest_paths(&files, Some(&db_path), true, &[]).unwrap();
+        let unconditional = ingest_paths(&files, Some(&db_path), false, &[]).unwrap();
 
         assert!(first.contains("stored=true"));
         assert!(second.contains(": unchanged stored=false (id=urn:mif:"));
@@ -2546,7 +2916,7 @@ No type field.
             })
             .collect();
 
-        let message = ingest_paths(&files, Some(&db_path), false).unwrap();
+        let message = ingest_paths(&files, Some(&db_path), false, &[]).unwrap();
 
         assert_eq!(
             message,
@@ -2587,9 +2957,17 @@ No type field.
         let root = dir.path().join("vault");
         fs::create_dir_all(root.join(".hidden")).unwrap();
         fs::write(root.join("short.md"), "---\nid: kept-short\n---\n\nBody.\n").unwrap();
+        fs::create_dir_all(root.join("nested")).unwrap();
         fs::write(
-            root.join(".hidden").join("literal.md"),
+            root.join("nested").join("literal.md"),
             "---\n'@id': urn:mif:kept-literal\n---\n\nBody.\n",
+        )
+        .unwrap();
+        // `ingest` never reads a hidden directory, so a copy left in one
+        // (a trash folder, say) does not keep its document.
+        fs::write(
+            root.join(".hidden").join("copy.md"),
+            "---\nid: gone-a\n---\n\nBody.\n",
         )
         .unwrap();
         fs::write(root.join("doc.json"), r#"{"@id": "urn:mif:kept-json"}"#).unwrap();
@@ -2607,13 +2985,13 @@ No type field.
             ],
         );
 
-        let dry = prune(&root, Some(&db_path), true).unwrap();
+        let dry = prune(&root, Some(&db_path), true, &[]).unwrap();
         let store = mif_store::VectorStore::open(&db_path).unwrap();
         assert_eq!(store.count().unwrap(), 5);
         assert!(dry.starts_with("would prune urn:mif:gone-a\nwould prune urn:mif:gone-b\n"));
         assert!(dry.contains("would prune 2 documents, 3 found under"));
 
-        let done = prune(&root, Some(&db_path), false).unwrap();
+        let done = prune(&root, Some(&db_path), false, &[]).unwrap();
         assert!(done.starts_with("pruned urn:mif:gone-a\npruned urn:mif:gone-b\n"));
         assert_eq!(
             store.ids().unwrap(),
@@ -2634,7 +3012,7 @@ No type field.
         fs::write(root.join("plain.md"), "# No frontmatter\n").unwrap();
         store_with(&db_path, &["urn:mif:a"]);
 
-        let error = prune(&root, Some(&db_path), false).unwrap_err();
+        let error = prune(&root, Some(&db_path), false, &[]).unwrap_err();
 
         assert!(matches!(error, CliError::PruneEmptyRoot { .. }));
         let problem = error.to_problem();
@@ -2657,7 +3035,7 @@ No type field.
         fs::write(root.join("bad.md"), "---\nid: [unclosed\n---\n\nBody.\n").unwrap();
         store_with(&db_path, &["urn:mif:kept", "urn:mif:maybe-bad"]);
 
-        let error = prune(&root, Some(&db_path), false).unwrap_err();
+        let error = prune(&root, Some(&db_path), false, &[]).unwrap_err();
 
         assert!(matches!(error, CliError::Frontmatter(_)));
         let store = mif_store::VectorStore::open(&db_path).unwrap();
@@ -2697,10 +3075,10 @@ No type field.
         let before = dir.path().join("active").join("a.md");
         let after = dir.path().join("retired").join("a.md");
         fs::write(&before, sectioned_document("a", "A", "Alpha.", "Team.")).unwrap();
-        ingest_paths(std::slice::from_ref(&before), Some(&db_path), true).unwrap();
+        ingest_paths(std::slice::from_ref(&before), Some(&db_path), true, &[]).unwrap();
 
         fs::rename(&before, &after).unwrap();
-        let moved = ingest_paths(std::slice::from_ref(&after), Some(&db_path), true).unwrap();
+        let moved = ingest_paths(std::slice::from_ref(&after), Some(&db_path), true, &[]).unwrap();
 
         assert!(moved.contains("stored=true"), "unexpected output: {moved}");
         let under = |prefix: &str| {
@@ -2736,7 +3114,7 @@ No type field.
             &["urn:mif:plain", "urn:mif:linked", "urn:mif:gone"],
         );
 
-        let done = prune(&root, Some(&db_path), false).unwrap();
+        let done = prune(&root, Some(&db_path), false, &[]).unwrap();
 
         assert!(done.starts_with("pruned urn:mif:gone\n"), "{done}");
         let store = mif_store::VectorStore::open(&db_path).unwrap();
@@ -2744,5 +3122,158 @@ No type field.
             store.ids().unwrap(),
             vec!["urn:mif:linked", "urn:mif:plain"]
         );
+    }
+}
+
+#[cfg(test)]
+mod ignore_tests {
+    use std::fs;
+
+    use super::{CliError, Ignore, prune, walk};
+
+    fn tree() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for file in [
+            "keep.md",
+            "keep.draft.md",
+            "notes/a.md",
+            "notes/b.draft.md",
+            "notes/archive/old.md",
+            "archive/top.md",
+            "deep/archive/low.md",
+            ".trash/gone.md",
+        ] {
+            let path = dir.path().join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let id = file.replace(['/', '.'], "-");
+            fs::write(path, format!("---\nid: {id}\n---\n\nBody.\n")).unwrap();
+        }
+        dir
+    }
+
+    fn walked(dir: &tempfile::TempDir, patterns: &[&str]) -> Vec<String> {
+        let patterns: Vec<String> = patterns.iter().map(ToString::to_string).collect();
+        let mut found = Vec::new();
+        walk(
+            dir.path(),
+            dir.path(),
+            &Ignore::new(&patterns).unwrap(),
+            &mut found,
+        )
+        .unwrap();
+        found
+            .iter()
+            .map(|path| {
+                path.strip_prefix(dir.path())
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_walk_skips_hidden_directories_and_nothing_else_by_default() {
+        let dir = tree();
+
+        assert_eq!(
+            walked(&dir, &[]),
+            vec![
+                "archive/top.md",
+                "deep/archive/low.md",
+                "keep.draft.md",
+                "keep.md",
+                "notes/a.md",
+                "notes/archive/old.md",
+                "notes/b.draft.md",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_pattern_without_a_slash_matches_a_name_at_any_depth() {
+        let dir = tree();
+
+        assert_eq!(
+            walked(&dir, &["*.draft.md"]),
+            vec![
+                "archive/top.md",
+                "deep/archive/low.md",
+                "keep.md",
+                "notes/a.md",
+                "notes/archive/old.md",
+            ]
+        );
+        assert_eq!(
+            walked(&dir, &["archive/"]),
+            vec!["keep.draft.md", "keep.md", "notes/a.md", "notes/b.draft.md"]
+        );
+    }
+
+    #[test]
+    fn a_pattern_with_a_slash_matches_the_path_from_the_walked_directory() {
+        let dir = tree();
+
+        assert_eq!(
+            walked(&dir, &["notes/archive/**", "/archive"]),
+            vec![
+                "deep/archive/low.md",
+                "keep.draft.md",
+                "keep.md",
+                "notes/a.md",
+                "notes/b.draft.md",
+            ]
+        );
+        // `*` stays within one path component; `**` crosses them.
+        assert_eq!(
+            walked(&dir, &["*/*.md"]),
+            vec![
+                "deep/archive/low.md",
+                "keep.draft.md",
+                "keep.md",
+                "notes/archive/old.md",
+            ]
+        );
+        // `**/` also stands for no directory at all.
+        assert!(walked(&dir, &["**/*.md"]).is_empty());
+    }
+
+    #[test]
+    fn an_unreadable_pattern_is_reported_with_the_pattern() {
+        let error = Ignore::new(&["notes/[".to_string()]).err().unwrap();
+
+        assert!(matches!(&error, CliError::InvalidIgnore { pattern, .. } if pattern == "notes/["));
+        assert!(error.to_string().contains("notes/["));
+    }
+
+    #[test]
+    fn prune_does_not_count_what_it_is_told_to_ignore() {
+        let dir = tree();
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("vectors.db");
+        let store = mif_store::VectorStore::open(&db_path).unwrap();
+        for id in [
+            "keep-md",
+            "notes-a-md",
+            "notes-archive-old-md",
+            "-trash-gone-md",
+        ] {
+            store
+                .upsert(&format!("urn:mif:{id}"), &[1.0, 0.0], "h", "t")
+                .unwrap();
+        }
+
+        let dry = prune(
+            dir.path(),
+            Some(&db_path),
+            true,
+            &["notes/archive/**".to_string()],
+        )
+        .unwrap();
+
+        assert!(dry.starts_with(
+            "would prune urn:mif:-trash-gone-md\nwould prune urn:mif:notes-archive-old-md\n"
+        ));
+        assert_eq!(store.count().unwrap(), 4);
     }
 }

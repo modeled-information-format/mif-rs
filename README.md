@@ -30,7 +30,7 @@ Rust implementation of the [MIF (Modeled Information Format)](https://mif-spec.d
 | [`mif-frontmatter`](crates/mif-frontmatter) | library | Markdown frontmatter <-> JSON-LD lossless round-trip |
 | [`mif-embed`](crates/mif-embed) | library | Local sentence-embedding inference |
 | [`mif-store`](crates/mif-store) | library | `SQLite` vector store for document embeddings |
-| [`mif-cli`](crates/mif-cli) | binary | Command-line interface (`validate`, `ontology resolve`, `ingest`, `search`, `find-similar`, `corpus-stats`, `remove`, `prune`) |
+| [`mif-cli`](crates/mif-cli) | binary | Command-line interface (`validate`, `ontology resolve`, `ingest`, `search`, `get-passage`, `find-similar`, `corpus-stats`, `remove`, `prune`) |
 | [`mif-mcp`](crates/mif-mcp) | binary | MCP server exposing the same six operations as tools |
 
 ## MIF specification compatibility

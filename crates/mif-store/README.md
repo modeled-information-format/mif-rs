@@ -54,6 +54,26 @@ same source, and current passages, so an ingest can skip it.
 path relative to the directory that holds the store's own directory, so the
 same document gets the same source wherever the ingesting process runs.
 
+A passage can be stored with its own text and the span it covers in the
+document body (`PassageVector::text`, `span`), and a document with its
+title, entity type, concept type, and body sections as written
+(`DocumentVectors::title`, `entity_type`, `concept_type`, `sections`).
+`query` takes a `SearchQuery` and ranks by its `SearchMode`. `Semantic` is
+the cosine ranking `search` gives. `Hybrid`, the default, also ranks
+documents by the FTS5 `bm25` of their best passage text, and orders them by
+reciprocal rank fusion: `1 / (60 + rank)` summed over a document's rank in
+each ranking it appears in, so `SearchMatch::score` is then a fusion value
+and `SearchMatch::cosine` the similarity. A document stored without text
+takes part in the cosine ranking only; `PassageStats::documents_without_text`
+counts them. Each `SearchMatch` carries the passage's heading, text, and
+span and the document's source, title, and types, and `SearchFilter` has
+exact-match include and exclude lists for entity type and concept type.
+`sections(id, heading)` returns the stored sections with that heading, one
+per occurrence, or with no heading the summary passage's text.
+`multi_root_query` and `multi_root_sections` do the same across roots:
+cosine similarities are ranked together, and each document keeps the
+lexical rank it has in its own root.
+
 The schema version is recorded in `PRAGMA user_version`: 0 is the
 single-table layout of releases up to 0.11.0, and 1 adds the `passages`
 table (`doc_id`, `ord`, `heading`, `dim`, `vector`, `content_hash`) and the `source` and
@@ -64,6 +84,16 @@ vectors. Each passage row carries the content hash of the document it was
 computed from, and `search` uses only passages whose hash matches the
 document row, so passages left behind by a release that predates them are
 ignored.
+
+Version 2 adds `title`, `entity_type`, and `concept_type` on `embeddings`;
+`section`, `text_rowid`, and the four span columns on `passages`; the
+`sections` table; and `passage_text`, an FTS5 table holding passage text.
+`open` upgrades a version-1 database the same way, and a read-only one is
+opened as it is and ranked by its vectors. Releases 0.11.0 and 0.12.0 can
+still read and write an upgraded database: a trigger deletes a passage's
+text when its row is deleted, and another deletes a document's sections
+when its row is deleted. A document an older release stores again has no
+text until this release ingests it.
 
 `StoreError` implements `mif_problem::ToProblem` for RFC 9457
 `application/problem+json` reporting.

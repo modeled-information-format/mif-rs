@@ -39,6 +39,16 @@
 //! version 0 and opened anyway: every read works on its document vectors,
 //! and it holds no passages.
 //!
+//! Version 2 adds each passage's text (in `passage_text`, an FTS5 table a
+//! passage row points into), its span and section, the `sections` table,
+//! and a document's title and types. It is what [`VectorStore::query`]'s
+//! [`SearchMode::Hybrid`] and [`VectorStore::sections`] read. A version-1
+//! database is upgraded the same way, and a read-only one is opened as it
+//! is and ranked by its vectors. Two triggers keep an upgraded database
+//! consistent when a release that predates version 2 writes to it:
+//! deleting a passage row deletes its text, and deleting a document row
+//! deletes its sections.
+//!
 //! A release that predates passages can still read and write an upgraded
 //! database; it sees only the `embeddings` table. When it stores a changed
 //! document, the passages left from the old content no longer carry the
@@ -51,7 +61,7 @@
 //! padding. This is a private, on-disk format read and written only by this
 //! crate — it is not a public interchange format.
 
-use std::collections::{HashMap, HashSet, hash_map::Entry};
+use std::collections::HashSet;
 use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
 
@@ -59,6 +69,12 @@ use mif_problem::{
     Applicability, CodeAction, ProblemDetails, ProblemMeta, SuggestedFix, ToProblem,
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+
+pub use crate::hybrid::{
+    SearchMode, SearchQuery, StoredSection, multi_root_query, multi_root_sections,
+};
+
+mod hybrid;
 
 /// Errors from opening or operating on a [`VectorStore`].
 #[derive(Debug, thiserror::Error)]
@@ -266,7 +282,7 @@ const SCHEMA_SQL: &str = "CREATE TABLE IF NOT EXISTS embeddings (
 
 /// The schema version this crate reads and writes (see "Schema Versions"
 /// in the module documentation).
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 /// Upgrades a version-0 database to version 1.
 const MIGRATE_V1_SQL: &str = "ALTER TABLE embeddings ADD COLUMN source TEXT;
@@ -281,6 +297,44 @@ CREATE TABLE IF NOT EXISTS passages (
     PRIMARY KEY (doc_id, ord)
 );";
 
+/// Upgrades a version-1 database to version 2.
+///
+/// `passage_text` holds each passage's own text and its full-text index;
+/// a passage row points at its text by `text_rowid`. The triggers keep the
+/// text and the sections in step when a release that predates them deletes
+/// a passage or a document.
+const MIGRATE_V2_SQL: &str = "ALTER TABLE embeddings ADD COLUMN title TEXT;
+ALTER TABLE embeddings ADD COLUMN entity_type TEXT;
+ALTER TABLE embeddings ADD COLUMN concept_type TEXT;
+ALTER TABLE passages ADD COLUMN section INTEGER;
+ALTER TABLE passages ADD COLUMN text_rowid INTEGER;
+ALTER TABLE passages ADD COLUMN start_char INTEGER;
+ALTER TABLE passages ADD COLUMN end_char INTEGER;
+ALTER TABLE passages ADD COLUMN start_line INTEGER;
+ALTER TABLE passages ADD COLUMN end_line INTEGER;
+CREATE TABLE IF NOT EXISTS sections (
+    doc_id TEXT NOT NULL,
+    ord INTEGER NOT NULL,
+    heading TEXT,
+    text TEXT NOT NULL,
+    start_char INTEGER NOT NULL,
+    end_char INTEGER NOT NULL,
+    start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    content_hash TEXT NOT NULL,
+    PRIMARY KEY (doc_id, ord)
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS passage_text USING fts5(text, tokenize = 'unicode61');
+CREATE TRIGGER IF NOT EXISTS passages_text_ad AFTER DELETE ON passages
+WHEN old.text_rowid IS NOT NULL
+BEGIN
+    DELETE FROM passage_text WHERE rowid = old.text_rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS embeddings_sections_ad AFTER DELETE ON embeddings
+BEGIN
+    DELETE FROM sections WHERE doc_id = old.id;
+END;";
+
 /// Every vector [`VectorStore::search`] scores: each current passage of
 /// each document that passes the filter, or the document's own vector when
 /// it has none.
@@ -292,7 +346,21 @@ CREATE TABLE IF NOT EXISTS passages (
 /// `namespace` is `NULL` matches no prefix. Rows come in passage order, so
 /// the earliest of several equally scored passages is the one reported.
 const SEARCH_SQL: &str =
-    "SELECT e.id, p.heading, COALESCE(p.dim, e.dim), COALESCE(p.vector, e.vector)
+    "SELECT e.id, p.heading, COALESCE(p.dim, e.dim), COALESCE(p.vector, e.vector),
+       p.ord, p.text_rowid, e.entity_type, e.concept_type
+FROM embeddings e
+LEFT JOIN passages p ON p.doc_id = e.id AND p.content_hash = e.content_hash
+WHERE (?1 IS NULL OR substr(e.id, 1, length(?1)) = ?1)
+  AND (?2 IS NULL OR substr(e.source, 1, length(?2)) = ?2)
+  AND (?3 IS NULL OR substr(e.namespace, 1, length(?3)) = ?3)
+ORDER BY e.id, p.ord";
+
+/// [`SEARCH_SQL`] for a database still on schema version 1 (see
+/// [`VectorStore::open`]): passages without text, and no document has a
+/// type.
+const SEARCH_V1_SQL: &str =
+    "SELECT e.id, p.heading, COALESCE(p.dim, e.dim), COALESCE(p.vector, e.vector),
+       p.ord, NULL, NULL, NULL
 FROM embeddings e
 LEFT JOIN passages p ON p.doc_id = e.id AND p.content_hash = e.content_hash
 WHERE (?1 IS NULL OR substr(e.id, 1, length(?1)) = ?1)
@@ -303,24 +371,59 @@ ORDER BY e.id, p.ord";
 /// [`SEARCH_SQL`] for a database still on schema version 0 (see
 /// [`VectorStore::open`]): document vectors only, and no document has a
 /// source or namespace to match.
-const SEARCH_V0_SQL: &str = "SELECT id, NULL, dim, vector
+const SEARCH_V0_SQL: &str = "SELECT id, NULL, dim, vector, NULL, NULL, NULL, NULL
 FROM embeddings
 WHERE (?1 IS NULL OR substr(id, 1, length(?1)) = ?1)
   AND ?2 IS NULL
   AND ?3 IS NULL
 ORDER BY id";
 
+/// Where a passage or a section sits in its document's body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PassageSpan {
+    /// The offset of the first character, counted in Unicode scalar values
+    /// from the start of the body. The first character is 0.
+    pub start_char: usize,
+    /// The offset just past the last character.
+    pub end_char: usize,
+    /// The line the text starts on. The body's first line is 1.
+    pub start_line: usize,
+    /// The line the text ends on.
+    pub end_line: usize,
+}
+
 /// One passage vector of a document, for [`VectorStore::upsert_document`].
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PassageVector<'a> {
     /// The heading of the section the passage came from, if it has one.
     pub heading: Option<&'a str>,
     /// The passage's embedding vector.
     pub vector: &'a [f32],
+    /// The passage's own text, returned with a match and indexed for
+    /// [`SearchMode::Hybrid`]. A passage stored without it is ranked by its
+    /// vector alone.
+    pub text: Option<&'a str>,
+    /// Where that text sits in the document's body.
+    pub span: Option<PassageSpan>,
+    /// The index, in [`DocumentVectors::sections`], of the section the
+    /// passage came from.
+    pub section: Option<usize>,
+}
+
+/// One body section of a document as it is written, for
+/// [`VectorStore::upsert_document`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SectionText<'a> {
+    /// The section's heading, if it has one.
+    pub heading: Option<&'a str>,
+    /// The section's markdown.
+    pub text: &'a str,
+    /// Where the section sits in the document's body.
+    pub span: PassageSpan,
 }
 
 /// Everything [`VectorStore::upsert_document`] stores for one document.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct DocumentVectors<'a> {
     /// The document's id.
     pub id: &'a str,
@@ -340,6 +443,16 @@ pub struct DocumentVectors<'a> {
     /// The document's MIF namespace, for
     /// [`SearchFilter::namespace_prefix`].
     pub namespace: Option<&'a str>,
+    /// The document's title, returned with a match.
+    pub title: Option<&'a str>,
+    /// The document's ontology entity type, for
+    /// [`SearchFilter::entity_types`].
+    pub entity_type: Option<&'a str>,
+    /// The document's concept type, for [`SearchFilter::concept_types`].
+    pub concept_type: Option<&'a str>,
+    /// The document's body sections as written, in order, for
+    /// [`VectorStore::sections`].
+    pub sections: &'a [SectionText<'a>],
 }
 
 /// Limits [`VectorStore::search`] to some of the stored documents.
@@ -355,33 +468,62 @@ pub struct SearchFilter {
     pub source_prefix: Option<String>,
     /// Only documents whose namespace starts with this.
     pub namespace_prefix: Option<String>,
+    /// Only documents whose entity type is one of these. Empty means any.
+    /// A document stored without an entity type matches none.
+    pub entity_types: Vec<String>,
+    /// No document whose entity type is one of these.
+    pub exclude_entity_types: Vec<String>,
+    /// Only documents whose concept type is one of these. Empty means any.
+    /// A document stored without a concept type matches none.
+    pub concept_types: Vec<String>,
+    /// No document whose concept type is one of these.
+    pub exclude_concept_types: Vec<String>,
 }
 
-/// One ranked document from [`VectorStore::search`].
+/// One ranked document from [`VectorStore::search`] or
+/// [`VectorStore::query`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct SearchMatch {
     /// The matching document's id.
     pub id: String,
+    /// What the results are ordered by. Under [`SearchMode::Semantic`] this
+    /// is `cosine`. Under [`SearchMode::Hybrid`] it is the reciprocal rank
+    /// fusion of the document's cosine rank and its lexical rank, which is
+    /// never above `2.0 / 61.0`.
+    pub score: f32,
     /// Cosine similarity of the query to the document's best-matching
     /// passage, in `-1.0..=1.0`.
-    pub score: f32,
-    /// The heading of that passage. `None` when the best match is the
-    /// summary passage, text before the first heading, or a document stored
-    /// without passages.
+    pub cosine: f32,
+    /// The `SQLite` FTS5 `bm25` value of the document's best lexical match
+    /// (more negative is more relevant). `None` when no passage of the
+    /// document holds a query term, and under [`SearchMode::Semantic`].
+    pub bm25: Option<f32>,
+    /// The heading of the passage reported for the document. `None` when
+    /// that is the summary passage, text before the first heading, or a
+    /// document stored without passages.
     pub heading: Option<String>,
+    /// That passage's own text. `None` for a passage stored without text.
+    pub text: Option<String>,
+    /// Where that text sits in the document's body. `None` for the summary
+    /// passage and for a passage stored without a span.
+    pub span: Option<PassageSpan>,
+    /// Where the document was read from, as recorded at ingest.
+    pub source: Option<String>,
+    /// The document's title.
+    pub title: Option<String>,
+    /// The document's ontology entity type.
+    pub entity_type: Option<String>,
+    /// The document's concept type.
+    pub concept_type: Option<String>,
 }
 
-/// One ranked document from [`multi_root_search`], with the store root it
-/// came from. See [`RootedMatch`] for why the root matters.
+/// One ranked document from [`multi_root_search`] or [`multi_root_query`],
+/// with the store root it came from. See [`RootedMatch`] for why the root
+/// matters.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RootedSearchMatch {
-    /// The matching document's id.
-    pub id: String,
-    /// Cosine similarity of the query to the document's best-matching
-    /// passage, in `-1.0..=1.0`.
-    pub score: f32,
-    /// The heading of that passage; see [`SearchMatch::heading`].
-    pub heading: Option<String>,
+    /// The matching document.
+    pub document: SearchMatch,
     /// The store root ([`VectorStore::open`] path) this match came from.
     pub root: PathBuf,
 }
@@ -397,6 +539,10 @@ pub struct PassageStats {
     /// their document vector alone. A non-zero count after an upgrade means
     /// those documents have not been ingested again yet.
     pub documents_without_passages: u64,
+    /// Documents with no current passage stored with its text. They match
+    /// no query term under [`SearchMode::Hybrid`] and are ranked by their
+    /// vectors alone until they are ingested again.
+    pub documents_without_text: u64,
 }
 
 /// A single embedding row read back from a [`VectorStore`].
@@ -488,6 +634,10 @@ pub struct VectorStore {
     /// version-0 database that could not be upgraded because it is
     /// read-only.
     has_passages: bool,
+    /// Whether the database has passage text, sections, and document
+    /// types. `false` only for an older database that could not be
+    /// upgraded because it is read-only.
+    has_text: bool,
 }
 
 impl VectorStore {
@@ -520,15 +670,19 @@ impl VectorStore {
         };
         let mut conn = Connection::open(path).map_err(open_error)?;
         conn.execute(SCHEMA_SQL, []).map_err(open_error)?;
-        let has_passages = match migrate(&mut conn) {
-            Ok(()) => true,
+        let version = match migrate(&mut conn) {
+            Ok(()) => SCHEMA_VERSION,
             // A database this process may only read stays on its old
-            // schema; reads fall back to the document vectors.
-            Err(error) if is_read_only(&error) => false,
+            // schema; reads fall back to what that schema holds.
+            Err(error) if is_read_only(&error) => schema_version(&conn).map_err(open_error)?,
             Err(error) => return Err(open_error(error)),
         };
 
-        Ok(Self { conn, has_passages })
+        Ok(Self {
+            conn,
+            has_passages: version >= 1,
+            has_text: version >= 2,
+        })
     }
 
     /// Inserts a new embedding, or replaces the existing one for `id`.
@@ -571,6 +725,10 @@ impl VectorStore {
         .map_err(query_error)?;
         tx.execute("DELETE FROM passages WHERE doc_id = ?1", [id])
             .map_err(query_error)?;
+        if self.has_text {
+            tx.execute("DELETE FROM sections WHERE doc_id = ?1", [id])
+                .map_err(query_error)?;
+        }
         tx.commit().map_err(query_error)
     }
 
@@ -596,13 +754,14 @@ impl VectorStore {
     ///     id: "urn:mif:doc",
     ///     vector: &[1.0, 0.0],
     ///     passages: &[
-    ///         PassageVector { heading: None, vector: &[1.0, 0.0] },
-    ///         PassageVector { heading: Some("Scope"), vector: &[0.0, 1.0] },
+    ///         PassageVector { heading: None, vector: &[1.0, 0.0], ..Default::default() },
+    ///         PassageVector { heading: Some("Scope"), vector: &[0.0, 1.0], ..Default::default() },
     ///     ],
     ///     content_hash: "h",
     ///     updated_at: "2026-01-01T00:00:00Z",
     ///     source: Some("records/doc.md"),
     ///     namespace: None,
+    ///     ..Default::default()
     /// })?;
     ///
     /// let hits = store.search(&[0.1, 0.9], 10, &SearchFilter::default())?;
@@ -636,6 +795,9 @@ impl VectorStore {
         .map_err(query_error)?;
         tx.execute("DELETE FROM passages WHERE doc_id = ?1", [document.id])
             .map_err(query_error)?;
+        if self.has_text {
+            write_text(&tx, document)?;
+        }
         {
             let mut insert = tx
                 .prepare(
@@ -644,18 +806,21 @@ impl VectorStore {
                 )
                 .map_err(query_error)?;
             for (ord, passage) in document.passages.iter().enumerate() {
-                let ord =
-                    i64::try_from(ord).map_err(|_| StoreError::DimensionTooLarge { len: ord })?;
                 insert
                     .execute(params![
                         document.id,
-                        ord,
+                        index_of(ord)?,
                         passage.heading,
                         dim_of(passage.vector)?,
                         encode_vector(passage.vector),
                         document.content_hash,
                     ])
                     .map_err(query_error)?;
+            }
+        }
+        if self.has_text {
+            for (ord, passage) in document.passages.iter().enumerate() {
+                write_passage_text(&tx, document.id, ord, passage)?;
             }
         }
         tx.commit().map_err(query_error)
@@ -742,7 +907,9 @@ impl VectorStore {
         content_hash: &str,
         source: Option<&str>,
     ) -> Result<bool, StoreError> {
-        if !self.has_passages {
+        // A database that could not be upgraded cannot be written either,
+        // so nothing in it is as an ingest would leave it.
+        if !self.has_text {
             return Ok(false);
         }
         self.conn
@@ -751,6 +918,7 @@ impl VectorStore {
                      SELECT 1 FROM embeddings e
                      JOIN passages p ON p.doc_id = e.id AND p.content_hash = e.content_hash
                      WHERE e.id = ?1 AND e.content_hash = ?2 AND e.source IS ?3
+                       AND p.text_rowid IS NOT NULL
                  )",
                 params![id, content_hash, source],
                 |row| row.get(0),
@@ -766,26 +934,36 @@ impl VectorStore {
     /// fails.
     pub fn passage_stats(&self) -> Result<PassageStats, StoreError> {
         if !self.has_passages {
+            let count = self.count()?;
             return Ok(PassageStats {
                 passage_count: 0,
-                documents_without_passages: self.count()?,
+                documents_without_passages: count,
+                documents_without_text: count,
             });
         }
-        let (passages, without): (i64, i64) = self
+        let with_text = if self.has_text {
+            "COUNT(DISTINCT CASE WHEN p.text_rowid IS NOT NULL THEN p.doc_id END)"
+        } else {
+            "0"
+        };
+        let sql = format!(
+            "SELECT COUNT(p.doc_id), COUNT(DISTINCT e.id), COUNT(DISTINCT p.doc_id), {with_text}
+             FROM embeddings e
+             LEFT JOIN passages p ON p.doc_id = e.id AND p.content_hash = e.content_hash"
+        );
+        let (passages, documents, with_passages, with_text): (i64, i64, i64, i64) = self
             .conn
-            .query_row(
-                "SELECT COUNT(p.doc_id), COUNT(DISTINCT e.id) - COUNT(DISTINCT p.doc_id)
-                 FROM embeddings e
-                 LEFT JOIN passages p ON p.doc_id = e.id AND p.content_hash = e.content_hash",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
+            .query_row(&sql, [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
             .map_err(query_error)?;
-        // COUNT(*) is never negative, so these narrowings are always exact.
+        // Each is a COUNT, and neither subset outnumbers the documents, so
+        // these narrowings are always exact.
         #[allow(clippy::cast_sign_loss)]
         let stats = PassageStats {
             passage_count: passages as u64,
-            documents_without_passages: without as u64,
+            documents_without_passages: (documents - with_passages) as u64,
+            documents_without_text: (documents - with_text) as u64,
         };
         Ok(stats)
     }
@@ -807,67 +985,19 @@ impl VectorStore {
     /// not fit a [`usize`], [`StoreError::VectorBlobMismatch`] if a row's
     /// decoded vector length does not match its `dim` column, or
     /// [`StoreError::Query`] if the underlying `SQLite` statement fails.
-    pub fn search<'a>(
+    pub fn search(
         &self,
         query: &[f32],
         limit: usize,
-        filter: &'a SearchFilter,
+        filter: &SearchFilter,
     ) -> Result<Vec<SearchMatch>, StoreError> {
-        let sql = if self.has_passages {
-            SEARCH_SQL
-        } else {
-            SEARCH_V0_SQL
-        };
-        // An empty prefix asks for no filtering, the same as an unset one.
-        let prefix = |prefix: &'a Option<String>| prefix.as_deref().filter(|p| !p.is_empty());
-        let mut stmt = self.conn.prepare(sql).map_err(query_error)?;
-        let rows = stmt
-            .query_map(
-                params![
-                    prefix(&filter.id_prefix),
-                    prefix(&filter.source_prefix),
-                    prefix(&filter.namespace_prefix)
-                ],
-                |row| {
-                    let id: String = row.get(0)?;
-                    let heading: Option<String> = row.get(1)?;
-                    let dim_raw: i64 = row.get(2)?;
-                    let blob: Vec<u8> = row.get(3)?;
-                    Ok((id, heading, dim_raw, blob))
-                },
-            )
-            .map_err(query_error)?;
-
-        let query_norm = norm(query);
-        let mut best: HashMap<String, (f32, Option<String>)> = HashMap::new();
-        for row in rows {
-            let (id, heading, dim_raw, blob) = row.map_err(query_error)?;
-            let vector = checked_vector(&id, dim_raw, &blob)?;
-            if vector.len() != query.len() {
-                continue;
-            }
-            let score = cosine_similarity(query, &vector, query_norm);
-            if !score.is_finite() {
-                continue;
-            }
-            match best.entry(id) {
-                Entry::Occupied(mut entry) if score > entry.get().0 => {
-                    entry.insert((score, heading));
-                },
-                Entry::Occupied(_) => {},
-                Entry::Vacant(entry) => {
-                    entry.insert((score, heading));
-                },
-            }
-        }
-
-        let mut matches: Vec<SearchMatch> = best
-            .into_iter()
-            .map(|(id, (score, heading))| SearchMatch { id, score, heading })
-            .collect();
-        matches.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.id.cmp(&b.id)));
-        matches.truncate(limit);
-        Ok(matches)
+        self.query(&SearchQuery {
+            vector: query,
+            text: "",
+            mode: SearchMode::Semantic,
+            limit,
+            filter,
+        })
     }
 
     /// Looks up the embedding stored for `id`.
@@ -1132,7 +1262,7 @@ pub fn multi_root_top_k_similar(
 ///
 /// let roots = [root_a, root_b.clone()];
 /// let matches = multi_root_search(&roots, &[0.0, 1.0], 10, &SearchFilter::default())?;
-/// assert_eq!(matches[0].id, "b-doc");
+/// assert_eq!(matches[0].document.id, "b-doc");
 /// assert_eq!(matches[0].root, root_b);
 /// # Ok(())
 /// # }
@@ -1143,23 +1273,16 @@ pub fn multi_root_search(
     limit: usize,
     filter: &SearchFilter,
 ) -> Result<Vec<RootedSearchMatch>, StoreError> {
-    let mut matches = Vec::new();
-    for root in roots {
-        let store = VectorStore::open(root)?;
-        matches.extend(
-            wrap_root_error(root, store.search(query, limit, filter))?
-                .into_iter()
-                .map(|m| RootedSearchMatch {
-                    id: m.id,
-                    score: m.score,
-                    heading: m.heading,
-                    root: root.clone(),
-                }),
-        );
-    }
-    matches.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.id.cmp(&b.id)));
-    matches.truncate(limit);
-    Ok(matches)
+    multi_root_query(
+        roots,
+        &SearchQuery {
+            vector: query,
+            text: "",
+            mode: SearchMode::Semantic,
+            limit,
+            filter,
+        },
+    )
 }
 
 /// Looks up the embedding stored for `id` across multiple [`VectorStore`]
@@ -1332,8 +1455,14 @@ fn migrate(conn: &mut Connection) -> rusqlite::Result<()> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // Another process may have upgraded the database between the check
     // above and this transaction taking the write lock.
-    if schema_version(&tx)? < SCHEMA_VERSION {
+    let version = schema_version(&tx)?;
+    if version < 1 {
         tx.execute_batch(MIGRATE_V1_SQL)?;
+    }
+    if version < 2 {
+        tx.execute_batch(MIGRATE_V2_SQL)?;
+    }
+    if version < SCHEMA_VERSION {
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
     tx.commit()
@@ -1367,6 +1496,90 @@ fn delete_document(conn: &Connection, id: &str) -> Result<bool, StoreError> {
         .execute("DELETE FROM embeddings WHERE id = ?1", [id])
         .map_err(query_error)?;
     Ok(passages + documents > 0)
+}
+
+/// Stores a document's title, types, and sections, replacing its old
+/// sections.
+fn write_text(conn: &Connection, document: &DocumentVectors<'_>) -> Result<(), StoreError> {
+    conn.execute(
+        "UPDATE embeddings SET title = ?2, entity_type = ?3, concept_type = ?4 WHERE id = ?1",
+        params![
+            document.id,
+            document.title,
+            document.entity_type,
+            document.concept_type
+        ],
+    )
+    .map_err(query_error)?;
+    conn.execute("DELETE FROM sections WHERE doc_id = ?1", [document.id])
+        .map_err(query_error)?;
+    let mut insert = conn
+        .prepare(
+            "INSERT INTO sections
+                (doc_id, ord, heading, text, start_char, end_char, start_line, end_line,
+                 content_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .map_err(query_error)?;
+    for (ord, section) in document.sections.iter().enumerate() {
+        insert
+            .execute(params![
+                document.id,
+                index_of(ord)?,
+                section.heading,
+                section.text,
+                index_of(section.span.start_char)?,
+                index_of(section.span.end_char)?,
+                index_of(section.span.start_line)?,
+                index_of(section.span.end_line)?,
+                document.content_hash,
+            ])
+            .map_err(query_error)?;
+    }
+    Ok(())
+}
+
+/// Stores the text, span, and section of the passage just inserted as
+/// `ord` of `id`.
+fn write_passage_text(
+    conn: &Connection,
+    id: &str,
+    ord: usize,
+    passage: &PassageVector<'_>,
+) -> Result<(), StoreError> {
+    let text_rowid = match passage.text {
+        Some(text) => {
+            conn.execute("INSERT INTO passage_text (text) VALUES (?1)", [text])
+                .map_err(query_error)?;
+            Some(conn.last_insert_rowid())
+        },
+        None => None,
+    };
+    let span = passage.span;
+    let part = |value: Option<usize>| value.map(index_of).transpose();
+    conn.execute(
+        "UPDATE passages
+         SET text_rowid = ?3, section = ?4, start_char = ?5, end_char = ?6, start_line = ?7,
+             end_line = ?8
+         WHERE doc_id = ?1 AND ord = ?2",
+        params![
+            id,
+            index_of(ord)?,
+            text_rowid,
+            part(passage.section)?,
+            part(span.map(|span| span.start_char))?,
+            part(span.map(|span| span.end_char))?,
+            part(span.map(|span| span.start_line))?,
+            part(span.map(|span| span.end_line))?,
+        ],
+    )
+    .map_err(query_error)?;
+    Ok(())
+}
+
+/// A position or an offset as an integer column stores it.
+fn index_of(value: usize) -> Result<i64, StoreError> {
+    i64::try_from(value).map_err(|_| StoreError::DimensionTooLarge { len: value })
 }
 
 /// A vector's length as the `dim` column stores it.
@@ -2008,11 +2221,16 @@ mod tests {
             updated_at: "t",
             source: None,
             namespace: None,
+            ..Default::default()
         }
     }
 
     fn passage<'a>(heading: Option<&'a str>, vector: &'a [f32]) -> PassageVector<'a> {
-        PassageVector { heading, vector }
+        PassageVector {
+            heading,
+            vector,
+            ..Default::default()
+        }
     }
 
     fn passage_rows(store: &VectorStore, id: &str) -> Vec<(i64, Option<String>)> {
@@ -2054,7 +2272,8 @@ mod tests {
             store.passage_stats().unwrap(),
             PassageStats {
                 passage_count: 0,
-                documents_without_passages: 1
+                documents_without_passages: 1,
+                documents_without_text: 1,
             }
         );
         // The document is still found, ranked on its document vector.
@@ -2424,7 +2643,8 @@ mod tests {
             store.passage_stats().unwrap(),
             PassageStats {
                 passage_count: 2,
-                documents_without_passages: 2
+                documents_without_passages: 2,
+                documents_without_text: 3,
             }
         );
     }
@@ -2457,7 +2677,13 @@ mod tests {
 
         let ranked: Vec<_> = hits
             .iter()
-            .map(|hit| (hit.id.as_str(), hit.heading.as_deref(), hit.root.clone()))
+            .map(|hit| {
+                (
+                    hit.document.id.as_str(),
+                    hit.document.heading.as_deref(),
+                    hit.root.clone(),
+                )
+            })
             .collect();
         assert_eq!(
             ranked,
@@ -2469,7 +2695,7 @@ mod tests {
         );
         let limited = multi_root_search(&roots, &[0.0, 1.0], 1, &SearchFilter::default()).unwrap();
         assert_eq!(limited.len(), 1);
-        assert_eq!(limited[0].heading.as_deref(), Some("From A"));
+        assert_eq!(limited[0].document.heading.as_deref(), Some("From A"));
     }
 
     #[test]
@@ -2526,7 +2752,8 @@ mod tests {
             stats.unwrap(),
             PassageStats {
                 passage_count: 0,
-                documents_without_passages: 1
+                documents_without_passages: 1,
+                documents_without_text: 1,
             }
         );
     }
@@ -2565,7 +2792,8 @@ mod tests {
             store.passage_stats().unwrap(),
             PassageStats {
                 passage_count: 0,
-                documents_without_passages: 1
+                documents_without_passages: 1,
+                documents_without_text: 1,
             }
         );
         // Storing it again with passages makes them current.
@@ -2619,6 +2847,7 @@ mod tests {
                     id_prefix: Some(String::new()),
                     source_prefix: Some(String::new()),
                     namespace_prefix: Some(String::new()),
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -2674,8 +2903,21 @@ mod tests {
     #[test]
     fn is_current_needs_the_same_hash_and_current_passages() {
         let (_dir, store) = open_temp_store();
+        let with_text = PassageVector {
+            text: Some("Summary"),
+            ..passage(None, &[1.0, 0.0])
+        };
+        // Passages stored without their text are not what an ingest leaves.
         store
-            .upsert_document(&document("doc", &[1.0, 0.0], &[passage(None, &[1.0, 0.0])]))
+            .upsert_document(&document(
+                "textless",
+                &[1.0, 0.0],
+                &[passage(None, &[1.0, 0.0])],
+            ))
+            .unwrap();
+        assert!(!store.is_current("textless", "h", None).unwrap());
+        store
+            .upsert_document(&document("doc", &[1.0, 0.0], &[with_text]))
             .unwrap();
         store.upsert("legacy", &[1.0, 0.0], "h", "t").unwrap();
 
@@ -2687,7 +2929,7 @@ mod tests {
         store
             .upsert_document(&DocumentVectors {
                 source: Some("records/placed.md"),
-                ..document("placed", &[1.0, 0.0], &[passage(None, &[1.0, 0.0])])
+                ..document("placed", &[1.0, 0.0], &[with_text])
             })
             .unwrap();
         assert!(

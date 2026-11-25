@@ -119,6 +119,107 @@ struct SearchParams {
     source_prefix: Option<String>,
     /// Only documents whose MIF namespace starts with this.
     namespace_prefix: Option<String>,
+    /// Only documents whose ontology entity type (`entity.entity_type`) is
+    /// exactly one of these. Empty or omitted means any. Documents ingested
+    /// before types were recorded never match.
+    #[serde(default)]
+    entity_types: Vec<String>,
+    /// No document whose ontology entity type is exactly one of these.
+    #[serde(default)]
+    exclude_entity_types: Vec<String>,
+    /// Only documents whose concept type (`conceptType`) is exactly one of
+    /// these. Empty or omitted means any.
+    #[serde(default)]
+    concept_types: Vec<String>,
+    /// No document whose concept type is exactly one of these.
+    #[serde(default)]
+    exclude_concept_types: Vec<String>,
+    /// How to rank. `hybrid` (the default) fuses the semantic ranking with
+    /// a lexical one over passage text, so an identifier or an exact term
+    /// is found by the text that holds it. `semantic` ranks by cosine
+    /// similarity alone.
+    mode: Option<SearchModeParam>,
+}
+
+/// The `mode` of a `search_documents` call.
+#[derive(Debug, Clone, Copy, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum SearchModeParam {
+    /// Rank by cosine similarity alone.
+    Semantic,
+    /// Rank by reciprocal rank fusion of cosine similarity and `bm25`.
+    Hybrid,
+}
+
+/// Parameters for the `get_passage` tool.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct GetPassageParams {
+    /// The id of an ingested document (as reported by `ingest_mif_document`
+    /// and `search_documents`).
+    id: String,
+    /// The heading of the section to return, as `search_documents` reports
+    /// it. Omit for the document's summary.
+    heading: Option<String>,
+    /// Path to the `SQLite` vector store database. Defaults to
+    /// `.mif/vectors.db`.
+    db_path: Option<PathBuf>,
+    /// Additional `SQLite` vector store database(s) to look in after
+    /// `db_path` (or its default). The document comes from the first root,
+    /// in that order, that holds it.
+    #[serde(default)]
+    extra_db_paths: Vec<PathBuf>,
+}
+
+/// Where a passage or a section sits in its document's body: character
+/// offsets (the first character is 0; `end_char` is just past the last) and
+/// lines (the first line is 1), both counted from the start of the body.
+#[derive(Debug, Default, serde::Serialize)]
+struct SpanEntry {
+    /// Offset of the first character.
+    start_char: usize,
+    /// Offset just past the last character.
+    end_char: usize,
+    /// The line the text starts on.
+    start_line: usize,
+    /// The line the text ends on.
+    end_line: usize,
+}
+
+impl From<mif_store::PassageSpan> for SpanEntry {
+    fn from(span: mif_store::PassageSpan) -> Self {
+        Self {
+            start_char: span.start_char,
+            end_char: span.end_char,
+            start_line: span.start_line,
+            end_line: span.end_line,
+        }
+    }
+}
+
+/// One section returned by `get_passage`.
+#[derive(Debug, serde::Serialize)]
+struct SectionEntry {
+    /// The section's heading; `null` for the document's summary.
+    heading: Option<String>,
+    /// The section's markdown as it was written, or the summary's text.
+    text: String,
+    /// Where the section sits in the document's body; `null` for the
+    /// summary.
+    span: Option<SpanEntry>,
+}
+
+/// The result of a `get_passage` call.
+#[derive(Debug, serde::Serialize)]
+struct GetPassageResult {
+    /// The document's id.
+    id: String,
+    /// The sections with the heading asked for, in document order: more
+    /// than one when the heading occurs more than once.
+    sections: Vec<SectionEntry>,
+    /// The store root the document came from, when more than one root was
+    /// queried.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    root: Option<String>,
 }
 
 /// Parameters for the `remove_document` tool.
@@ -229,12 +330,45 @@ struct EmitMarkdownParams {
 const DEFAULT_LIMIT: usize = 10;
 
 /// One ranked match returned by `search_documents`/`find_similar_documents`.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Default, serde::Serialize)]
 struct MatchEntry {
     /// The matching document's id.
     id: String,
-    /// Cosine similarity to the query, in `-1.0..=1.0`.
+    /// What the matches are ordered by. From `find_similar_documents`, and
+    /// from `search_documents` in `semantic` mode, the cosine similarity to
+    /// the query, in `-1.0..=1.0`. From `search_documents` in `hybrid` mode,
+    /// the reciprocal rank fusion of the document's cosine rank and its
+    /// lexical rank, which is never above `2/61`; compare `cosine` instead
+    /// when a similarity threshold is wanted.
     score: f32,
+    /// Cosine similarity of the query to the document's best-matching
+    /// passage, from `search_documents` in either mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cosine: Option<f32>,
+    /// The `bm25` value of the document's best lexical match (more negative
+    /// is more relevant), from `search_documents` in `hybrid` mode when a
+    /// passage of the document holds a query term.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bm25: Option<f32>,
+    /// The path the document was ingested from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    /// The document's title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    /// The document's ontology entity type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entity_type: Option<String>,
+    /// The document's concept type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    concept_type: Option<String>,
+    /// The matching passage's own text, from `search_documents`. Pass
+    /// `heading` to `get_passage` for the whole section as written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    /// Where that text sits in the document's body.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    span: Option<SpanEntry>,
     /// The heading of the document's best-matching passage, from
     /// `search_documents`. Omitted when that passage has no heading (the
     /// summary, or text before the first heading), for a document ingested
@@ -294,6 +428,11 @@ struct CorpusStatsResult {
     /// a single-root query.
     #[serde(skip_serializing_if = "Option::is_none")]
     documents_without_passages: Option<u64>,
+    /// How many of the primary root's documents have no passage text, so
+    /// `hybrid` search ranks them by their vectors alone until they are
+    /// ingested again. Only present for a single-root query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    documents_without_text: Option<u64>,
     /// The summed count across the primary root and every `extra_db_paths`
     /// root. Only present when `extra_db_paths` was non-empty.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -344,6 +483,18 @@ enum McpError {
     /// ingested.
     #[error("no document with id '{0}' has been ingested into this vector store")]
     DocumentNotFound(String),
+    /// `get_passage` found the document but nothing stored for it under the
+    /// heading asked for.
+    #[error(
+        "no section {} is stored for document '{id}'",
+        heading.as_ref().map_or_else(|| "summary".to_string(), |heading| format!("headed '{heading}'"))
+    )]
+    SectionNotFound {
+        /// The document that was found.
+        id: String,
+        /// The heading asked for; `None` for the summary.
+        heading: Option<String>,
+    },
     /// A JSON-LD projection could not be serialized to JSON text.
     #[error("failed to serialize JSON-LD: {source}")]
     JsonSerialize {
@@ -374,6 +525,13 @@ impl McpError {
                 slug: "mif-mcp-document-not-found",
                 version: "v1",
                 title: "No document with the given id has been ingested",
+                status: 404,
+                exit_code: 3,
+            },
+            Self::SectionNotFound { .. } => ProblemMeta {
+                slug: "mif-mcp-section-not-found",
+                version: "v1",
+                title: "No such section is stored for the document",
                 status: 404,
                 exit_code: 3,
             },
@@ -429,6 +587,15 @@ impl ToProblem for McpError {
                 .with_code_action(mif_problem::CodeAction::new(
                     "Ingest the document before searching for similar ones",
                     "quickfix",
+                    mif_problem::Applicability::MaybeIncorrect,
+                )),
+            Self::SectionNotFound { .. } => self
+                .meta()
+                .into_details(env!("CARGO_PKG_NAME"), self.to_string())
+                .with_suggested_fix(mif_problem::SuggestedFix::new(
+                    "Use a heading exactly as `search_documents` reports it. A document \
+                     ingested by a release before 0.13.0 has no sections until it is ingested \
+                     again.",
                     mif_problem::Applicability::MaybeIncorrect,
                 )),
             Self::Json { .. } | Self::JsonSerialize { .. } => self
@@ -555,6 +722,18 @@ fn ingest_mif_document_inner(
         .map(|p| mif_store::PassageVector {
             heading: p.heading.as_deref(),
             vector: &p.vector,
+            text: Some(&p.text),
+            span: p.span.map(store_span),
+            section: p.section,
+        })
+        .collect();
+    let written = mif_embed::passages::sections(&jsonld);
+    let sections: Vec<mif_store::SectionText<'_>> = written
+        .iter()
+        .map(|section| mif_store::SectionText {
+            heading: section.heading.as_deref(),
+            text: &section.text,
+            span: store_span(section.span),
         })
         .collect();
 
@@ -578,7 +757,14 @@ fn ingest_mif_document_inner(
         content_hash: &hash,
         updated_at: &updated_at,
         source: Some(&source),
-        namespace: jsonld.get("namespace").and_then(serde_json::Value::as_str),
+        namespace: text_at(&jsonld, "namespace"),
+        title: text_at(&jsonld, "title"),
+        entity_type: jsonld
+            .get("entity")
+            .and_then(|entity| text_at(entity, "entity_type")),
+        // `memoryType` is the deprecated name of `conceptType`.
+        concept_type: text_at(&jsonld, "conceptType").or_else(|| text_at(&jsonld, "memoryType")),
+        sections: &sections,
     })?;
 
     Ok(IngestReport {
@@ -594,6 +780,21 @@ fn ingest_mif_document_inner(
         id,
         db: db_path.display().to_string(),
     })
+}
+
+/// A string field of a JSON object.
+fn text_at<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    value.get(key).and_then(serde_json::Value::as_str)
+}
+
+/// A span from the passage builder as the store records it.
+const fn store_span(span: mif_embed::passages::Span) -> mif_store::PassageSpan {
+    mif_store::PassageSpan {
+        start_char: span.start_char,
+        end_char: span.end_char,
+        start_line: span.start_line,
+        end_line: span.end_line,
+    }
 }
 
 /// Removes one document's vectors from the vector store.
@@ -638,8 +839,8 @@ fn to_search_result(matches: Vec<mif_store::SimilarityMatch>) -> SearchResult {
             .map(|m| MatchEntry {
                 id: m.id,
                 score: if m.score.is_finite() { m.score } else { 0.0 },
-                heading: None,
                 root: None,
+                ..MatchEntry::default()
             })
             .collect(),
     }
@@ -655,8 +856,8 @@ fn to_rooted_search_result(matches: Vec<mif_store::RootedMatch>) -> SearchResult
             .map(|m| MatchEntry {
                 id: m.id,
                 score: if m.score.is_finite() { m.score } else { 0.0 },
-                heading: None,
                 root: Some(m.root.display().to_string()),
+                ..MatchEntry::default()
             })
             .collect(),
     }
@@ -676,40 +877,86 @@ fn search_documents_inner(
     db_path: Option<&Path>,
     extra_db_paths: &[PathBuf],
     limit: usize,
+    mode: mif_store::SearchMode,
     filter: &mif_store::SearchFilter,
 ) -> Result<SearchResult, McpError> {
     let embedder = mif_embed::Embedder::load()?;
     let vector = embedder.embed(query)?;
+    let search = mif_store::SearchQuery {
+        vector: &vector,
+        text: query,
+        mode,
+        limit,
+        filter,
+    };
 
     if extra_db_paths.is_empty() {
         let db_path = resolve_db_path(db_path);
         let store = mif_store::VectorStore::open(&db_path)?;
-        let matches = store.search(&vector, limit, filter)?;
+        let matches = store.query(&search)?;
         return Ok(SearchResult {
-            matches: matches
-                .into_iter()
-                .map(|m| MatchEntry {
-                    id: m.id,
-                    score: m.score,
-                    heading: m.heading,
-                    root: None,
-                })
-                .collect(),
+            matches: matches.into_iter().map(|m| match_entry(m, None)).collect(),
         });
     }
 
     let roots = resolve_db_paths(db_path, extra_db_paths);
-    let matches = mif_store::multi_root_search(&roots, &vector, limit, filter)?;
+    let matches = mif_store::multi_root_query(&roots, &search)?;
     Ok(SearchResult {
         matches: matches
             .into_iter()
-            .map(|m| MatchEntry {
-                id: m.id,
-                score: m.score,
-                heading: m.heading,
-                root: Some(m.root.display().to_string()),
+            .map(|m| match_entry(m.document, Some(m.root.display().to_string())))
+            .collect(),
+    })
+}
+
+/// One `search_documents` match in this tool's result shape.
+fn match_entry(matched: mif_store::SearchMatch, root: Option<String>) -> MatchEntry {
+    MatchEntry {
+        id: matched.id,
+        score: matched.score,
+        cosine: Some(matched.cosine),
+        bm25: matched.bm25,
+        path: matched.source,
+        title: matched.title,
+        entity_type: matched.entity_type,
+        concept_type: matched.concept_type,
+        heading: matched.heading,
+        text: matched.text,
+        span: matched.span.map(SpanEntry::from),
+        root,
+    }
+}
+
+/// Returns the sections of an ingested document headed `heading`, as they
+/// were written, or with no `heading` the document's summary. The document
+/// comes from the first root (`db_path`, then each of `extra_db_paths` in
+/// order) that holds it.
+fn get_passage_inner(
+    id: &str,
+    heading: Option<&str>,
+    db_path: Option<&Path>,
+    extra_db_paths: &[PathBuf],
+) -> Result<GetPassageResult, McpError> {
+    let roots = resolve_db_paths(db_path, extra_db_paths);
+    let (root, sections) = mif_store::multi_root_sections(&roots, id, heading)?
+        .ok_or_else(|| McpError::DocumentNotFound(id.to_string()))?;
+    if sections.is_empty() {
+        return Err(McpError::SectionNotFound {
+            id: id.to_string(),
+            heading: heading.map(ToString::to_string),
+        });
+    }
+    Ok(GetPassageResult {
+        id: id.to_string(),
+        sections: sections
+            .into_iter()
+            .map(|section| SectionEntry {
+                heading: section.heading,
+                text: section.text,
+                span: section.span.map(SpanEntry::from),
             })
             .collect(),
+        root: (!extra_db_paths.is_empty()).then(|| root.display().to_string()),
     })
 }
 
@@ -793,6 +1040,7 @@ fn corpus_stats_inner(
             db: db_path.display().to_string(),
             passages: Some(passages.passage_count),
             documents_without_passages: Some(passages.documents_without_passages),
+            documents_without_text: Some(passages.documents_without_text),
             total_count: None,
             extra_roots: Vec::new(),
         });
@@ -834,6 +1082,7 @@ fn corpus_stats_inner(
         db: primary_db_path.display().to_string(),
         passages: None,
         documents_without_passages: None,
+        documents_without_text: None,
         total_count: Some(multi.total_count),
         extra_roots,
     })
@@ -1010,34 +1259,58 @@ impl Mif {
     }
 
     #[tool(
-        description = "Free-text semantic search over previously ingested documents. Each \
-                        document is ranked by its best-matching passage, and each match \
-                        carries that passage's heading when it has one. Optional id, source \
-                        path, and namespace prefixes limit which documents are ranked"
+        description = "Free-text search over previously ingested documents. By default \
+                        (mode `hybrid`) each document is ranked by reciprocal rank fusion of \
+                        its best-matching passage by meaning and its best by exact terms, so \
+                        an identifier such as `P23` is found by the text that holds it; \
+                        `score` is then a fusion value and `cosine` the similarity. Mode \
+                        `semantic` ranks by cosine similarity alone. Each match carries the \
+                        document's path, title and types and the matching passage's heading, \
+                        text and span. Optional id, source path and namespace prefixes, and \
+                        entity and concept type lists, limit which documents are ranked"
     )]
-    fn search_documents(
-        &self,
-        Parameters(SearchParams {
-            query,
-            db_path,
-            extra_db_paths,
-            limit,
-            id_prefix,
-            source_prefix,
-            namespace_prefix,
-        }): Parameters<SearchParams>,
-    ) -> String {
+    fn search_documents(&self, Parameters(params): Parameters<SearchParams>) -> String {
+        let mode = match params.mode {
+            Some(SearchModeParam::Semantic) => mif_store::SearchMode::Semantic,
+            Some(SearchModeParam::Hybrid) | None => mif_store::SearchMode::Hybrid,
+        };
         match search_documents_inner(
-            &query,
-            db_path.as_deref(),
-            &extra_db_paths,
-            limit.unwrap_or(DEFAULT_LIMIT),
+            &params.query,
+            params.db_path.as_deref(),
+            &params.extra_db_paths,
+            params.limit.unwrap_or(DEFAULT_LIMIT),
+            mode,
             &mif_store::SearchFilter {
-                id_prefix,
-                source_prefix,
-                namespace_prefix,
+                id_prefix: params.id_prefix,
+                source_prefix: params.source_prefix,
+                namespace_prefix: params.namespace_prefix,
+                entity_types: params.entity_types,
+                exclude_entity_types: params.exclude_entity_types,
+                concept_types: params.concept_types,
+                exclude_concept_types: params.exclude_concept_types,
             },
         ) {
+            Ok(result) => serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()),
+            Err(error) => error.to_problem().to_json(),
+        }
+    }
+
+    #[tool(
+        description = "Fetch one section of an ingested document as it was written, by the \
+                        heading `search_documents` reports, instead of reading the whole \
+                        document. A heading that occurs more than once returns each \
+                        occurrence. With no heading, returns the document's summary"
+    )]
+    fn get_passage(
+        &self,
+        Parameters(GetPassageParams {
+            id,
+            heading,
+            db_path,
+            extra_db_paths,
+        }): Parameters<GetPassageParams>,
+    ) -> String {
+        match get_passage_inner(&id, heading.as_deref(), db_path.as_deref(), &extra_db_paths) {
             Ok(result) => serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()),
             Err(error) => error.to_problem().to_json(),
         }
@@ -1152,9 +1425,9 @@ mod tests {
     use mif_problem::ToProblem;
 
     use super::{
-        CorpusStatsParams, EmitJsonldParams, EmitMarkdownParams, FindSimilarParams, IngestParams,
-        McpError, Mif, Parameters, RemoveParams, ResolveParams, RoundtripParams, SearchParams,
-        ValidateParams, ingest_mif_document_inner, to_search_result,
+        CorpusStatsParams, EmitJsonldParams, EmitMarkdownParams, FindSimilarParams,
+        GetPassageParams, IngestParams, McpError, Mif, Parameters, RemoveParams, ResolveParams,
+        RoundtripParams, SearchParams, ValidateParams, ingest_mif_document_inner, to_search_result,
     };
 
     fn write_temp_file(contents: &str) -> tempfile::NamedTempFile {
@@ -1749,6 +2022,11 @@ No type field.
             id_prefix: None,
             source_prefix: None,
             namespace_prefix: None,
+            entity_types: Vec::new(),
+            exclude_entity_types: Vec::new(),
+            concept_types: Vec::new(),
+            exclude_concept_types: Vec::new(),
+            mode: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(value.get("status").is_some());
@@ -1814,6 +2092,11 @@ No type field.
             id_prefix: None,
             source_prefix: None,
             namespace_prefix: None,
+            entity_types: Vec::new(),
+            exclude_entity_types: Vec::new(),
+            concept_types: Vec::new(),
+            exclude_concept_types: Vec::new(),
+            mode: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
@@ -1852,6 +2135,11 @@ No type field.
             id_prefix: None,
             source_prefix: None,
             namespace_prefix: None,
+            entity_types: Vec::new(),
+            exclude_entity_types: Vec::new(),
+            concept_types: Vec::new(),
+            exclude_concept_types: Vec::new(),
+            mode: None,
         }));
         let value: serde_json::Value = serde_json::from_str(&result).unwrap();
         let matches = value["matches"].as_array().unwrap();
@@ -2187,6 +2475,11 @@ No type field.
                 id_prefix: None,
                 source_prefix: None,
                 namespace_prefix: namespace_prefix.map(ToString::to_string),
+                entity_types: Vec::new(),
+                exclude_entity_types: Vec::new(),
+                concept_types: Vec::new(),
+                exclude_concept_types: Vec::new(),
+                mode: None,
             }));
             serde_json::from_str(&result).unwrap()
         };
@@ -2208,6 +2501,157 @@ No type field.
             matches[0]["id"],
             format!("urn:mif:{}", mif_core::concept_uuid("dogs"))
         );
+    }
+
+    /// Ingests two documents, one typed and with a repeated heading, into a
+    /// store beside them. Returns the directory, the store's path, and the
+    /// typed document's id.
+    fn consent_corpus() -> (tempfile::TempDir, std::path::PathBuf, String) {
+        warm_embedding_model_cache();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".mif")).unwrap();
+        let db_path = dir.path().join(".mif").join("vectors.db");
+        let consent = format!("urn:mif:{}", mif_core::concept_uuid("consent"));
+        let documents = [
+            (
+                "consent",
+                "entity:\n  name: consent\n  entity_type: practice\n",
+                "## Scope\n\nPractice P23 applies to every [intake form](forms/intake.md).\n\n\
+                 ## Notes\n\nFirst note.\n\n## Owner\n\nThe privacy office.\n\n## Notes\n\nSecond note.",
+            ),
+            (
+                "privacy",
+                "",
+                "## Scope\n\nRules for collecting and keeping information about people.",
+            ),
+        ];
+        for (name, entity, body) in documents {
+            let file = dir.path().join(format!("{name}.md"));
+            std::fs::write(
+                &file,
+                format!(
+                    "---\nid: {}\ntype: semantic\ncreated: 2026-07-02T00:00:00Z\ntitle: {name}\n\
+                     {entity}---\n\n# {name}\n\nAn introduction.\n\n{body}\n",
+                    mif_core::concept_uuid(name)
+                ),
+            )
+            .unwrap();
+            let report = Mif.ingest_mif_document(Parameters(IngestParams {
+                file,
+                db_path: Some(db_path.clone()),
+            }));
+            let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+            assert_eq!(report["stored"], true, "unexpected ingest report: {report}");
+        }
+        (dir, db_path, consent)
+    }
+
+    #[test]
+    fn search_tool_returns_the_matching_passage_with_its_document() {
+        let (_dir, db_path, consent) = consent_corpus();
+        let search = |arguments: serde_json::Value| -> serde_json::Value {
+            let mut arguments = arguments;
+            arguments["db_path"] = db_path.display().to_string().into();
+            let params: SearchParams = serde_json::from_value(arguments).unwrap();
+            serde_json::from_str(&Mif.search_documents(Parameters(params))).unwrap()
+        };
+
+        // Hybrid is the default: the identifier is found by its passage.
+        let found = search(serde_json::json!({ "query": "P23" }));
+        let top = &found["matches"][0];
+        assert_eq!(top["id"], consent);
+        assert_eq!(top["path"], "consent.md");
+        assert_eq!(top["title"], "consent");
+        assert_eq!(top["entity_type"], "practice");
+        assert_eq!(top["concept_type"], "semantic");
+        assert_eq!(top["heading"], "Scope");
+        assert_eq!(top["text"], "Practice P23 applies to every intake form.");
+        assert_eq!(top["span"]["start_line"], 7);
+        assert!(top["bm25"].as_f64().unwrap() < 0.0);
+        assert!(top["score"].as_f64().unwrap() <= 2.0 / 61.0 + 1e-6);
+        assert!(found["matches"][1].get("bm25").is_none());
+
+        let semantic = search(serde_json::json!({ "query": "P23", "mode": "semantic" }));
+        let top = &semantic["matches"][0];
+        assert_eq!(top["score"], top["cosine"]);
+        assert!(top.get("bm25").is_none());
+        assert!(
+            serde_json::from_value::<SearchParams>(
+                serde_json::json!({ "query": "x", "mode": "lexical" })
+            )
+            .is_err()
+        );
+
+        let typed = search(serde_json::json!({ "query": "people", "entity_types": ["practice"] }));
+        assert_eq!(typed["matches"].as_array().unwrap().len(), 1);
+        assert_eq!(typed["matches"][0]["id"], consent);
+        let untyped =
+            search(serde_json::json!({ "query": "people", "exclude_entity_types": ["practice"] }));
+        assert_eq!(untyped["matches"].as_array().unwrap().len(), 1);
+        let none =
+            search(serde_json::json!({ "query": "people", "exclude_concept_types": ["semantic"] }));
+        assert!(none["matches"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn get_passage_tool_returns_a_section_as_it_was_written() {
+        let (_dir, db_path, consent) = consent_corpus();
+        let passage = |id: &str, heading: Option<&str>| -> serde_json::Value {
+            let result = Mif.get_passage(Parameters(GetPassageParams {
+                id: id.to_string(),
+                heading: heading.map(ToString::to_string),
+                db_path: Some(db_path.clone()),
+                extra_db_paths: Vec::new(),
+            }));
+            serde_json::from_str(&result).unwrap()
+        };
+        let scope = passage(&consent, Some("Scope"));
+        assert_eq!(scope["id"], consent);
+        assert!(scope.get("root").is_none());
+        assert_eq!(
+            scope["sections"][0]["text"],
+            "## Scope\n\nPractice P23 applies to every [intake form](forms/intake.md)."
+        );
+        assert_eq!(scope["sections"][0]["span"]["start_line"], 5);
+        let notes = passage(&consent, Some("Notes"));
+        let texts: Vec<_> = notes["sections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|section| section["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            texts,
+            vec!["## Notes\n\nFirst note.", "## Notes\n\nSecond note."]
+        );
+        let summary = passage(&consent, None);
+        assert!(summary["sections"][0]["heading"].is_null());
+        assert!(summary["sections"][0]["span"].is_null());
+        assert!(
+            summary["sections"][0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("consent")
+        );
+
+        let unknown_heading = passage(&consent, Some("Absent"));
+        assert_eq!(unknown_heading["status"], 404);
+        assert_eq!(
+            unknown_heading["type"],
+            "https://modeled-information-format.github.io/mif-rs/references/errors/mif-mcp-section-not-found/v1"
+        );
+        let unknown_id = passage("urn:mif:absent", Some("Scope"));
+        assert_eq!(
+            unknown_id["type"],
+            "https://modeled-information-format.github.io/mif-rs/references/errors/mif-mcp-document-not-found/v1"
+        );
+
+        let stats = Mif.corpus_stats(Parameters(CorpusStatsParams {
+            db_path: Some(db_path.clone()),
+            extra_db_paths: Vec::new(),
+        }));
+        let stats: serde_json::Value = serde_json::from_str(&stats).unwrap();
+        assert_eq!(stats["documents_without_text"], 0);
     }
 
     #[test]

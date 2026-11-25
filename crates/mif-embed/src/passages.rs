@@ -50,6 +50,34 @@ const SKIPPED_SECTIONS: [&str; 2] = ["relationships", "navigation"];
 /// The markers that open and close a fenced code block.
 const FENCES: [&str; 2] = ["```", "~~~"];
 
+/// Where a stretch of text sits in a document's body, the `content` string
+/// of its JSON-LD projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Span {
+    /// The offset of the first character, counted in Unicode scalar values
+    /// from the start of the body. The first character is 0.
+    pub start_char: usize,
+    /// The offset just past the last character.
+    pub end_char: usize,
+    /// The line the text starts on. The body's first line is 1.
+    pub start_line: usize,
+    /// The line the text ends on.
+    pub end_line: usize,
+}
+
+/// One body section as it is written, from [`sections`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocSection {
+    /// The section's heading, cleaned the way [`Passage::heading`] is.
+    /// `None` for body text that precedes the first heading.
+    pub heading: Option<String>,
+    /// The section's markdown, unchanged: its heading line, then everything
+    /// up to the next heading of level 1 to 3.
+    pub text: String,
+    /// Where `text` sits in the body.
+    pub span: Span,
+}
+
 /// One unit of text to embed for a document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Passage {
@@ -59,6 +87,110 @@ pub struct Passage {
     /// The text to embed: for a section passage, the document title and the
     /// heading on the first line, then the section text.
     pub text: String,
+    /// The passage's own text: `text` without the title and heading line
+    /// and without the words carried over from the passage before it.
+    pub body: String,
+    /// Where the paragraphs and table rows `body` was taken from sit in the
+    /// document's body. `None` for the summary passage. A paragraph too
+    /// long for one passage is reported whole by each passage it is cut
+    /// into.
+    pub span: Option<Span>,
+    /// The index, in [`sections`], of the section this passage came from.
+    /// `None` for the summary passage.
+    pub section: Option<usize>,
+}
+
+/// One line of a document's body and where it sits.
+#[derive(Debug, Clone, Copy)]
+struct Loc {
+    line: usize,
+    byte_start: usize,
+    byte_end: usize,
+    char_start: usize,
+    char_end: usize,
+}
+
+/// A run of body lines, from its first to its last.
+#[derive(Debug, Clone, Copy)]
+struct Range {
+    first: Loc,
+    last: Loc,
+}
+
+impl Range {
+    const fn line(loc: Loc) -> Self {
+        Self {
+            first: loc,
+            last: loc,
+        }
+    }
+
+    const fn span(self) -> Span {
+        Span {
+            start_char: self.first.char_start,
+            end_char: self.last.char_end,
+            start_line: self.first.line,
+            end_line: self.last.line,
+        }
+    }
+}
+
+/// The range from the start of `a` to the end of `b`, when both exist.
+const fn join(a: Option<Range>, b: Option<Range>) -> Option<Range> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(Range {
+            first: a.first,
+            last: b.last,
+        }),
+        (Some(range), None) | (None, Some(range)) => Some(range),
+        (None, None) => None,
+    }
+}
+
+/// The body of a document: the `content` string of its JSON-LD projection.
+fn body(jsonld: &Value) -> &str {
+    jsonld
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
+
+/// The body sections of the JSON-LD projection of a MIF document, as they
+/// are written.
+///
+/// These are the sections [`passages`] takes its body passages from, in the
+/// same order, so [`Passage::section`] indexes this list. A section with no
+/// text of its own, and the sections [`passages`] leaves out, are not
+/// listed.
+///
+/// # Examples
+///
+/// ```rust
+/// use mif_embed::passages::sections;
+///
+/// let document = serde_json::json!({
+///     "content": "Intro.\n\n## Scope\n\nSee [the plan](plan.md).\n",
+/// });
+/// let sections = sections(&document);
+///
+/// assert_eq!(sections[1].heading.as_deref(), Some("Scope"));
+/// assert_eq!(sections[1].text, "## Scope\n\nSee [the plan](plan.md).");
+/// assert_eq!(sections[1].span.start_line, 3);
+/// ```
+#[must_use]
+pub fn sections(jsonld: &Value) -> Vec<DocSection> {
+    let content = body(jsonld);
+    split_sections(content)
+        .into_iter()
+        .map(|section| DocSection {
+            heading: section.heading,
+            text: content
+                .get(section.range.first.byte_start..section.range.last.byte_end)
+                .unwrap_or_default()
+                .to_string(),
+            span: section.range.span(),
+        })
+        .collect()
 }
 
 /// Builds the passages to embed for the JSON-LD projection of a MIF
@@ -106,18 +238,20 @@ pub struct Passage {
 #[must_use]
 pub fn passages(jsonld: &Value, count_tokens: &dyn Fn(&str) -> usize) -> Vec<Passage> {
     let title = text_field(jsonld, "title");
-    let content = text_field(jsonld, "content").unwrap_or_default();
-    let sections = split_sections(content);
+    let sections = split_sections(body(jsonld));
 
     let mut out = vec![summary(jsonld, title, &sections, count_tokens)];
-    for section in &sections {
+    for (index, section) in sections.iter().enumerate() {
         let prefix = prefix(title, section.heading.as_deref(), count_tokens);
         out.extend(
             pack(&prefix, &section.units, count_tokens)
                 .into_iter()
-                .map(|text| Passage {
+                .map(|packed| Passage {
                     heading: section.heading.clone(),
-                    text,
+                    text: packed.text,
+                    body: packed.body,
+                    span: packed.range.map(Range::span),
+                    section: Some(index),
                 }),
         );
     }
@@ -160,7 +294,7 @@ fn summary(
         sections
             .iter()
             .find_map(|section| section.units.first())
-            .map(String::as_str)
+            .map(|unit| unit.text.as_str())
     } else {
         None
     };
@@ -170,12 +304,18 @@ fn summary(
         .flatten()
         .collect::<Vec<_>>()
         .join("\n");
+    let unit = Unit { text, range: None };
+    let text = pack("", &[unit], count_tokens)
+        .into_iter()
+        .next()
+        .map(|packed| packed.text)
+        .unwrap_or_default();
     Passage {
         heading: None,
-        text: pack("", &[text], count_tokens)
-            .into_iter()
-            .next()
-            .unwrap_or_default(),
+        body: text.clone(),
+        text,
+        span: None,
+        section: None,
     }
 }
 
@@ -196,19 +336,41 @@ fn prefix(
     }
 }
 
-/// One body section: its heading and its paragraphs and table rows, cleaned.
-#[derive(Debug, Default)]
+/// One paragraph or table row, cleaned, and the body lines it came from.
+/// Only the summary's text has no lines.
+#[derive(Debug)]
+struct Unit {
+    text: String,
+    range: Option<Range>,
+}
+
+/// One body section: its heading, its paragraphs and table rows, and the
+/// body lines it covers.
+#[derive(Debug)]
 struct Section {
     heading: Option<String>,
-    units: Vec<String>,
+    units: Vec<Unit>,
+    range: Range,
+}
+
+/// The section being read.
+#[derive(Debug, Default)]
+struct OpenSection {
+    heading: Option<String>,
+    units: Vec<Unit>,
+    /// The section's lines so far, from its heading line to its last line
+    /// that is not blank.
+    range: Option<Range>,
 }
 
 /// Accumulates body lines into [`Section`]s.
 #[derive(Debug, Default)]
 struct Splitter {
     done: Vec<Section>,
-    current: Section,
+    current: OpenSection,
     paragraph: Vec<String>,
+    /// The lines the paragraph being read came from.
+    paragraph_range: Option<Range>,
     /// The marker that opened the code fence being read, if any.
     fence: Option<&'static str>,
     /// The level of the skipped section being passed over, if any.
@@ -216,9 +378,23 @@ struct Splitter {
 }
 
 impl Splitter {
+    /// Counts a line as part of the section being read.
+    const fn touch(&mut self, loc: Loc) {
+        self.current.range = join(self.current.range, Some(Range::line(loc)));
+    }
+
+    fn push_paragraph(&mut self, text: String, loc: Loc) {
+        self.paragraph.push(text);
+        self.paragraph_range = join(self.paragraph_range, Some(Range::line(loc)));
+    }
+
     fn end_paragraph(&mut self) {
+        let range = self.paragraph_range.take();
         if !self.paragraph.is_empty() {
-            self.current.units.push(self.paragraph.join("\n"));
+            self.current.units.push(Unit {
+                text: self.paragraph.join("\n"),
+                range,
+            });
             self.paragraph.clear();
         }
     }
@@ -226,12 +402,18 @@ impl Splitter {
     fn end_section(&mut self) {
         self.end_paragraph();
         let section = std::mem::take(&mut self.current);
-        if !section.units.is_empty() {
-            self.done.push(section);
+        if let Some(range) = section.range
+            && !section.units.is_empty()
+        {
+            self.done.push(Section {
+                heading: section.heading,
+                units: section.units,
+                range,
+            });
         }
     }
 
-    fn heading(&mut self, level: usize, text: &str) {
+    fn heading(&mut self, level: usize, text: &str, loc: Loc) {
         self.end_section();
         if self.skipping.is_some_and(|skipped| level <= skipped) {
             self.skipping = None;
@@ -247,29 +429,39 @@ impl Splitter {
             return;
         }
         self.current.heading = Some(heading).filter(|heading| !heading.is_empty());
+        self.touch(loc);
     }
 
-    fn line(&mut self, line: &str) {
+    fn line(&mut self, line: &str, loc: Loc) {
         let trimmed = line.trim();
         if let Some(marker) = self.fence {
+            if self.skipping.is_none() && !trimmed.is_empty() {
+                self.touch(loc);
+            }
             if trimmed.starts_with(marker) {
                 self.fence = None;
             } else if self.skipping.is_none() && !trimmed.is_empty() {
-                self.paragraph.push(trimmed.to_string());
+                self.push_paragraph(trimmed.to_string(), loc);
             }
             return;
         }
         if let Some(marker) = opening_fence(trimmed) {
             self.fence = Some(marker);
+            if self.skipping.is_none() {
+                self.touch(loc);
+            }
             return;
         }
         let text = match heading(trimmed) {
-            Some((level, text)) if level <= 3 => return self.heading(level, text),
+            Some((level, text)) if level <= 3 => return self.heading(level, text, loc),
             Some((_, text)) => text,
             None => trimmed,
         };
         if self.skipping.is_some() {
             return;
+        }
+        if !trimmed.is_empty() {
+            self.touch(loc);
         }
         if text.is_empty() || is_rule(text) {
             return self.end_paragraph();
@@ -289,9 +481,12 @@ impl Splitter {
             // Each table row is its own unit, so a long table splits
             // between rows rather than through one.
             self.end_paragraph();
-            self.current.units.push(cleaned);
+            self.current.units.push(Unit {
+                text: cleaned,
+                range: Some(Range::line(loc)),
+            });
         } else {
-            self.paragraph.push(cleaned);
+            self.push_paragraph(cleaned, loc);
         }
     }
 }
@@ -299,8 +494,21 @@ impl Splitter {
 /// Splits a markdown body into sections at headings of level 1 to 3.
 fn split_sections(content: &str) -> Vec<Section> {
     let mut splitter = Splitter::default();
-    for line in content.lines() {
-        splitter.line(line);
+    let mut byte = 0;
+    let mut chars = 0;
+    for (index, raw) in content.split_inclusive('\n').enumerate() {
+        let line = raw.strip_suffix('\n').unwrap_or(raw);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let loc = Loc {
+            line: index + 1,
+            byte_start: byte,
+            byte_end: byte + line.len(),
+            char_start: chars,
+            char_end: chars + line.chars().count(),
+        };
+        splitter.line(line, loc);
+        byte += raw.len();
+        chars += raw.chars().count();
     }
     splitter.end_section();
     splitter.done
@@ -410,36 +618,65 @@ fn link_text(link: &str) -> Option<(&str, &str)> {
 /// Packs a section's units into passage texts of about
 /// [`PASSAGE_TARGET_TOKENS`], each starting with `prefix` and, after the
 /// first, with the tail of the passage before it.
-fn pack(prefix: &str, units: &[String], count_tokens: &dyn Fn(&str) -> usize) -> Vec<String> {
+fn pack(prefix: &str, units: &[Unit], count_tokens: &dyn Fn(&str) -> usize) -> Vec<Packed> {
     let budget = PASSAGE_MAX_TOKENS.saturating_sub(SPECIAL_TOKENS + count_tokens(prefix));
     let target = PASSAGE_TARGET_TOKENS
         .min(budget.saturating_sub(PASSAGE_OVERLAP_TOKENS))
         .max(1);
 
     let mut out = Vec::new();
+    // What the passage being packed embeds: the overlap, then its own pieces.
     let mut chunk: Vec<String> = Vec::new();
+    let mut own: Vec<String> = Vec::new();
+    let mut range = None;
     let mut tokens = 0;
     let mut fresh = false;
-    let pieces = units
-        .iter()
-        .flat_map(|unit| split_unit(unit, target, count_tokens));
-    for (piece, size) in pieces {
+    let pieces = units.iter().flat_map(|unit| {
+        split_unit(&unit.text, target, count_tokens)
+            .into_iter()
+            .map(|(piece, size)| (piece, size, unit.range))
+    });
+    for (piece, size, piece_range) in pieces {
         if fresh && tokens + size > target {
             let text = chunk.join("\n");
             let overlap = tail(&text, PASSAGE_OVERLAP_TOKENS, count_tokens);
-            out.push(format!("{prefix}{text}"));
+            out.push(Packed {
+                text: format!("{prefix}{text}"),
+                body: own.join("\n"),
+                range,
+            });
             chunk.clear();
+            own.clear();
+            range = None;
             chunk.extend(Some(overlap).filter(|overlap| !overlap.is_empty()));
             tokens = 0;
         }
-        chunk.push(piece);
+        chunk.push(piece.clone());
+        own.push(piece);
+        range = join(range, piece_range);
         tokens += size;
         fresh = true;
     }
     if fresh {
-        out.push(format!("{prefix}{}", chunk.join("\n")));
+        out.push(Packed {
+            text: format!("{prefix}{}", chunk.join("\n")),
+            body: own.join("\n"),
+            range,
+        });
     }
     out
+}
+
+/// One passage out of [`pack`].
+#[derive(Debug)]
+struct Packed {
+    /// The text to embed: the prefix, the overlap, and the passage's own
+    /// pieces.
+    text: String,
+    /// The passage's own pieces alone.
+    body: String,
+    /// The body lines those pieces came from.
+    range: Option<Range>,
 }
 
 /// A unit and its token count, or, when it is larger than `target`, the
@@ -510,7 +747,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        PASSAGE_MAX_TOKENS, PASSAGE_OVERLAP_TOKENS, PASSAGE_TARGET_TOKENS, Passage, passages,
+        PASSAGE_MAX_TOKENS, PASSAGE_OVERLAP_TOKENS, PASSAGE_TARGET_TOKENS, Passage, Span, passages,
+        sections,
     };
 
     /// One token per whitespace-separated word: additive across joins, like
@@ -590,7 +828,10 @@ mod tests {
             built,
             vec![Passage {
                 heading: None,
-                text: String::new()
+                text: String::new(),
+                body: String::new(),
+                span: None,
+                section: None,
             }]
         );
     }
@@ -894,5 +1135,107 @@ mod tests {
             built[1].text,
             "Doc\nKept.\n- A list item about Related: things stays."
         );
+    }
+
+    /// The characters of `content` a span covers.
+    fn slice(content: &str, span: Span) -> String {
+        content
+            .chars()
+            .skip(span.start_char)
+            .take(span.end_char - span.start_char)
+            .collect()
+    }
+
+    #[test]
+    fn a_passage_span_covers_the_source_lines_of_its_own_text() {
+        let content = "Préambule.\n\n## Scope\n\nSee [the plan](plan.md) now.\nSecond line.\n\n\
+                       | a | b |\n|---|---|\n| c | d |\n";
+        let built =
+            build(&json!({ "title": "Doc", "entity": { "definition": "d" }, "content": content }));
+
+        assert_eq!(built[0].span, None);
+        assert_eq!(built[0].section, None);
+        assert_eq!(built[0].body, built[0].text);
+
+        let preamble = built[1].span.unwrap();
+        assert_eq!((preamble.start_line, preamble.end_line), (1, 1));
+        assert_eq!(slice(content, preamble), "Préambule.");
+
+        let scope = &built[2];
+        assert_eq!(scope.section, Some(1));
+        assert_eq!(
+            scope.body,
+            "See the plan now.\nSecond line.\n| a | b |\n| c | d |"
+        );
+        let span = scope.span.unwrap();
+        assert_eq!((span.start_line, span.end_line), (5, 10));
+        assert_eq!(
+            slice(content, span),
+            "See [the plan](plan.md) now.\nSecond line.\n\n| a | b |\n|---|---|\n| c | d |"
+        );
+    }
+
+    #[test]
+    fn split_passages_keep_their_own_text_and_spans_apart() {
+        let paragraphs: Vec<String> = (0..6).map(|p| numbered(&format!("p{p}w"), 90)).collect();
+        let content = format!("## Long\n\n{}", paragraphs.join("\n\n"));
+        let built =
+            build(&json!({ "title": "Doc", "entity": { "definition": "d" }, "content": content }));
+        let long: Vec<_> = built.iter().skip(1).collect();
+
+        // No passage's own text repeats the overlap or the prefix.
+        let joined = long
+            .iter()
+            .map(|p| p.body.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(joined, paragraphs.join("\n"));
+        let lines: Vec<_> = long
+            .iter()
+            .map(|p| {
+                let span = p.span.unwrap();
+                (span.start_line, span.end_line)
+            })
+            .collect();
+        assert_eq!(lines, vec![(3, 5), (7, 9), (11, 13)]);
+        assert_eq!(
+            slice(&content, long[1].span.unwrap()),
+            format!("{}\n\n{}", paragraphs[2], paragraphs[3])
+        );
+    }
+
+    #[test]
+    fn sections_are_the_markdown_as_written_and_line_up_with_passages() {
+        let content = "Intro.\n\n## Run\n\n```bash\n# not a heading\ncargo test\n```\n\n\
+                       #### Deeper\n\nSee [docs](https://example.com).\n\n\n\
+                       ## Relationships\n\n- [x](y.md)\n\n## Empty\n\n## Last\r\n\r\nEnd.\r\n";
+        let document =
+            json!({ "title": "Doc", "entity": { "definition": "d" }, "content": content });
+        let listed = sections(&document);
+
+        let headings: Vec<_> = listed.iter().map(|s| s.heading.as_deref()).collect();
+        assert_eq!(headings, vec![None, Some("Run"), Some("Last")]);
+        assert_eq!(listed[0].text, "Intro.");
+        assert_eq!(
+            listed[1].text,
+            "## Run\n\n```bash\n# not a heading\ncargo test\n```\n\n\
+             #### Deeper\n\nSee [docs](https://example.com)."
+        );
+        assert_eq!(
+            (listed[1].span.start_line, listed[1].span.end_line),
+            (3, 12)
+        );
+        assert_eq!(listed[2].text, "## Last\r\n\r\nEnd.");
+        for section in &listed {
+            assert_eq!(slice(content, section.span), section.text);
+        }
+
+        for passage in build(&document).iter().skip(1) {
+            let section = &listed[passage.section.unwrap()];
+            assert_eq!(passage.heading, section.heading);
+            let span = passage.span.unwrap();
+            assert!(span.start_char >= section.span.start_char);
+            assert!(span.end_char <= section.span.end_char);
+        }
     }
 }

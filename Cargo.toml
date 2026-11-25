@@ -67,6 +67,10 @@ ureq = "3.3.0"
 # `sha1_smol`, BSD-3-Clause); no `std`-only RNG features.
 uuid = { version = "1.27.0", default-features = false, features = ["v5"] }
 
+# Glob matching for `mif-cli ingest --ignore` / `prune --ignore`. No default
+# features (the `log` feature only adds debug logging). Unlicense OR MIT.
+globset = { version = "0.4.22", default-features = false }
+
 [workspace.dependencies.mif-core]
 path = "crates/mif-core"
 version = "0.12.0"
